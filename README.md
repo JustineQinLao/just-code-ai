@@ -85,6 +85,10 @@ The open board updates by itself. The same sync from a terminal: `node <extensio
 A card that is waiting shows what Claude asks and **Allow / Always / Deny**. **Always** shows the exact text of Claude's second menu
 choice (for example “Yes, and always allow access to … from this project”) in its tooltip. Answers are sent as menu number keys plus
 Enter, never as arrow keys, and only when the prompt is really on screen; if Claude does not take the answer, the card says so.
+A message from the board (review fixes, “continue after the limit”) is never sent while a permission prompt or other menu is on screen:
+the paste wrapper starts with an Esc byte, which a menu reads as “No”, cancelling it and every tool call queued behind it (that is how a
+whole batch of writes ends up “User rejected”). Without bracketed-paste support the board sends one plain line instead. Every Esc the board
+sends is logged with its source in **Output → JustCode**, and the header shows the installed version (`v0.4.3`).
 Task sessions are kept from linking to your editor (`CLAUDE_CODE_AUTO_CONNECT_IDE=false`): linked, Claude Code opens a diff tab for every
 edit and waits there, where the card's buttons cannot answer.
 

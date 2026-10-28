@@ -106,7 +106,13 @@ export class Ptys {
     const l = this.live.get(id);
     if (l) try { this.persist(id, l.snap.serialize({ scrollback: SCROLLBACK })); } catch { /* mirror busy */ }
   }
-  write(id: string, data: string) { this.live.get(id)?.p.write(data); }
+  // Every write names its source, so an unexpected Esc (which cancels a permission prompt and every tool call queued
+  // behind it) can be traced: see Output → JustCode.
+  onWrite?: (id: string, data: string, src: string) => void;
+  write(id: string, data: string, src = 'internal') { this.onWrite?.(id, data, src); this.live.get(id)?.p.write(data); }
+  // Does the session's program accept bracketed paste right now? If not, the paste markers (which start with an Esc byte)
+  // would arrive as an Esc keypress.
+  bracketedPaste(id: string) { return !!this.live.get(id)?.mirror.modes.bracketedPasteMode; }
 
   resize(id: string, cols: number, rows: number) {
     const p = this.live.get(id)?.p;

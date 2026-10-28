@@ -26,6 +26,14 @@ let current: string | undefined; // root shown on the board
 export function activate(context: vscode.ExtensionContext) {
   ptys = new Ptys();
   const limits = new Limits();
+  const out = vscode.window.createOutputChannel('JustCode');
+  context.subscriptions.push(out);
+  // An Esc byte cancels a permission prompt (and every tool call queued behind it). Say where each one came from.
+  ptys.onWrite = (id, data, src) => {
+    if (data !== '\x1b' && !data.includes('\x1b[200~')) return;
+    const title = [...runners.values()].map(r => r.store.task(id)?.title).find(Boolean) ?? id;
+    out.appendLine(`${new Date().toLocaleTimeString()}  "${title.slice(0, 50)}": ${data === '\x1b' ? 'Esc (interrupt)' : 'paste'} sent · from ${src}`);
+  };
   ptys.dir = path.join(context.globalStorageUri.fsPath, 'screens');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'justCode.open';
@@ -115,6 +123,7 @@ export function activate(context: vscode.ExtensionContext) {
       board: { ...r.store.data, tasks },
       setup: hasSetup(r.root),
       limit: limits.view(),
+      version: context.extension.packageJSON.version,
       queue: r.queueInfo(),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
@@ -213,7 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
         break;
       }
       case 'say': if (ptys.has(m.id) && typeof m.text === 'string' && m.text.trim()) await r.say(m.id, m.text); break;
-      case 'input': ptys.write(m.id, m.data); break;
+      case 'input': ptys.write(m.id, m.data, m.src ?? 'terminal'); break;
       case 'resize': ptys.resize(m.id, m.cols, m.rows); ptys.size = { cols: m.cols, rows: m.rows }; break;
       case 'attach': panel?.webview.postMessage({ type: 'replay', id: m.id, data: await ptys.snapshot(m.id) }); break;
       case 'log': if (t) panel?.webview.postMessage({ type: 'log', id: m.id, steps: t.sessionId ? sessionLog(t.worktree ?? r.root, t.sessionId) : [] }); break;

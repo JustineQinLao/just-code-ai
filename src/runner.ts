@@ -23,7 +23,7 @@ export interface Ask { message: string; tool?: string; detail?: string; always?:
 
 // Claude Code's permission menu: "1. Yes", "2. Yes, and always allow …", …, last "No". The prompt is on screen when
 // it asks "Do you want to proceed?" (or similar) and lists numbered choices.
-const MENU = /(Do you want|Would you like|Esc to cancel)/i;
+const isMenu = (screen: string) => /Esc\s*to\s*cancel/i.test(screen) && /^\s*[❯›>]?\s*1\.\s*\S/m.test(screen);
 const optionText = (screen: string, n: number) => {
   const lines = screen.split('\n');
   const i = lines.findIndex(l => new RegExp(`^\\s*[❯›>]?\\s*${n}\\.\\s*\\S`).test(l));
@@ -145,9 +145,17 @@ export class Runner {
     if (this.state.get(id) === 'waiting') { this.notify('warn', 'Claude is waiting for your approval. Answer that first (Allow / Deny on the card).', id); return; }
     prompt = prompt.replace(/\x1b/g, ''); // an escape inside the text could end the paste early
     if (!this.ptys.has(id)) return this.run(id, prompt);
-    // Bracketed paste keeps a multi-line prompt as one message instead of submitting at the first newline.
-    this.ptys.write(id, `\x1b[200~${prompt}\x1b[201~`);
-    setTimeout(() => this.ptys.write(id, '\r'), 150); // separate Enter, so the TUI doesn't take it as part of a paste
+    // The board's own messages (review fixes, "continue after the limit") must never land on a permission prompt or other
+    // menu: the paste wrapper starts with an Esc byte, which a menu reads as "No", cancelling it and every tool call queued behind it.
+    if (isMenu(await this.ptys.screen(id, 14))) {
+      this.notify('warn', 'Claude is showing a permission prompt. Answer it first; the message was not sent.', id);
+      return;
+    }
+    // Bracketed paste keeps a multi-line prompt as one message, but only when the program asked for it: otherwise its
+    // opening Esc is read as a keypress. Without it, send one plain line.
+    const text = this.ptys.bracketedPaste(id) ? `\x1b[200~${prompt}\x1b[201~` : prompt.replace(/\s*\n\s*/g, ' ');
+    this.ptys.write(id, text, 'board message');
+    setTimeout(() => this.ptys.write(id, '\r', 'board message'), 150); // separate Enter, so the TUI doesn't take it as part of a paste
   }
 
   stop(id: string) {
@@ -277,7 +285,7 @@ export class Runner {
   async answer(id: string, choice: 'allow' | 'always' | 'deny') {
     if (this.state.get(id) !== 'waiting') return;
     const ask = this.asks.get(id);
-    if (!MENU.test(await this.ptys.screen(id))) {
+    if (!isMenu(await this.ptys.screen(id))) {
       // The hook said "waiting" but Claude isn't asking (answered in the terminal, or already moved on): don't type into the input.
       this.asks.delete(id);
       this.state.set(id, 'running');
@@ -285,11 +293,11 @@ export class Runner {
       this.changed();
       return;
     }
-    if (choice === 'deny') this.ptys.write(id, '\x1b');
+    if (choice === 'deny') this.ptys.write(id, '\x1b', 'card: Deny');
     else {
-      this.ptys.write(id, choice === 'always' ? '2' : '1');
+      this.ptys.write(id, choice === 'always' ? '2' : '1', `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
       await new Promise(r => setTimeout(r, 200));
-      this.ptys.write(id, '\r');
+      this.ptys.write(id, '\r', `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
     }
     this.asks.delete(id);
     this.state.set(id, 'running');
@@ -297,7 +305,7 @@ export class Runner {
     // Still showing the same prompt after a moment: it did not take the answer. Say so instead of looking stuck.
     setTimeout(async () => {
       if (!this.ptys.has(id) || this.state.get(id) !== 'running') return;
-      if (choice !== 'deny' && MENU.test(await this.ptys.screen(id, 12)) && !this.asks.has(id)) {
+      if (choice !== 'deny' && isMenu(await this.ptys.screen(id, 14)) && !this.asks.has(id)) {
         if (ask) this.asks.set(id, ask);
         this.state.set(id, 'waiting');
         this.notify('warn', 'Claude did not take that answer. Answer it in the terminal (⌨).', id);
