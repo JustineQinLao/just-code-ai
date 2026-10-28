@@ -317,13 +317,19 @@ function card(t, order) {
   if (t.branch && t.status !== 'done') icon('↺', 'Discard this branch and its work', () => send({ type: 'discard', id: t.id }), 'danger');
   icon('🗑', 'Delete task', () => send({ type: 'delete', id: t.id }), 'danger');
 
-  // Permission request, answered right on the card.
+  // Permission request, answered right on the card with the buttons Claude's own menu has: one per choice, labeled with its
+  // text and sending its number. (Until the menu has been read: Allow / Deny.)
   if (t.run === 'waiting') {
     const a = t.ask ?? {};
+    const ch = a.choices ?? [];
+    const short = x => { const y = x.replace(/^Yes, and /i, 'Yes, '); return y.length > 40 ? y.slice(0, 38) + '…' : y; };
+    const buttons = ch.length
+      ? ch.map((x, i) => `<button data-k="${i + 1}" class="${i === 0 ? 'primary' : /^no\b/i.test(x) ? 'danger' : ''}" title="${esc(i + 1 + '. ' + x)}">${esc(short(x))}</button>`).join('')
+      : '<button class="primary" data-c="allow">Allow</button><button class="danger" data-c="deny">Deny</button>';
     const p = h(`<div class="ask"><div><b>⚠ ${a.tool ? `Claude wants to use ${esc(a.tool)}` : esc(a.message || 'Claude needs your approval')}</b></div>
       ${a.detail ? `<code class="detail">${esc(a.detail)}</code>` : ''}
-      ${a.always ? `<div class="small muted">Always = ${esc(a.always)}</div>` : a.noAlways ? '<div class="small muted">No “always” choice for this prompt: Always allows it once.</div>' : ''}
-      <div class="actions"><button class="primary" data-c="allow">Allow</button><button data-c="always" title="${esc(a.noAlways ? 'Claude offers no “always” choice for this prompt: this allows it once.' : a.always ? 'Always: ' + a.always : 'Allow and do not ask again (read from Claude\'s menu when you click)')}">Always</button><button class="danger" data-c="deny">Deny</button><button class="icon" data-c="term" title="Answer in the terminal">⌨</button></div></div>`);
+      <div class="actions">${buttons}<button class="icon" data-c="term" title="Answer in the terminal">⌨</button></div></div>`);
+    p.querySelectorAll('[data-k]').forEach(b => b.onclick = () => send({ type: 'answer', id: t.id, key: +b.dataset.k, text: ch[+b.dataset.k - 1] }));
     p.querySelectorAll('[data-c]').forEach(b => b.onclick = () => b.dataset.c === 'term' ? openTerm(t.id) : send({ type: 'answer', id: t.id, choice: b.dataset.c }));
     c.querySelector('.meta').after(p);
   }
@@ -374,7 +380,7 @@ const termdlg = $('termdlg');
 // Esc belongs to Claude (interrupt, cancel), so the modal only closes with ✕.
 termdlg.addEventListener('cancel', e => e.preventDefault());
 let boardDirty = false;
-$('tclose').onclick = () => { termdlg.close(); termId = null; clearInterval(logTimer); if (boardDirty) { boardDirty = false; render(); } };
+$('tclose').onclick = () => { termdlg.close(); termId = null; clearInterval(logTimer); $('tslot').replaceChildren(); if (boardDirty) { boardDirty = false; render(); } };
 $('vterm').onclick = () => setView('term');
 // A plain input under the terminal: always works, even if the terminal itself doesn't take focus.
 const sendMsg = () => {
@@ -464,6 +470,7 @@ function mountTerm(id, slot) {
   if (!e) {
     const el = document.createElement('div');
     el.className = 'term-host'; // pinned to the slot's inner box (CSS), so fit() measures the real visible area
+    el.dataset.id = id;
     slot.prepend(el);
     const term = new Terminal({ fontSize: 12, fontFamily: getComputedStyle(document.body).getPropertyValue('--vscode-editor-font-family') || 'Menlo, monospace', cursorBlink: true, theme: themeFromVscode(), scrollback: 5000 });
     const fit = new FitAddon.FitAddon();
@@ -486,6 +493,9 @@ function mountTerm(id, slot) {
     document.fonts?.ready.then(() => refit(id));
     send({ type: 'attach', id });
   } else if (e.el.parentElement !== slot) slot.prepend(e.el);
+  // Only this task's terminal belongs in the slot. Another task's terminal left behind would sit on top of it, show the
+  // wrong session and take the keys typed here (they would go to the wrong task).
+  for (const c of [...slot.children]) if (c.classList.contains('term-host') && c !== e.el) c.remove();
   // Report the size once laid out: the pty may have started (at a guessed size) since the last fit.
   requestAnimationFrame(() => { try { fitSafe(e); } catch { /* hidden */ } sendSize(id, true); });
 }

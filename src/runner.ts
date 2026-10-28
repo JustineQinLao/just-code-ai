@@ -19,7 +19,7 @@ export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number;
 export type RunState = 'running' | 'waiting' | 'idle';
 
 // What a waiting session asks for, shown on its card: the tool and its main argument.
-export interface Ask { message: string; tool?: string; detail?: string; always?: string; noAlways?: boolean }
+export interface Ask { message: string; tool?: string; detail?: string; always?: string; noAlways?: boolean; choices?: string[] }
 
 // Claude Code's permission menu: "1. Yes", "2. Yes, and always allow …", …, last "No". The prompt is on screen when
 // it asks "Do you want to proceed?" (or similar) and lists numbered choices.
@@ -286,41 +286,58 @@ export class Runner {
     await new Promise(r => setTimeout(r, 500)); // the menu is drawn a moment after the hook fires
     const a = this.asks.get(id);
     if (!a || this.state.get(id) !== 'waiting') return;
-    const opt = alwaysOption(await this.ptys.screen(id));
+    const screen = await this.ptys.screen(id);
+    const opt = alwaysOption(screen);
     a.always = opt?.text.slice(0, 200);
     a.noAlways = !opt;
+    // The menu exactly as Claude shows it, so the card never offers a choice that is not there.
+    a.choices = [];
+    for (let n = 1; n <= 6; n++) { const t = optionText(screen, n); if (!t) break; a.choices.push(t.slice(0, 60)); }
     this.changed();
   }
 
-  // Answers the permission prompt. Only the menu's number keys and Enter are sent (1 = Yes, 2 = Yes and always,
-  // Esc = No): an arrow key is an escape sequence, and if it ever reached Claude split in two, the first byte would be
-  // read as Esc and interrupt the session. Checks the prompt is really on screen first, and that it took the answer.
-  async answer(id: string, choice: 'allow' | 'always' | 'deny') {
+  // Answers the permission prompt with one of the menu's own choices, by its number: only number keys and Enter are
+  // sent, never an arrow key (split in two, an arrow key reads as Esc and interrupts the session). `text` is the label the
+  // card showed; if the menu no longer has that choice at that number, nothing is sent.
+  async answerChoice(id: string, n: number, text?: string) {
     if (this.state.get(id) !== 'waiting') return;
-    const ask = this.asks.get(id);
     const screen = await this.ptys.screen(id);
-    if (!isMenu(screen)) {
-      // The hook said "waiting" but Claude isn't asking (answered in the terminal, or already moved on): don't type into the input.
-      this.asks.delete(id);
-      this.state.set(id, 'running');
-      this.notify('info', 'Claude is not asking for permission any more.', id);
-      this.changed();
+    if (!isMenu(screen)) return this.staleAsk(id);
+    const now = optionText(screen, n);
+    if (!now || (text && !now.toLowerCase().startsWith(text.toLowerCase().slice(0, 18)))) {
+      this.notify('warn', "Claude's menu changed, so nothing was sent. Pick again.", id);
+      void this.labelAsk(id);
       return;
     }
-    let key = '1';
-    if (choice === 'always') {
-      const opt = alwaysOption(screen);
-      if (opt) key = String(opt.n);
-      else {
-        // No "always" choice in this menu (the second choice is "No"): accept this once, never press a fixed number.
-        this.notify('info', 'Claude offers no "always" choice for this prompt, so it was allowed this once.', id);
-      }
-    }
-    if (choice === 'deny') this.ptys.write(id, '\x1b', 'card: Deny');
+    await this.sendAnswer(id, String(n), `card: choice ${n}`);
+  }
+
+  // Legacy shorthand (Allow = the first choice, Always = the menu's always choice or, if none, the first, Deny = Esc).
+  async answer(id: string, choice: 'allow' | 'always' | 'deny') {
+    if (this.state.get(id) !== 'waiting') return;
+    const screen = await this.ptys.screen(id);
+    if (!isMenu(screen)) return this.staleAsk(id);
+    if (choice === 'deny') return this.sendAnswer(id, 'esc', 'card: Deny');
+    const opt = choice === 'always' ? alwaysOption(screen) : undefined;
+    if (choice === 'always' && !opt) this.notify('info', 'Claude offers no "always" choice for this prompt, so it was allowed this once.', id);
+    await this.sendAnswer(id, String(opt?.n ?? 1), `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
+  }
+
+  // The hook said "waiting" but Claude isn't asking (answered in the terminal, or already moved on): don't type into the input.
+  private staleAsk(id: string) {
+    this.asks.delete(id);
+    this.state.set(id, 'running');
+    this.notify('info', 'Claude is not asking for permission any more.', id);
+    this.changed();
+  }
+
+  private async sendAnswer(id: string, key: string, src: string) {
+    const ask = this.asks.get(id);
+    if (key === 'esc') this.ptys.write(id, '\x1b', src);
     else {
-      this.ptys.write(id, key, `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
+      this.ptys.write(id, key, src);
       await new Promise(r => setTimeout(r, 200));
-      this.ptys.write(id, '\r', `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
+      this.ptys.write(id, '\r', src);
     }
     this.asks.delete(id);
     this.state.set(id, 'running');
@@ -328,7 +345,7 @@ export class Runner {
     // Still showing the same prompt after a moment: it did not take the answer. Say so instead of looking stuck.
     setTimeout(async () => {
       if (!this.ptys.has(id) || this.state.get(id) !== 'running') return;
-      if (choice !== 'deny' && isMenu(await this.ptys.screen(id, 14)) && !this.asks.has(id)) {
+      if (key !== 'esc' && isMenu(await this.ptys.screen(id, 14)) && !this.asks.has(id)) {
         if (ask) this.asks.set(id, ask);
         this.state.set(id, 'waiting');
         this.notify('warn', 'Claude did not take that answer. Answer it in the terminal (⌨).', id);
