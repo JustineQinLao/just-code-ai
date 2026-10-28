@@ -38,8 +38,14 @@ Every action runs in the root of the project it was made in.
    `CLAUDE.md` and `TASKS.md` from `docs/project.md`. Skills from other tools (LexCode's) are never offered as chips.
 4. **Plan with Claude**: describe a goal. Claude reads the code read-only and proposes tasks. You pick which to
    add, to the backlog, an existing sprint or a new one. A planner-like agent (planner, architect, lead) is preselected.
-4. **Run**: **▶ Run** on a card, or **▶ Run all** for every To do task in the current view. Run all keeps
-   `justCode.maxParallel` tasks going (default 1) and starts the next when one finishes.
+4. **Run**: **▶ Run** on a card, or **▶ Run sprint / Run all** for every To do task in view.
+   - **One at a time, in the order you arranged** (the numbers on the To do cards; drag a card to change the order). The next task starts
+     only when the previous one is finished: built, reviewed and **merged**, so it builds on that merged work. The toolbar says what the
+     queue waits for ("“X” must be merged (✓ Merge)"). Turn on *Merge automatically when the review passes* and a whole list runs unattended.
+     `justCode.maxParallel` > 1 allows several in progress at once, each in its own worktree.
+   - **Every task is a fresh Claude session** (its own session id, process and worktree); tasks never share history, and the reviewer is a
+     fresh run each time. Within one task the session continues for review fixes, unless its transcript passed `justCode.freshSessionKB`
+     (default 600 KB): then the fix round starts a new session with a short handoff, so long tasks don't carry their history forward.
    - The card's terminal is the real Claude session. Type in it, approve prompts in it.
    - A card that needs approval turns yellow with **⚠ Approve…**. The status bar shows it too, even when the board is closed.
    - **Claude Code** continues the session in the Claude Code extension; the card's run stops first so two processes never share one session.
