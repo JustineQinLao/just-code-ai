@@ -19,7 +19,19 @@ export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number;
 export type RunState = 'running' | 'waiting' | 'idle';
 
 // What a waiting session asks for, shown on its card: the tool and its main argument.
-export interface Ask { message: string; tool?: string; detail?: string }
+export interface Ask { message: string; tool?: string; detail?: string; always?: string }
+
+// Claude Code's permission menu: "1. Yes", "2. Yes, and always allow …", …, last "No". The prompt is on screen when
+// it asks "Do you want to proceed?" (or similar) and lists numbered choices.
+const MENU = /(Do you want|Would you like|Esc to cancel)/i;
+const optionText = (screen: string, n: number) => {
+  const lines = screen.split('\n');
+  const i = lines.findIndex(l => new RegExp(`^\\s*[❯›>]?\\s*${n}\\.\\s*\\S`).test(l));
+  if (i < 0) return;
+  const out = [lines[i].replace(new RegExp(`^\\s*[❯›>]?\\s*${n}\\.\\s*`), '')];
+  for (let j = i + 1; j < lines.length && !/^\s*[❯›>]?\s*\d\./.test(lines[j]) && !/Esc to cancel/i.test(lines[j]) && out.length < 3; j++) out.push(lines[j].trim());
+  return out.join(' ').replace(/\s+/g, ' ').trim();
+};
 
 const toolDetail = (input: any) => {
   if (!input || typeof input !== 'object') return '';
@@ -246,19 +258,52 @@ export class Runner {
       this.state.set(id, 'waiting');
       this.notify('warn', `"${this.store.task(id)?.title}" needs your approval${last?.tool ? `: ${last.tool}` : ''}`, id);
       this.changed();
+      void this.labelAsk(id);
     }
   }
 
-  // Answers the permission prompt in the session's terminal. "Yes" is preselected, "Yes, don't ask again" is next,
-  // Esc rejects. (Number keys only move the selection in Claude Code's menus, they don't confirm.)
-  answer(id: string, choice: 'allow' | 'always' | 'deny') {
+  // What "Always" will do, read from the menu's second choice, so the button says it.
+  private async labelAsk(id: string) {
+    await new Promise(r => setTimeout(r, 500)); // the menu is drawn a moment after the hook fires
+    const a = this.asks.get(id);
+    if (!a || this.state.get(id) !== 'waiting') return;
+    const text = optionText(await this.ptys.screen(id), 2);
+    if (text && /always|don't ask|do not ask|allow all/i.test(text)) { a.always = text.slice(0, 200); this.changed(); }
+  }
+
+  // Answers the permission prompt. Only the menu's number keys and Enter are sent (1 = Yes, 2 = Yes and always,
+  // Esc = No): an arrow key is an escape sequence, and if it ever reached Claude split in two, the first byte would be
+  // read as Esc and interrupt the session. Checks the prompt is really on screen first, and that it took the answer.
+  async answer(id: string, choice: 'allow' | 'always' | 'deny') {
     if (this.state.get(id) !== 'waiting') return;
+    const ask = this.asks.get(id);
+    if (!MENU.test(await this.ptys.screen(id))) {
+      // The hook said "waiting" but Claude isn't asking (answered in the terminal, or already moved on): don't type into the input.
+      this.asks.delete(id);
+      this.state.set(id, 'running');
+      this.notify('info', 'Claude is not asking for permission any more.', id);
+      this.changed();
+      return;
+    }
     if (choice === 'deny') this.ptys.write(id, '\x1b');
-    else if (choice === 'allow') this.ptys.write(id, '\r');
-    else { this.ptys.write(id, '\x1b[B'); setTimeout(() => this.ptys.write(id, '\r'), 150); }
+    else {
+      this.ptys.write(id, choice === 'always' ? '2' : '1');
+      await new Promise(r => setTimeout(r, 200));
+      this.ptys.write(id, '\r');
+    }
     this.asks.delete(id);
     this.state.set(id, 'running');
     this.changed();
+    // Still showing the same prompt after a moment: it did not take the answer. Say so instead of looking stuck.
+    setTimeout(async () => {
+      if (!this.ptys.has(id) || this.state.get(id) !== 'running') return;
+      if (choice !== 'deny' && MENU.test(await this.ptys.screen(id, 12)) && !this.asks.has(id)) {
+        if (ask) this.asks.set(id, ask);
+        this.state.set(id, 'waiting');
+        this.notify('warn', 'Claude did not take that answer. Answer it in the terminal (⌨).', id);
+        this.changed();
+      }
+    }, 2500);
   }
 
   private unwatch(id: string) {

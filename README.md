@@ -80,6 +80,14 @@ Run it as a task (it runs in the project root). It previews, asks you, then appl
 
 The open board updates by itself. The same sync from a terminal: `node <extension>/out/cli.js sync [--dry-run]`.
 
+## Permission prompts
+
+A card that is waiting shows what Claude asks and **Allow / Always / Deny**. **Always** shows the exact text of Claude's second menu
+choice (for example “Yes, and always allow access to … from this project”) in its tooltip. Answers are sent as menu number keys plus
+Enter, never as arrow keys, and only when the prompt is really on screen; if Claude does not take the answer, the card says so.
+Task sessions are kept from linking to your editor (`CLAUDE_CODE_AUTO_CONNECT_IDE=false`): linked, Claude Code opens a diff tab for every
+edit and waits there, where the card's buttons cannot answer.
+
 ## Usage limits
 
 The header shows how much of your **5-hour** and **weekly** Claude limits are used (`5h 51% · wk 19%`), read from Claude Code's own
