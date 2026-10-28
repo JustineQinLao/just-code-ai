@@ -75,6 +75,11 @@ Run it as a task (it runs in the project root). It previews, asks you, then appl
 
 The open board updates by itself. The same sync from a terminal: `node <extension>/out/cli.js sync [--dry-run]`.
 
+## Terminal modal
+
+Opens on the live Claude session. Under it, a message box (Enter to send, **Esc** to interrupt) types into the session even if the
+terminal itself doesn't have keyboard focus. **✳ Open in Claude Code** continues the session there; **Log** shows the saved transcript.
+
 ## Git
 
 - No git repo? The first run creates a local one (`git init`, no remote) and commits the current files.

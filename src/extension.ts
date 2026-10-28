@@ -194,6 +194,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'cancelQueue': r.cancelQueue(); break;
       case 'stop': r.stop(m.id); break;
       case 'answer': r.answer(m.id, m.choice); break;
+      case 'say': if (ptys.has(m.id) && typeof m.text === 'string' && m.text.trim()) await r.say(m.id, m.text); break;
       case 'input': ptys.write(m.id, m.data); break;
       case 'resize': ptys.resize(m.id, m.cols, m.rows); ptys.size = { cols: m.cols, rows: m.rows }; break;
       case 'attach': panel?.webview.postMessage({ type: 'replay', id: m.id, data: await ptys.snapshot(m.id) }); break;
