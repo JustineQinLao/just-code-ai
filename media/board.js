@@ -475,7 +475,11 @@ window.addEventListener('message', ({ data: m }) => {
     if (!connected) { connected = true; $('offline').hidden = true; if (!ui.guided && !S.empty) guide(); }
   }
   else if (m.type === 'data') terms.get(m.id)?.term.write(m.data);
-  else if (m.type === 'replay') { const e = terms.get(m.id); if (e) { e.term.reset(); e.term.write(m.data); } }
+  // Snapshot of the current screen, drawn while hidden so opening a terminal never shows it being rebuilt.
+  else if (m.type === 'replay') {
+    const e = terms.get(m.id);
+    if (e) { e.el.style.visibility = 'hidden'; e.term.reset(); e.term.write(m.data, () => { e.el.style.visibility = ''; }); }
+  }
   else if (m.type === 'log') { if (m.id === termId && view === 'log') renderLog(m.steps); }
   else if (m.type === 'changes') { changes[m.id] = m.files; renderBoard(); }
   else if (m.type === 'focus') {
