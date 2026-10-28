@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -49,6 +49,16 @@
             "Auto-approve file edits, ask for commands",
             "Read-only planning"
           ]
+        },
+        "justCode.plannerModel": {
+          "type": "string",
+          "default": "opus",
+          "description": "Model for Plan with Claude (alias like opus, sonnet, haiku, or a full model id). Empty = your Claude default."
+        },
+        "justCode.taskModel": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "Model for task runs and conflict resolving. Empty = your Claude default."
         }
       }
     }

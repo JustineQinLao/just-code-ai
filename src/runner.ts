@@ -29,7 +29,7 @@ export class Runner {
 
   constructor(readonly store: Store, private ptys: Ptys, private runsDir: string, private bin: () => string,
     private notify: (level: 'info' | 'warn' | 'error', text: string, taskId?: string) => void,
-    private maxParallel: () => number) {
+    private maxParallel: () => number, private model: () => string) {
     fs.mkdirSync(runsDir, { recursive: true });
     ptys.onExit((id) => { if (this.store.task(id)) void this.exited(id); });
   }
@@ -66,7 +66,7 @@ export class Runner {
     const statusFile = this.statusFile(id);
     fs.writeFileSync(statusFile, '');
     this.watch(id);
-    this.ptys.start(id, worktree, this.bin(), sessionArgs({ task, root: this.root, worktree, statusFile, resume, prompt }), size?.cols, size?.rows);
+    this.ptys.start(id, worktree, this.bin(), sessionArgs({ task, root: this.root, worktree, statusFile, resume, prompt, model: this.model() }), size?.cols, size?.rows);
     this.changed();
   }
 

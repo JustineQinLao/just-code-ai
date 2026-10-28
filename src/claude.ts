@@ -107,11 +107,12 @@ export function taskPrompt(t: Task) {
 }
 
 // argv for the task's interactive session. resume: the session already exists (continue it, optionally with `prompt`).
-export function sessionArgs(o: { task: Task; root: string; worktree: string; statusFile: string; resume: boolean; prompt?: string }) {
+export function sessionArgs(o: { task: Task; root: string; worktree: string; statusFile: string; resume: boolean; prompt?: string; model?: string }) {
   const { task } = o;
   const prompt = o.prompt ?? (o.resume ? undefined : taskPrompt(task));
   return [
     '--permission-mode', task.mode,
+    ...(o.model ? ['--model', o.model] : []),
     ...(task.agent ? ['--agent', task.agent] : []),
     ...carryOver(o.root, o.worktree, o.statusFile),
     ...(task.images?.length ? ['--add-dir', path.dirname(task.images[0])] : []), // attachments sit outside the worktree
@@ -127,11 +128,11 @@ export const sessionExists = (cwd: string, id: string) =>
 export interface PlannedTask { title: string; description?: string }
 
 // Read-only planning run: Claude reads the code and answers with a JSON task list.
-export function plan(bin: string, root: string, goal: string, agent: string | undefined, signal: AbortSignal): Promise<PlannedTask[]> {
+export function plan(bin: string, root: string, goal: string, agent: string | undefined, model: string, signal: AbortSignal): Promise<PlannedTask[]> {
   const prompt = `Plan the work for this goal in the current codebase:\n\n${goal}\n\n` +
     'Read the code you need first. Split the work into small tasks that can each be built, reviewed and merged on their own, in build order, at most 12. ' +
     'Reply with ONLY a JSON array, no prose: [{"title": "...", "description": "what to change, where, and how to verify"}]';
-  const args = ['-p', '--output-format', 'json', '--permission-mode', 'plan', ...(agent ? ['--agent', agent] : []), prompt];
+  const args = ['-p', '--output-format', 'json', '--permission-mode', 'plan', ...(model ? ['--model', model] : []), ...(agent ? ['--agent', agent] : []), prompt];
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { cwd: root, env: ptyEnv(), signal, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', err = '';
