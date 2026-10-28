@@ -23,7 +23,7 @@ export interface RunnerSettings {
   allowedTools: string[];
   worktreeCopy: string[];
   idleMinutes: number;
-  review: { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; commands: string[]; timeoutMinutes: number };
+  review: { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; mergeIfCannotRun: boolean; commands: string[]; timeoutMinutes: number };
 }
 
 export interface RunnerDeps {
@@ -45,6 +45,7 @@ export class Runner {
   private starting = new Set<string>();
   private reviews = new Map<string, { ac: AbortController; started: number }>();
   private busy = new Set<string>();
+  private errorSwept = new Set<string>(); // errored reviews the sweep already retried this window
   private emptyAt = new Set<string>(); // tasks whose branch had nothing to review at their last turn end
   private ev = new EventEmitter();
   private lock: Promise<unknown> = Promise.resolve();
@@ -381,6 +382,13 @@ export class Runner {
         if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') continue;
         if (this.reviews.has(t.id) || this.busy.has(t.id) || this.starting.has(t.id)) continue;
         if (t.status === 'review' && !t.review && !this.emptyAt.has(t.id) && await this.hasWork(t.id)) { await this.review(t.id); continue; }
+        // A review that could not run before (e.g. before this setting existed, or the window closed): one more try,
+        // then the automatic merge applies.
+        if (t.status === 'review' && t.review?.state === 'error' && o.autoMerge && o.mergeIfCannotRun && !this.errorSwept.has(t.id) && !isLimitError(t.review.error ?? '')) {
+          this.errorSwept.add(t.id);
+          await this.review(t.id, true, 1);
+          continue;
+        }
         if (t.review?.state === 'fail' && t.review.issues?.length && t.review.attempts < o.maxAttempts && t.status === 'doing' && !this.isOpen(t.id)) {
           await this.sendIssues(t.id);
         }
@@ -413,10 +421,14 @@ export class Runner {
 
   // A read-only reviewer checks the branch. Fail: its issues go back to the task's Claude, and the new commit is
   // reviewed again, up to maxAttempts. Pass: ready to merge, or merged right away with autoMerge (unless critical).
-  async review(id: string, force = false) {
+  // A review that cannot run (timeout, crash, unreadable verdict) is retried once. If it still cannot run and merging
+  // is automatic, the task is merged anyway (mergeIfReviewCannotRun), noted on the card: a broken reviewer never holds
+  // the queue. A review that finds issues is never merged this way.
+  async review(id: string, force = false, retry = 0): Promise<void> {
     const t = this.store.task(id), o = this.d.settings().review;
     const bin = this.d.bin();
     if (!t?.worktree || !t.base || !t.branch || t.conflicts?.length || this.reviews.has(id) || !bin) return;
+    let after: 'retry' | 'merge' | undefined;
     const ac = new AbortController();
     this.reviews.set(id, { ac, started: Date.now() }); // synchronously: two triggers never start two reviewers
     this.changed();
@@ -433,7 +445,8 @@ export class Runner {
       fs.mkdirSync(shots, { recursive: true });
       const device = adb();
       const screenshots = () => { try { return fs.readdirSync(shots).filter(f => /\.(png|jpe?g)$/i.test(f)).map(f => path.join(shots, f)); } catch { return []; } };
-      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli });
+      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli }) + (retry
+        ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       const exec = (p: string) => runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: o.model || undefined, agent: reviewer, signal: ac.signal,
         timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli });
       let v;
@@ -450,8 +463,11 @@ export class Runner {
         if (ac.signal.aborted && !this.store.task(id)) return;
         const msg = String(e.message ?? e).slice(0, 400);
         if (isLimitError(msg)) this.d.limits.setReached('usage');
-        if (this.store.task(id)) this.store.updateTask(id, { review: { state: 'error', attempts, error: msg, screenshots: screenshots() } });
-        if (!isLimitError(msg) && msg !== 'cancelled') this.d.notify('error', `AI review of "${t.title}" could not run: ${msg}`, id);
+        if (this.store.task(id)) this.store.updateTask(id, { review: { state: 'error', attempts, head, error: msg, screenshots: screenshots() } });
+        if (isLimitError(msg) || msg === 'cancelled') return;
+        if (retry < 1) { after = 'retry'; return; }
+        if (o.autoMerge && o.mergeIfCannotRun) { after = 'merge'; return; }
+        this.d.notify('error', `AI review of "${t.title}" could not run: ${msg}`, id);
         return;
       }
       const now = this.store.task(id);
@@ -471,6 +487,13 @@ export class Runner {
     } finally {
       if (this.reviews.get(id)?.ac === ac) this.reviews.delete(id);
       this.changed();
+    }
+    if (after === 'retry') return this.review(id, true, retry + 1);
+    if (after === 'merge') {
+      const err = this.store.task(id)?.review?.error;
+      this.d.notify('warn', `The AI review of "${t.title}" could not run twice (${err}). Merged without a finished review, as set.`, id);
+      this.store.updateTask(id, { review: { ...this.store.task(id)!.review!, unreviewed: true } });
+      await this.merge(id, true);
     }
   }
 
