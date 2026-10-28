@@ -10,10 +10,21 @@ import { sessionArgs, sessionExists } from './claude';
 // What a task's live session is doing, from its hooks: running, waiting for approval, or idle (turn finished).
 export type RunState = 'running' | 'waiting' | 'idle';
 
+// What a waiting session asks for, shown on its card: the tool and its main argument.
+export interface Ask { message: string; tool?: string; detail?: string }
+
+const toolDetail = (input: any) => {
+  if (!input || typeof input !== 'object') return '';
+  const v = input.command ?? input.file_path ?? input.notebook_path ?? input.url ?? input.pattern ?? input.description ?? Object.values(input).find(x => typeof x === 'string');
+  return typeof v === 'string' ? v.slice(0, 400) : '';
+};
+
 // Runs tasks of one project: worktree + branch per task, a Claude session per task in a pty,
 // auto-commit when a turn ends, and the review → merge flow back into the task's base branch.
 export class Runner {
   state = new Map<string, RunState>();
+  asks = new Map<string, Ask>();
+  private lastTool = new Map<string, { tool: string; detail: string }>();
   private queue: string[] = [];
   private watched = new Map<string, number>(); // taskId → bytes of its status file already read
   private ev = new EventEmitter();
@@ -115,16 +126,44 @@ export class Runner {
       let text = '';
       try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
       const seen = this.watched.get(id) ?? 0;
-      if (text.length <= seen) return;
-      this.watched.set(id, text.length);
-      const last = text.slice(seen).trim().split('\n').pop();
-      if (last === 'stop') void this.turnEnded(id);
-      else if (last === 'wait') { this.state.set(id, 'waiting'); this.notify('warn', `"${this.store.task(id)?.title}" needs your approval`, id); this.changed(); }
-      else if (last === 'run') { this.state.set(id, 'running'); this.changed(); }
+      const end = text.lastIndexOf('\n') + 1; // only whole lines; a hook may be mid-write
+      if (end <= seen) return;
+      this.watched.set(id, end);
+      for (const line of text.slice(seen, end).split('\n').filter(Boolean)) this.event(id, line);
     });
   }
 
+  private event(id: string, line: string) {
+    const [kind, raw] = line.split('\t');
+    let json: any = {};
+    try { json = raw ? JSON.parse(raw) : {}; } catch { /* partial or odd input: state still applies */ }
+    if (kind === 'tool') { this.lastTool.set(id, { tool: json.tool_name ?? '', detail: toolDetail(json.tool_input) }); return; }
+    if (kind === 'stop') { this.asks.delete(id); void this.turnEnded(id); return; }
+    if (kind === 'run') { this.asks.delete(id); this.state.set(id, 'running'); this.changed(); return; }
+    if (kind === 'wait') {
+      const last = this.lastTool.get(id);
+      this.asks.set(id, { message: json.message ?? 'Claude needs your approval', tool: last?.tool, detail: last?.detail });
+      this.state.set(id, 'waiting');
+      this.notify('warn', `"${this.store.task(id)?.title}" needs your approval${last?.tool ? `: ${last.tool}` : ''}`, id);
+      this.changed();
+    }
+  }
+
+  // Answers the permission prompt in the session's terminal. "Yes" is preselected, "Yes, don't ask again" is next,
+  // Esc rejects. (Number keys only move the selection in Claude Code's menus, they don't confirm.)
+  answer(id: string, choice: 'allow' | 'always' | 'deny') {
+    if (this.state.get(id) !== 'waiting') return;
+    if (choice === 'deny') this.ptys.write(id, '\x1b');
+    else if (choice === 'allow') this.ptys.write(id, '\r');
+    else { this.ptys.write(id, '\x1b[B'); setTimeout(() => this.ptys.write(id, '\r'), 150); }
+    this.asks.delete(id);
+    this.state.set(id, 'running');
+    this.changed();
+  }
+
   private unwatch(id: string) {
+    this.asks.delete(id);
+    this.lastTool.delete(id);
     fs.unwatchFile(this.statusFile(id));
     this.watched.delete(id);
     fs.rmSync(this.statusFile(id), { force: true });
