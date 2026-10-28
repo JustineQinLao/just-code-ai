@@ -188,3 +188,9 @@ dialog::backdrop { background: #0007; }
 @media (max-width: 1100px) { .lanes { grid-template-columns: repeat(5, 230px); } }
 @media (max-width: 700px) { body.drawer-open { padding-right: 16px; } #drawer { width: 100vw; } .addrow { flex-wrap: wrap; } }
 .ask button { white-space: normal; text-align: left; max-width: 100%; word-break: break-word; }
+.srclist { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.srclist li { display: flex; gap: 8px; align-items: center; }
+.srclist a { cursor: pointer; text-decoration: underline; white-space: nowrap; }
+.dbody h4 { margin: 14px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+label.chip { display: inline-flex; align-items: center; gap: 2px; font-family: inherit; }
+.askdetail.plan { max-height: 320px; font-family: var(--vscode-font-family); white-space: pre-wrap; word-break: normal; }

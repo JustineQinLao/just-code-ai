@@ -2,6 +2,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { sdk, Sdk } from './sdk';
 import { alwaysChoice, allowedBy, toolArg, Suggestion } from './policy';
+import { settingSources, systemPrompt, TASK_APPEND, OUTPUT_CAPS, addUsage, Usage } from './claude';
 
 // One task's live Claude session, through the Agent SDK. Claude runs as a child process the SDK owns; JustCode talks
 // to it in structured messages, so a permission request arrives as data (tool + input) and is answered as data. No
@@ -15,12 +16,13 @@ export interface Question { question: string; header?: string; multiSelect?: boo
 // Something Claude waits on: a permission (Allow / Always / Deny) or a question with choices.
 export interface Ask {
   id: string;
-  kind: 'permission' | 'question';
+  kind: 'permission' | 'question' | 'plan';
   tool: string;
   detail: string;            // main argument: the command, the file
   reason?: string;           // why Claude Code asks (outside the folder, …)
   always?: string;           // label of the "Always" choice, when there is one
   questions?: Question[];
+  plan?: string;             // kind plan: the plan Claude wants approved (markdown)
   at: number;
 }
 
@@ -33,7 +35,7 @@ export interface AgentNode {
   tokens: number; tools: number; ms: number; started: number; last?: string; summary?: string; toolUseId?: string;
 }
 
-export interface TurnEnd { ok: boolean; error?: string; text: string; limit?: boolean; costUsd?: number }
+export interface TurnEnd { ok: boolean; error?: string; text: string; limit?: boolean; costUsd?: number; usage?: Usage }
 
 export interface SessionOptions {
   bin: string;
@@ -50,6 +52,7 @@ export interface SessionOptions {
   settingsFile?: string;      // project settings that are not in the task's copy (uncommitted settings.local.json)
   env: Record<string, string>;
   idleMs: number;
+  personal?: boolean;         // also load the user's own Claude setup (plugins, skills, MCP, memory)
   label: string;              // name of the root node in the agent map
 }
 
@@ -119,11 +122,12 @@ export class Session {
     const options: Sdk.Options = {
       cwd: o.cwd,
       pathToClaudeCodeExecutable: o.bin,
-      env: o.env,
+      env: { ...o.env, ...OUTPUT_CAPS },
+      systemPrompt: systemPrompt(TASK_APPEND),
       permissionMode: o.mode as Sdk.PermissionMode,
       // Lets the user switch a running task to Allow everything; it does not turn that mode on by itself.
       allowDangerouslySkipPermissions: true,
-      settingSources: ['user', 'project', 'local'],
+      settingSources: settingSources(!!o.personal),
       ...(o.settingsFile ? { settings: o.settingsFile } : {}),
       ...(o.model ? { model: o.model } : {}),
       ...(o.agent ? { agent: o.agent } : {}),
@@ -244,7 +248,7 @@ export class Session {
         if (error) this.step({ kind: 'error', text: String(error).slice(0, 600) });
         this.state = 'idle';
         this.armIdle();
-        this.emit('turn', { ok, error, text, limit, costUsd: r.total_cost_usd } as TurnEnd);
+        this.emit('turn', { ok, error, text, limit, costUsd: r.total_cost_usd, usage: addUsage(undefined, r.usage) } as TurnEnd);
         this.changed();
         return;
       }
@@ -275,6 +279,8 @@ export class Session {
     const always = isQuestion ? undefined : alwaysChoice(opt.suggestions);
     const ask: Ask = isQuestion
       ? { id, kind: 'question', tool, detail: '', questions: normalizeQuestions(input.questions), at: Date.now() }
+      : tool === 'ExitPlanMode'
+      ? { id, kind: 'plan', tool, detail: 'Claude\'s plan is ready', plan: String(input.plan ?? '').slice(0, 20000), at: Date.now() }
       : { id, kind: 'permission', tool, detail: toolArg(input) || JSON.stringify(input).slice(0, 300), reason: opt.decisionReason ?? (opt.blockedPath ? `Outside this task's folder: ${opt.blockedPath}` : undefined), always: always?.label, at: Date.now() };
     this.asks.set(id, ask);
     this.state = 'waiting';

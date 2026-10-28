@@ -11,6 +11,7 @@ import { Store } from '../store';
 import { parseTasks } from '../tasksmd';
 import { Session } from '../session';
 import * as g from '../git';
+import * as A from '../artifacts';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'jc-test-'));
 
@@ -152,7 +153,7 @@ test('session: messages build the log, agent map and turn result', () => {
   assert.equal(s.agents.get('main')!.tokens, 120);
   assert.deepEqual(s.steps.map(x => x.kind), ['info', 'say', 'tool', 'tool']);
   assert.equal(s.steps[3].agent, 'Explore');
-  assert.deepEqual(turns, [{ ok: true, error: undefined, text: 'Done', limit: false, costUsd: 0.01 }]);
+  assert.deepEqual(turns, [{ ok: true, error: undefined, text: 'Done', limit: false, costUsd: 0.01, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
   assert.equal(s.state, 'idle');
   s.kill();
 });
@@ -185,4 +186,30 @@ test('session: permission requests wait for an answer; Always reports the rules'
   assert.equal((await perm('Bash', { command: 'rm -rf build; make' })).behavior, 'allow');
   assert.equal(s.asks.size, 0);
   s.kill();
+});
+
+test('artifacts: brief lists sources by reference, progress keeps merged work', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'docs'));
+  const sources: A.Source[] = [{ id: 's1', kind: 'file', ref: path.join(root, 'docs', 'spec.md'), note: 'Product spec' }, { id: 's2', kind: 'url', ref: 'https://example.com/design' }, { id: 's3', kind: 'folder', ref: '/outside/designs' }];
+  const t = { id: 't1', title: 'Add roles', description: 'Owner and staff', mode: 'auto', status: 'todo', created: 0, sources: ['s1', 's3'], files: ['/x/data.csv'] } as any;
+  const brief = A.writeBrief(root, t, sources);
+  assert.match(brief, /- docs\/spec\.md — Product spec/);
+  assert.doesNotMatch(brief, /example\.com/);
+  assert.match(brief, /\/x\/data\.csv/);
+  assert.match(brief, new RegExp(A.handoffFile(root, 't1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.deepEqual(A.outsideDirs(root, sources), ['/outside/designs']);
+  fs.writeFileSync(A.handoffFile(root, 't1'), '# Handoff\n- Added Role model\n- npm test: 12 passed\n');
+  A.appendProgress(root, t);
+  const progress = fs.readFileSync(A.progressFile(root), 'utf8');
+  assert.match(progress, /Add roles\n- Added Role model\n- npm test: 12 passed/);
+  assert.match(A.writeBrief(root, { ...t, sources: undefined }, sources), /Project history/);
+});
+
+test('review triage: docs need none, small code light, sensitive or big full', () => {
+  const d = (file: string, lines: number) => `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n` + Array.from({ length: lines }, (_, i) => `+line ${i}`).join('\n') + '\n';
+  assert.equal(A.triage(d('README.md', 50) + d('package-lock.json', 900)).level, 'none');
+  assert.equal(A.triage(d('src/list.tsx', 30)).level, 'light');
+  assert.equal(A.triage(d('src/auth/login.ts', 5)).level, 'full');
+  assert.equal(A.triage(d('src/a.ts', 200)).level, 'full');
 });

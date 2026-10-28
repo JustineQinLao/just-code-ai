@@ -16,6 +16,8 @@
   let showSetup = false;
   let more = false;                        // new-task details open
   let images = [];                         // pasted screenshots for the new task
+  let files = [];                          // files attached to the new task
+  let srcOff = new Set();                  // project sources unticked for the new task
   let dragId;
   const remember = () => vscode.setState({ view, open });
 
@@ -38,6 +40,12 @@
   const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
   const dur = ms => ms ? ago(Date.now() - ms) : '';
   const tok = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k tokens` : `${n} tokens`;
+  const tokShort = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M tok` : `${Math.round(n / 1000)}k tok`;
+  // Tokens processed per stage. Cache reads are re-sent context: cheap, but they count most toward plan limits.
+  const sum = u => u ? u.input + u.output + u.cacheRead + u.cacheWrite : 0;
+  const usageTotal = t => sum(t.usage?.build) + sum(t.usage?.review);
+  const usageTitle = t => ['build', 'review'].filter(k => t.usage?.[k]).map(k => { const u = t.usage[k]; return `${k}: ${tokShort(sum(u))} (written ${u.output}, new input ${u.input + u.cacheWrite}, cached ${u.cacheRead})`; }).join('\n');
+  const srcLabel = s => s.kind === 'url' ? s.ref.replace(/^https?:\/\//, '').slice(0, 40) : (s.ref.split(/[\\/]/).filter(Boolean).pop() || s.ref) + (s.kind === 'folder' ? '/' : '');
   const MODES = [['auto', 'Auto', 'Claude approves what is safe, asks when unsure'], ['acceptEdits', 'Auto-edit', 'Edits approved, commands ask'],
     ['default', 'Ask me', 'Every edit and command asks'], ['plan', 'Plan only', 'Read-only'], ['bypassPermissions', 'Allow everything ⚠', 'No approvals at all']];
   const modeName = m => (MODES.find(x => x[0] === m) || [m, m])[1];
@@ -58,7 +66,7 @@
   function next(t) {
     const max = S.settings.review.maxAttempts, r = t.review;
     if (t.status === 'done') return t.review?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn' } : { text: t.where === 'root' ? 'Done' : 'Merged', tone: 'ok' };
-    if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : 'Claude needs your approval', tone: 'warn' };
+    if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : t.asks[0].kind === 'plan' ? 'Plan ready for your OK' : 'Claude needs your approval', tone: 'warn' };
     if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run' };
     if (t.run === 'running') return { text: `Working${lastTool(t)}`, tone: 'run', action: ['Open', () => openTask(t.id)] };
     if (t.remote) return { text: 'In Remote Control: continue in the Claude app or claude.ai/code. Close its terminal to bring it back.', tone: 'run' };
@@ -101,6 +109,8 @@
       h('div', { id: 'more', class: 'more', hidden: true },
         h('textarea', { id: 'desc', placeholder: 'Details, acceptance criteria, links. Paste screenshots here.', onpaste: pasteImages }),
         h('div', { id: 'imgs', class: 'imgs' }),
+        h('div', { class: 'row' }, btn('📎 Attach files…', () => post('pickFiles'), 'ghost', 'Files or folders this task is based on (specs, designs, data)'), h('span', { id: 'files', class: 'chips' })),
+        h('div', { id: 'srcpick', class: 'chips' }),
         h('div', { class: 'row' },
           h('label', {}, 'Agent ', h('select', { id: 'agent' })),
           h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
@@ -126,13 +136,17 @@
     $('#imgs').replaceChildren(...images.map((im, i) => h('span', { class: 'thumb' }, h('img', { src: im.data }), btn('×', () => { images.splice(i, 1); drawImages(); }, 'x'))));
   }
 
+  const base = f => f.split(/[\\/]/).filter(Boolean).pop() || f;
+  function drawFiles() {
+    $('#files').replaceChildren(...files.map((f, i) => h('span', { class: 'chip', title: f }, base(f), btn('×', () => { files.splice(i, 1); drawFiles(); }, 'x'))));
+  }
   function addTask(start) {
     const title = $('#title').value.trim();
     if (!title) return $('#title').focus();
     const sprint = $('#sprintSel').value;
     post('addTask', { title, description: $('#desc').value, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
-      sprintId: sprint || undefined, images, start });
-    $('#title').value = ''; $('#desc').value = ''; images = []; drawImages();
+      sprintId: sprint || undefined, images, files, sources: (S.sources || []).map(s => s.id).filter(id => !srcOff.has(id)), start });
+    $('#title').value = ''; $('#desc').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
   }
 
   /* ---------- render ---------- */
@@ -190,6 +204,9 @@
     const sp = $('#sprintSel'), sc = sp.value, active = S.board.sprints.find(s => s.active && !s.closed);
     sp.replaceChildren(h('option', { value: '' }, 'Backlog'), ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id }, s.name)));
     sp.value = sc && S.board.sprints.some(s => s.id === sc) ? sc : (view !== 'all' && view !== 'backlog' ? view : active?.id ?? '');
+    const srcs = S.sources || [];
+    $('#srcpick').replaceChildren(...(srcs.length ? [h('span', { class: 'muted small' }, 'Based on:')] : []), ...srcs.map(s => h('label', { class: 'chip', title: s.note || s.ref },
+      h('input', { type: 'checkbox', checked: !srcOff.has(s.id), onchange: e => { e.target.checked ? srcOff.delete(s.id) : srcOff.add(s.id); } }), ' ', srcLabel(s))));
     $('#skills').replaceChildren(...(S.skills.length ? [h('span', { class: 'muted small' }, 'Skills:')] : []), ...S.skills.map(n => h('span', { class: 'chip', title: 'Add to the task', onclick: () => {
       const t = $('#title'); if (!t.value.trim()) t.value = `/${n}`; else { $('#desc').value += `${$('#desc').value ? '\n' : ''}/${n}`; if (!more) $('#more').hidden = !(more = true); }
       if (t.value.trim() === `/${n}`) $('#where').value = 'root';
@@ -213,6 +230,7 @@
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
       btn('✦ Plan with Claude', () => planDialog(), 'ghost', 'Describe a goal; Claude reads the code and proposes tasks'),
+      btn(`📎 Sources${S.sources?.length ? ` (${S.sources.length})` : ''}`, () => sourcesDialog(), 'ghost', 'Specs, designs, docs and links tasks are based on'),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? ` · next waits: “${q.blocker.title.slice(0, 40)}” ${q.blocker.why}` : '',
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
@@ -249,7 +267,7 @@
         t.where === 'root' ? h('span', { class: 'tag' }, 'project folder') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
-        t.costUsd ? h('span', { class: 'tag', title: 'Estimated at API prices; a Claude plan is not billed per task' }, `~$${t.costUsd.toFixed(2)}`) : ''),
+        usageTotal(t) ? h('span', { class: 'tag', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}` }, nx.text),
       ...(t.asks || []).map(a => askBox(t, a)),
       nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary')) : '');
@@ -259,6 +277,7 @@
   /* ---------- approvals and questions ---------- */
   function askBox(t, a) {
     if (a.kind === 'question') return questionBox(t, a);
+    if (a.kind === 'plan') return planBox(t, a);
     let reason;
     const box = h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       h('div', { class: 'askhead' }, h('b', {}, a.tool), a.reason ? h('span', { class: 'muted small' }, ` · ${a.reason}`) : ''),
@@ -272,6 +291,21 @@
         btn('Deny', () => send(), 'danger')));
     function send() { post('answer', { id: t.id, ask: a.id, choice: 'deny', message: reason.querySelector('input').value }); }
     return box;
+  }
+
+  // Plan mode: Claude's plan, to build as is or send back with changes.
+  function planBox(t, a) {
+    let note;
+    const build = S.settings.defaultMode === 'plan' ? 'auto' : S.settings.defaultMode;
+    return h('div', { class: 'ask', onclick: e => e.stopPropagation() },
+      h('div', { class: 'askhead' }, h('b', {}, 'Plan ready'), h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
+      h('pre', { class: 'askdetail plan' }, a.plan || '(empty plan)'),
+      h('div', { class: 'acts' },
+        btn(`Build it (${modeName(build)})`, () => { post('answer', { id: t.id, ask: a.id, choice: 'allow' }); post('setMode', { id: t.id, mode: build }); }, 'primary'),
+        btn('Revise…', () => { note.hidden = !note.hidden; note.querySelector('input').focus(); })),
+      note = h('div', { class: 'row', hidden: true },
+        h('input', { class: 'grow', placeholder: 'What should change in the plan?', onkeydown: e => { if (e.key === 'Enter') send(); } }), btn('Send', () => send())));
+    function send() { post('answer', { id: t.id, ask: a.id, choice: 'deny', message: `Revise the plan: ${note.querySelector('input').value || 'keep planning'}` }); }
   }
 
   function questionBox(t, a) {
@@ -371,6 +405,7 @@
       if (!r) return [h('p', { class: 'muted' }, t.reviewing ? 'The AI reviewer is testing this change…' : S.settings.review.auto ? 'Reviewed automatically when Claude finishes.' : 'AI review is off (⚙ Settings).'), t.worktree && !t.reviewing ? btn('Review now', () => post('review', { id: t.id })) : ''];
       return [
         h('p', {}, h('b', {}, { pass: '✓ Passed', fail: '✗ Issues found', error: 'Review could not run', running: 'Reviewing…' }[r.state]), r.risk === 'critical' ? h('span', { class: 'warn' }, ' · flagged critical') : '', h('span', { class: 'muted' }, ` · round ${r.attempts || 1}`)),
+        r.level ? h('p', { class: 'muted small' }, r.level === 'none' ? `No AI review needed: ${r.why}.` : `${r.level === 'light' ? 'Light review (lighter model)' : 'Full review'}${r.why ? `: ${r.why}` : ''}.`) : '',
         r.error ? h('pre', { class: 'err' }, r.error) : '',
         r.issues?.length ? h('ol', { class: 'issues' }, r.issues.map(i => h('li', {}, i))) : '',
         r.tested?.length ? h('p', { class: 'muted small' }, 'Tested: ', r.tested.join(' · ')) : '',
@@ -386,6 +421,12 @@
         h('label', { class: 'blk' }, 'Details', desc = h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
         editable ? btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary') : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
         t.images?.length ? h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
+        h('h4', {}, 'Artifacts'),
+        h('div', { class: 'row' }, [['plan', 'Plan'], ['brief', 'Brief'], ['handoff', 'Handoff'], ['review', 'Review notes']].map(([k, l]) => btn(`${t.artifacts?.[k] ? '' : '○ '}${l}`, () => post('openArtifact', { id: t.id, which: k }), 'ghost', t.artifacts?.[k] ? 'Open' : 'Not written yet')),
+          btn('Project history', () => post('openArtifact', { id: t.id, which: 'progress' }), 'ghost')),
+        t.files?.length ? h('p', { class: 'small' }, 'Attached: ', t.files.map(base).join(', ')) : '',
+        t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
+        usageTotal(t) ? h('div', {}, h('h4', {}, 'Tokens'), h('pre', { class: 'small' }, usageTitle(t))) : '',
         h('p', { class: 'muted small' }, `Created ${new Date(t.created).toLocaleString()}${t.sessionId ? ` · session ${t.sessionId.slice(0, 8)}` : ''}${t.costUsd ? ` · ~$${t.costUsd.toFixed(2)} at API prices` : ''}`),
       ];
     }
@@ -480,7 +521,11 @@
         field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
         field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
         field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
-        field('idleMinutes', 'Close idle Claude processes after (minutes)', h('input', { type: 'number', min: 1, value: s.idleMinutes }))),
+        field('idleMinutes', 'Close idle Claude processes after (minutes)', h('input', { type: 'number', min: 1, value: s.idleMinutes })),
+        field('reviewTriage', 'Review size', sel(s.review.triage, [[true, 'Fit to the change (saves tokens)'], [false, 'Always the full reviewer']]), 'Docs-only: no review. Small, non-sensitive: lighter model.'),
+        field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
+        field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
+        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
       h('label', { class: 'blk' }, h('span', {}, `Always allowed in ${S.roots.find(r => r.path === S.root)?.name ?? 'this project'}`),
         rules = h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (S.board.rules || []).join('\n')),
         h('span', { class: 'muted small' }, 'Added when you press "Always allow…" on a card. Every task in this project gets them.')),
@@ -493,11 +538,25 @@
           defaultMode: f.defaultMode.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
           plannerModel: f.plannerModel.value.trim(), maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
           idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
+          reviewTriage: f.reviewTriage.value === 'true', reviewLightModel: f.reviewLightModel.value.trim(), personalSetup: f.personalSetup.value === 'true',
+          freshSessionTokens: Math.max(0, +f.freshSessionTokens.value || 0),
         } });
         post('rules', { rules: lines(rules) });
         $('#mode').dataset.set = '';
         $('#dlg').close();
       }, 'primary')));
+  }
+
+  function sourcesDialog() {
+    const list = S.sources || [];
+    dialog('Sources',
+      h('p', { class: 'muted' }, 'The material tasks are based on: specs, designs, API docs, data files, folders, links. Every new task lists them in its brief (with your note) and Claude opens only what it needs. Untick a source when adding a task to leave it out.'),
+      list.length ? h('ul', { class: 'srclist' }, list.map(s => h('li', {},
+        h('span', { class: 'tag' }, s.kind), h('a', { onclick: () => post('openSource', { sourceId: s.id }), title: s.ref }, srcLabel(s)),
+        h('input', { class: 'grow', value: s.note || '', placeholder: 'What is it? (Claude reads this note first)', onchange: e => post('editSource', { sourceId: s.id, note: e.target.value }) }),
+        btn('×', () => post('removeSource', { sourceId: s.id }), 'x', 'Remove')))) : h('p', { class: 'muted' }, 'No sources yet.'),
+      h('div', { class: 'acts' }, btn('+ Files or folders', () => post('addSource', { kind: 'file' }), 'primary'), btn('+ Link', () => post('addSource', { kind: 'url' })),
+        btn('Project history', () => post('openArtifact', { which: 'progress' }), 'ghost', 'What merged tasks changed; later tasks read it instead of digging through git')));
   }
 
   function guide() {
@@ -512,7 +571,9 @@
       sec(6, 'Run a whole list', '▶ Run all runs every To do task in board order (drag cards to reorder), one at a time by default so each builds on the last merged one. Turn on automatic merging and a sprint runs unattended.'),
       sec(7, 'Continue on your phone', '📱 Continue on phone (in a task) moves its session to Claude Code Remote Control: open the Claude app or claude.ai/code to watch, answer and steer it. Close its terminal to bring the task back to the board. Needs a Claude account login.'),
       sec(8, 'Agent map', 'Agent map (top right) shows every Claude session, subagent and reviewer at work across your projects, with time and tokens.'),
-      sec(9, 'Good to know', h('ul', {},
+      sec(9, 'Sources and artifacts', 'Add specs, designs, docs and links under 📎 Sources, or attach files to one task. Each task gets a brief (task + sources), Claude writes a handoff (what changed, how it verified it), and the reviewer reads both instead of re-exploring. Merged tasks add a line to the project history. Open them under Details.'),
+      sec(10, 'Spending fewer tokens', 'Tasks load only the project\'s Claude setup, share a cached system prompt, and keep command output short. Reviews fit the change (docs: none, small: lighter model) and continue their own session for follow-ups. Long fix rounds restart from the artifacts. Each card shows its tokens; Details splits build and review.'),
+      sec(11, 'Good to know', h('ul', {},
         h('li', {}, 'Closing the board never stops work. Closing VS Code pauses it; tasks that were mid-step continue when VS Code opens again.'),
         h('li', {}, 'Usage meter (top right) shows your 5-hour and weekly Claude limits. At the limit, tasks pause and continue after the reset.'),
         h('li', {}, '.env files are copied into each task\'s copy for tests, never committed. Keys, credentials and node_modules are kept out of git.'),
@@ -522,11 +583,15 @@
 
   /* ---------- messages from the extension ---------- */
   window.addEventListener('message', ({ data: m }) => {
-    if (m.type === 'state') { S = m; if (open && !S.board?.tasks.some(t => t.id === open)) open = undefined; render(); }
+    if (m.type === 'state') {
+      S = m; if (open && !S.board?.tasks.some(t => t.id === open)) open = undefined; render();
+      if ($('#dlg').open && $('#dlg h3')?.textContent === 'Sources') sourcesDialog();
+    }
     else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') renderDrawer(); }
     else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) renderDrawer(); }
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
     else if (m.type === 'focus') openTask(m.id);
+    else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); if (!more) $('#more').hidden = !(more = true); drawFiles(); }
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.

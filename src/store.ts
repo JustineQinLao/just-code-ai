@@ -30,6 +30,9 @@ export interface Task {
   init?: boolean;             // the project's initialization run
   allow?: string[];           // tools pre-approved for this task's session
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
+  files?: string[];           // files or URLs attached to this task as its basis (listed in its brief)
+  sources?: string[];         // ids of the project sources this task rests on; undefined = all of them
+  usage?: { build?: StageUsage; review?: StageUsage };  // tokens spent, per stage
   live?: boolean;             // Claude was mid-turn; a window that closed then continues it when it opens again
   reply?: string;             // Claude's last message when its turn ended (shown when it asks something instead of changing files)
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
@@ -40,7 +43,9 @@ export interface Task {
 }
 
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
-export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
+export interface StageUsage { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.

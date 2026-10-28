@@ -11,6 +11,7 @@ import { claudeBin, claudeEnv, discoverAgents, discoverSkills, plan, sessionLog 
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { syncSkill } from './skill';
+import * as A from './artifacts';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 
@@ -38,7 +39,8 @@ export function activate(context: vscode.ExtensionContext) {
   const runnerSettings = (): RunnerSettings => ({
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
-    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
+    personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
+    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
   });
 
@@ -142,7 +144,8 @@ export function activate(context: vscode.ExtensionContext) {
     if (!panel) return;
     const r = runner();
     if (!r) { void panel.webview.postMessage({ type: 'state', empty: true, roots: [], setup, version: context.extension.packageJSON.version }); return; }
-    const tasks = r.store.data.tasks.map(t => ({ ...t, ...r.live(t.id) }));
+    const tasks = r.store.data.tasks.map(t => ({ ...t, ...r.live(t.id),
+      artifacts: { plan: fs.existsSync(A.planFile(r.root, t.id)), brief: fs.existsSync(A.briefFile(r.root, t.id)), handoff: fs.existsSync(A.handoffFile(r.root, t.id)), review: fs.existsSync(A.reviewFile(r.root, t.id)) } }));
     const s = runnerSettings();
     void panel.webview.postMessage({
       type: 'state',
@@ -155,6 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
       queue: r.queueInfo(),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
+      sources: A.loadSources(r.root),
       settings: { ...s, defaultMode: setting('defaultMode', 'auto'), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       guideSeen: context.globalState.get('guideSeen', false),
       all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({
@@ -244,8 +248,11 @@ export function activate(context: vscode.ExtensionContext) {
       case 'addTask': {
         if (!String(m.title ?? '').trim()) return;
         if (m.mode === 'bypassPermissions' && !await confirmBypass()) return;
+        const all = A.loadSources(r.root).map(x => x.id);
+        const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
         const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'root' ? 'root' : undefined });
+          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'root' ? 'root' : undefined,
+          files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
         if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
         if (m.start) await r.run(task.id);
         return;
@@ -320,6 +327,40 @@ export function activate(context: vscode.ExtensionContext) {
         try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
       }) }); return;
       case 'plan': return runPlan(r, m);
+      case 'pickFiles': {
+        const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: true, defaultUri: vscode.Uri.file(r.root), openLabel: 'Attach' });
+        if (picked?.length) void panel?.webview.postMessage({ type: 'picked', files: picked.map(u => u.fsPath) });
+        return;
+      }
+      case 'addSource': {
+        let add: A.Source[] = [];
+        if (m.kind === 'url') {
+          const url = await vscode.window.showInputBox({ title: 'Add a link as a source', prompt: 'A spec, design, ticket or doc Claude should use as the basis (https://…)', validateInput: v => /^https?:\/\/\S+$/.test(v.trim()) ? undefined : 'Enter a full http(s) link' });
+          if (url) add = [{ id: randomUUID().slice(0, 8), kind: 'url', ref: url.trim() }];
+        } else {
+          const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: true, defaultUri: vscode.Uri.file(r.root), openLabel: 'Add as source' });
+          add = (picked ?? []).map(u => ({ id: randomUUID().slice(0, 8), kind: fs.statSync(u.fsPath).isDirectory() ? 'folder' : 'file', ref: u.fsPath }));
+        }
+        if (!add.length) return;
+        const note = await vscode.window.showInputBox({ title: 'What is it? (optional)', prompt: 'One line Claude reads before deciding to open it, e.g. "Product spec for v2: roles and permissions"' });
+        A.saveSources(r.root, [...A.loadSources(r.root), ...add.map(a => ({ ...a, note: note?.trim() || undefined }))]);
+        return push();
+      }
+      case 'editSource': A.saveSources(r.root, A.loadSources(r.root).map(x => x.id === m.sourceId ? { ...x, note: String(m.note ?? '').trim() || undefined } : x)); return push();
+      case 'removeSource': A.saveSources(r.root, A.loadSources(r.root).filter(x => x.id !== m.sourceId)); return push();
+      case 'openSource': {
+        const src = A.loadSources(r.root).find(x => x.id === m.sourceId);
+        if (src?.kind === 'url') void vscode.env.openExternal(vscode.Uri.parse(src.ref));
+        else if (src?.kind === 'file') void vscode.commands.executeCommand('vscode.open', vscode.Uri.file(src.ref));
+        else if (src) void vscode.commands.executeCommand('revealInExplorer', vscode.Uri.file(src.ref));
+        return;
+      }
+      case 'openArtifact': {
+        const f = { brief: A.briefFile, handoff: A.handoffFile, review: A.reviewFile, plan: A.planFile }[m.which as 'brief' | 'handoff' | 'review' | 'plan']?.(r.root, m.id) ?? (m.which === 'progress' ? A.progressFile(r.root) : undefined);
+        if (f && fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f), { preview: true });
+        else vscode.window.showInformationMessage('Not written yet.');
+        return;
+      }
       case 'initialize': return initialize(r);
     }
   }
