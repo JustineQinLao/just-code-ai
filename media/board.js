@@ -229,7 +229,7 @@ function card(t) {
     }, openReview.has(t.id) ? 'on' : '');
     if (S.git.remote && !t.pr) icon('⇪', 'Push the branch and open a GitHub PR (gh)', () => send({ type: 'remotePr', id: t.id }));
   }
-  if (t.sessionId && S.claudeExt && t.status !== 'done') icon('✳', 'Open in the Claude Code extension', () => send({ type: 'claudeCode', id: t.id }));
+  if (t.sessionId && t.status !== 'done') icon('✳', 'Open in Claude Code', () => send({ type: 'claudeCode', id: t.id }));
   if (t.status === 'todo') icon('✎', 'Edit', () => taskDialog(t));
   if (t.status === 'done' && !t.archived) icon('▣', 'Archive', () => send({ type: 'archive', id: t.id }));
   if (t.branch && t.status !== 'done') icon('↺', 'Discard this branch and its work', () => send({ type: 'discard', id: t.id }), 'danger');
@@ -320,13 +320,12 @@ function runTask(t) {
   }));
 }
 
-// Live session: its terminal. Not running (ended, or the window reloaded): its saved log.
+// Opens on the terminal (☰ opens the log). An empty terminal of a session that isn't running falls back to the log.
 function openTerm(id, v) {
   termId = id;
   if (!termdlg.open) termdlg.showModal();
   renderTermHeader();
-  const t = S?.board.tasks.find(x => x.id === id);
-  setView(v ?? (t?.live || !t?.sessionId ? 'term' : 'log'));
+  setView(v ?? 'term');
 }
 
 let headerKey = '';
@@ -340,6 +339,7 @@ function renderTermHeader() {
   $('tdot').className = `dot ${t.run ?? ''}`;
   $('tactions').innerHTML = '';
   const b = (label, title, fn, cls = '') => { const e = h(`<button class="${cls}" title="${esc(title)}">${label}</button>`); e.onclick = fn; $('tactions').append(e); };
+  if (t.sessionId) b('✳ Open in Claude Code', 'Continue this session in Claude Code (the run here stops first)', () => { termdlg.close(); termId = null; clearInterval(logTimer); send({ type: 'claudeCode', id: t.id }); if (boardDirty) { boardDirty = false; render(); } });
   if (t.live) b('■ Stop', 'Stop the session', () => send({ type: 'stop', id: t.id }), 'danger');
   else b(t.sessionId ? '↻ Resume' : '▶ Run', t.sessionId ? 'Resume the Claude session' : 'Start the task', () => runTask(t), 'primary');
 }
@@ -504,6 +504,8 @@ window.addEventListener('message', ({ data: m }) => {
   else if (m.type === 'replay') {
     const e = terms.get(m.id);
     if (e) { e.el.style.visibility = 'hidden'; e.term.reset(); e.term.write(m.data, () => { e.el.style.visibility = ''; }); }
+    const t = S?.board.tasks.find(x => x.id === m.id);
+    if (!m.data && m.id === termId && view === 'term' && t && !t.live && t.sessionId) setView('log');
   }
   else if (m.type === 'log') { if (m.id === termId && view === 'log') renderLog(m.steps); }
   else if (m.type === "shots") { shots[m.id + (m.head ?? "")] = m.images; if (!termdlg.open) renderBoard(); }
