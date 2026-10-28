@@ -1,9 +1,12 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the extension for Linux and macOS and attach both .vsix files to a GitHub release.
+# Push a tag like v1.0.0: tests run, then the extension is built and attached to a GitHub release.
+# There are no native modules, so one VSIX works on macOS, Linux and Windows. It is also attached under the old
+# per-platform names, so existing install commands keep working.
 on:
   push:
     tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -11,28 +14,27 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest   # node-pty compiles from source here
-            asset: just-code-linux-x64.vsix
-          - os: macos-latest    # ships node-pty prebuilds for both Apple silicon and Intel
-            asset: just-code-mac.vsix
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
+      - run: npm ci --omit=optional
+      - run: git config --global user.email ci@example.com && git config --global user.name CI
+      - run: npm test
       - run: npm run compile
-      - run: npx --yes @vscode/vsce package --allow-missing-repository --skip-license -o ${{ matrix.asset }}
+      - run: npx --yes @vscode/vsce package --allow-missing-repository --skip-license -o just-code.vsix
+      - run: cp just-code.vsix just-code-linux-x64.vsix && cp just-code.vsix just-code-mac.vsix
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: ${{ matrix.asset }}
+          files: |
+            just-code.vsix
+            just-code-linux-x64.vsix
+            just-code-mac.vsix
       - uses: actions/upload-artifact@v4
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          name: just-code.vsix
+          path: just-code.vsix

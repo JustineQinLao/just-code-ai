@@ -4,442 +4,385 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { Store, Task } from './store';
-import { Ptys } from './pty';
 import * as g from './git';
-import { sessionArgs, sessionExists, sessionSize, reviewPrompt, runReview, discoverAgents, adb } from './claude';
+import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
+import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, taskPrompt, adb } from './claude';
 import { Limits, isLimitError } from './limits';
 
-// What counts as having tested, and diffs that change what a user sees.
-const TEST_CMD = /\b(test|pytest|jest|vitest|spec|build|gradlew|playwright|screenshot)\b/i;
+// One Runner per project: starts each task's Claude session in the task's own copy of the project (a git worktree on
+// its own branch), moves cards as the work progresses (To do → Doing → Review → Done), runs the AI reviewer, merges,
+// and keeps Run all's queue. Everything it starts it also stops: sessions close when idle, reviews time out, and every
+// task copy is removed when its task is merged, discarded or deleted (orphans are pruned at startup).
+
+const TEST_CMD = /\b(test|pytest|jest|vitest|spec|build|tsc|check|gradlew|playwright|screenshot|lint)\b/i;
 const UI_FILE = /^\+\+\+ b\/.*\.(html?|css|scss|tsx|jsx|vue|svelte|xml|kt|java|swift|dart|component\.ts)$/m;
 
-export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; commands?: string[]; freshAfterKB?: number }
-
-// What a task's live session is doing, from its hooks: running, waiting for approval, or idle (turn finished).
-export type RunState = 'running' | 'waiting' | 'idle';
-
-// What a waiting session asks for, shown on its card: the tool and its main argument.
-export interface Ask { message: string; tool?: string; detail?: string; always?: string; noAlways?: boolean; choices?: string[] }
-
-// Claude Code's permission menu: "1. Yes", "2. Yes, and always allow …", …, last "No". The prompt is on screen when
-// it asks "Do you want to proceed?" (or similar) and lists numbered choices.
-const isMenu = (screen: string) => /Esc\s*to\s*cancel/i.test(screen) && /^\s*[❯›>]?\s*1\.\s*\S/m.test(screen);
-// The menu's "always" choice: "Yes, and always allow …", "… don't ask again …", "allow all edits", "switch to accept edits".
-// Its number varies (2, 3, …), and many prompts have none at all: a compound `cd … && …` command offers only "1. Yes  2. No".
-// Pressing a fixed number there would press "No", which rejects the tool call and interrupts the turn.
-const ALWAYS = /always allow|don'?t ask again|do not ask again|allow all (edits|commands)|accept edits|never ask/i;
-export function alwaysOption(screen: string): { n: number; text: string } | undefined {
-  for (let n = 2; n <= 6; n++) {
-    const text = optionText(screen, n);
-    if (text && ALWAYS.test(text) && !/^\s*no\b/i.test(text)) return { n, text };
-  }
+export interface RunnerSettings {
+  maxParallel: number;
+  taskModel: string;
+  allowedTools: string[];
+  worktreeCopy: string[];
+  idleMinutes: number;
+  review: { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; commands: string[]; timeoutMinutes: number };
 }
 
-const optionText = (screen: string, n: number) => {
-  const lines = screen.split('\n');
-  const i = lines.findIndex(l => new RegExp(`^\\s*[❯›>]?\\s*${n}\\.\\s*\\S`).test(l));
-  if (i < 0) return;
-  const out = [lines[i].replace(new RegExp(`^\\s*[❯›>]?\\s*${n}\\.\\s*`), '')];
-  for (let j = i + 1; j < lines.length && !/^\s*[❯›>]?\s*\d\./.test(lines[j]) && !/Esc to cancel/i.test(lines[j]) && out.length < 3; j++) out.push(lines[j].trim());
-  return out.join(' ').replace(/\s+/g, ' ').trim();
-};
+export interface RunnerDeps {
+  bin(): string | undefined;
+  env(): Record<string, string>;
+  settings(): RunnerSettings;
+  limits: Limits;
+  notify(level: 'info' | 'warn' | 'error', text: string, taskId?: string): void;
+  // A modal question; resolves to the chosen button, or undefined when dismissed.
+  choose(text: string, ...buttons: string[]): Promise<string | undefined>;
+  cli: string; // out/cli.js, for the reviewer's screenshot command
+}
 
-const toolDetail = (input: any) => {
-  if (!input || typeof input !== 'object') return '';
-  const v = input.command ?? input.file_path ?? input.notebook_path ?? input.url ?? input.pattern ?? input.description ?? Object.values(input).find(x => typeof x === 'string');
-  return typeof v === 'string' ? v.slice(0, 400) : '';
-};
+// What a card shows about its live work, beyond what board.json keeps.
+export interface Live { run?: RunState; asks: Ask[]; agents: AgentNode[]; context: number; output: number; modeNote?: string; mode?: string; reviewing?: number; busy: boolean; queued: boolean }
 
-// Runs tasks of one project: worktree + branch per task, a Claude session per task in a pty,
-// auto-commit when a turn ends, and the review → merge flow back into the task's base branch.
 export class Runner {
-  state = new Map<string, RunState>();
-  private unsubExit?: () => void;
-  private launching = new Set<string>();   // runs between claim and process start (an old process's exit must not touch them)
-  private reviewing = new Set<string>();   // reviews in flight (in memory: a persisted "running" would survive a crash)
-  limits?: Limits;                 // shared usage-limit tracker (set by the extension)
-  allowedTools: () => string[] = () => [];   // justCode.allowedTools: rules approved without asking, e.g. "Bash(docker compose:*)"
-  copyFiles: () => string[] = () => [];   // env files copied into each new worktree
-  private emptyAt = new Set<string>();    // tasks whose branch had nothing to review yet
-  asks = new Map<string, Ask>();
-  private lastTool = new Map<string, { tool: string; detail: string }>();
-  private queue: string[] = [];
-  private watched = new Map<string, number>(); // taskId → bytes of its status file already read
+  private sessions = new Map<string, Session>();
+  private starting = new Set<string>();
+  private reviews = new Map<string, { ac: AbortController; started: number }>();
+  private busy = new Set<string>();
+  private emptyAt = new Set<string>(); // tasks whose branch had nothing to review at their last turn end
   private ev = new EventEmitter();
-  private busy = new Set<string>(); // tasks with a git operation in flight
   private lock: Promise<unknown> = Promise.resolve();
+  private sweepTimer?: NodeJS.Timeout;
+  private sweeping = false;
+  private unsub: { dispose(): void };
+  private disposed = false;
 
-  // One repo-changing git operation at a time per project (parallel runs would race on init, worktrees, refs).
+  constructor(readonly store: Store, private d: RunnerDeps) {
+    // Finished or archived work has no running session, however it got there (Done, archive, sync, merge).
+    this.unsub = store.onChange(() => {
+      for (const [id] of this.sessions) {
+        const t = this.store.task(id);
+        if (!t || t.status === 'done' || t.archived) this.stop(id);
+      }
+      this.sweepSoon();
+    });
+    // A review that was running when the window closed never finished.
+    for (const t of store.data.tasks) if (t.review?.state === 'running') store.updateTask(t.id, { review: undefined });
+    setTimeout(() => void this.startup(), 1500).unref?.();
+  }
+
+  get root() { return this.store.root; }
+  onChange(fn: () => void) { this.ev.on('change', fn); }
+  private changed() { this.ev.emit('change'); }
+
+  // One repo-changing git operation at a time per project (parallel runs would race on worktrees and refs).
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.lock.then(fn, fn);
     this.lock = next.catch(() => undefined);
     return next;
   }
 
-  constructor(readonly store: Store, private ptys: Ptys, private runsDir: string, private bin: () => string,
-    private notify: (level: 'info' | 'warn' | 'error', text: string, taskId?: string) => void,
-    private maxParallel: () => number, private model: () => string,
-    private reviewOpts: () => ReviewOpts = () => ({ auto: false, model: '', maxAttempts: 3, autoMerge: false })) {
-    fs.mkdirSync(runsDir, { recursive: true });
-    this.unsubExit = ptys.onExit((id) => { if (this.store.task(id)) void this.exited(id); });
-    // Finished work has no running session, however it got there (Done, archive, drag, sync, merge).
-    store.onChange(() => {
-      for (const id of ptys.ids()) {
-        const t = this.store.task(id);
-        if (t && (t.status === 'done' || t.archived)) this.stop(id);
-      }
-      this.sweepSoon();
-      if (this.queue.length) this.pump();
-    });
-    for (const t of store.data.tasks) if (t.review?.state === 'running') store.updateTask(t.id, { review: undefined });
-    this.sweepSoon(3000);
+  live(id: string): Live {
+    const s = this.sessions.get(id), r = this.reviews.get(id);
+    return {
+      run: this.starting.has(id) ? 'starting' : s?.open ? s.state : undefined,
+      asks: s ? [...s.asks.values()] : [], agents: s ? [...s.agents.values()] : [],
+      context: s?.context ?? 0, output: s?.output ?? 0, modeNote: s?.modeNote, mode: s?.mode,
+      reviewing: r?.started, busy: this.busy.has(id), queued: this.store.queue.includes(id),
+    };
+  }
+  steps(id: string) { return this.sessions.get(id)?.steps; }
+  isOpen(id: string) { return !!this.sessions.get(id)?.open; }
+  counts() {
+    let running = 0, waiting = 0;
+    for (const s of this.sessions.values()) if (s.open) s.state === 'waiting' ? waiting++ : s.state === 'running' && running++;
+    return { running, waiting };
   }
 
-  onChange(fn: () => void) { this.ev.on('change', fn); }
-  private changed() { this.ev.emit('change'); }
+  /* ---------- startup ---------- */
 
-  get root() { return this.store.root; }
-  queued() { return [...this.queue]; }
-  private statusFile(id: string) { return path.join(this.runsDir, `${id}.status`); }
+  private async startup() {
+    // Task copies whose task no longer exists.
+    const keep = new Set(this.store.data.tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)));
+    if (await g.isRepo(this.root)) {
+      const { removed, kept } = await this.serial(() => g.pruneOrphans(this.root, keep)).catch(() => ({ removed: [], kept: [] as string[] }));
+      if (removed.length) this.d.notify('info', `Cleaned up ${removed.length} leftover task folder(s) in .justcode/worktrees.`);
+      if (kept.length) this.d.notify('warn', `.justcode/worktrees has ${kept.length} folder(s) with uncommitted work that belong to no task: ${kept.join(', ')}. Check them, then delete them.`);
+    }
+    // Tasks that were mid-turn when the window closed continue where they stopped.
+    for (const t of this.store.data.tasks) {
+      if (!t.live || t.archived || t.status === 'done' || t.remote) continue;
+      this.d.notify('info', `Continuing "${t.title}" where it stopped.`, t.id);
+      void this.say(t.id, 'The editor restarted while you were working. Continue the task exactly where you stopped.').catch(e => this.fail(t.id, e));
+    }
+    this.pump();
+    this.sweepSoon(500);
+  }
 
   /* ---------- runs ---------- */
 
-  async run(id: string, prompt?: string, size?: { cols: number; rows: number }) {
+  async run(id: string, prompt?: string) {
     const t = this.store.task(id);
-    if (!t || this.ptys.has(id) || this.state.has(id)) return;
-    this.state.set(id, 'running'); // claimed before the awaits, so Run all never double-starts a task
-    this.launching.add(id);
-    try { await this.launch(t, prompt, size); } catch (e) { this.state.delete(id); this.changed(); throw e; } finally { this.launching.delete(id); }
+    if (!t || this.sessions.get(id)?.open || this.starting.has(id) || t.remote) return;
+    if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. The task starts by itself after the reset.');
+    const bin = this.d.bin();
+    if (!bin) throw new Error('Claude Code is not installed or not found. Open JustCode: Check Setup.');
+    this.starting.add(id); // claimed before the awaits, so Run all never double-starts a task
+    this.changed();
+    try {
+      if (t.where === 'root') return await this.start(t, bin, this.root, {}, prompt);
+      const prep = await this.prepare(t);
+      if (!prep) return; // the user cancelled
+      const note = prep.refreshed && t.sessionId && !prompt
+        ? `JustCode brought the latest ${prep.base} into this task's folder. Re-check the files you rely on and continue the task.` : prompt;
+      await this.start(t, bin, prep.worktree, { base: prep.base, branch: prep.branch, worktree: prep.worktree }, note);
+    } catch (e) {
+      this.fail(id, e);
+      throw e;
+    } finally {
+      this.starting.delete(id);
+      this.changed();
+    }
   }
 
-  private async launch(t: Task, prompt?: string, size?: { cols: number; rows: number }) {
-    const id = t.id;
-    if (t.where === 'root') return this.spawn(t, this.root, {}, prompt, size);
-    const { base, branch, worktree, refreshed } = await this.serial(async () => {
-      await g.ensureRepo(this.root);
+  // The task's own copy of the project. Asks before creating a git repo or committing the user's uncommitted files.
+  private prepare(t: Task) {
+    return this.serial(async () => {
+      if (!await g.isRepo(this.root)) {
+        const c = await this.d.choose(`${path.basename(this.root)} is not a git repository yet. JustCode gives every task its own branch, so it needs one. ` +
+          'Create a local repository (no remote) and commit the current files? Secrets like .env, keys and node_modules are left out.', 'Create repository');
+        if (!c) return;
+        await g.ensureRepo(this.root);
+      } else if (!await g.hasCommits(this.root)) await g.ensureRepo(this.root);
       const base = t.base ?? await g.currentBranch(this.root);
       if (base === 'HEAD') throw new Error('Your project folder is on a detached HEAD. Check out a branch first (git switch main).');
-      // The worktree is cut from base, so base must hold the project's current files, committed or not.
-      if (await g.currentBranch(this.root) === base) {
-        const snap = await g.snapshot(this.root);
-        if (snap.files.length) this.notify('info', `Committed ${snap.files.length} uncommitted file(s) on ${base} so tasks see the current project.`);
-        if (snap.skipped.length) this.notify('warn', `Left out of git (over 10 MB): ${snap.skipped.join(', ')}`);
+      if (!t.worktree && await g.currentBranch(this.root) === base) {
+        const dirty = await g.dirtyFiles(this.root);
+        if (dirty.length) {
+          const c = await this.d.choose(`${dirty.length} file(s) in ${path.basename(this.root)} are not committed (${dirty.slice(0, 4).join(', ')}${dirty.length > 4 ? ', …' : ''}). ` +
+            `The task works on a copy of what is committed on ${base}. Commit them first so the task sees them?`, 'Commit and run', 'Run without them');
+          if (!c) return;
+          if (c === 'Commit and run') {
+            const snap = await g.snapshot(this.root);
+            if (snap.skipped.length) this.d.notify('warn', `Left out of git (over 10 MB): ${snap.skipped.join(', ')}`);
+          }
+        }
       }
       const branch = t.branch ?? g.taskBranch(t.title, t.id);
       const worktree = t.worktree ?? g.worktreeDir(this.root, t.id);
+      const copy = this.d.settings().worktreeCopy;
+      await g.exclude(this.root, false, copy);
       await g.addWorktree(this.root, worktree, branch, base);
-      g.copyEnvFiles(this.root, worktree, this.copyFiles());
+      g.copyEnvFiles(this.root, worktree, copy);
       const refreshed = await g.catchUp(worktree, base).catch(() => false);
       return { base, branch, worktree, refreshed };
     });
-    // A resumed session was looking at the old files; tell it they changed.
-    const note = refreshed && t.sessionId && !prompt
-      ? `JustCode updated this worktree with the latest ${base}: the project's files are here now. Re-check them and continue the task.` : prompt;
-    await this.spawn(t, worktree, { base, branch, worktree }, note, size);
   }
 
-  // Starts (or resumes) the task's session in `cwd`: its worktree, or the project root for root tasks.
-  private async spawn(t: Task, cwd: string, patch: Partial<Task>, prompt?: string, size?: { cols: number; rows: number }) {
+  private async start(t: Task, bin: string, cwd: string, patch: Partial<Task>, prompt?: string) {
     const id = t.id;
     const sessionId = t.sessionId ?? randomUUID();
     const resume = !!t.sessionId && sessionExists(cwd, sessionId);
-    const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status })!;
-    const statusFile = this.statusFile(id);
-    fs.writeFileSync(statusFile, '');
-    this.watch(id);
-    this.ptys.start(id, cwd, this.bin(), sessionArgs({ task, root: this.root, worktree: cwd, statusFile, resume, prompt, model: this.model(), allowed: this.allowedTools() }), size?.cols, size?.rows);
-    this.changed();
+    // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
+    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t), prompt].filter(Boolean).join('\n\n');
+    const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true })!;
+    const set = this.d.settings();
+    const carry = carryOver(this.root, cwd);
+    const s = new Session({
+      bin, cwd, sessionId, resume, mode: task.mode, model: set.taskModel || undefined, agent: task.agent,
+      agents: carry.agents, addDirs: [...carry.addDirs, ...(task.images?.length ? [path.dirname(task.images[0])] : [])], settingsFile: carry.settingsFile,
+      allowed: [...new Set([...set.allowedTools, ...this.store.rules, ...(task.allow ?? [])])],
+      rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
+      env: this.d.env(), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
+    });
+    this.sessions.set(id, s);
+    s.on('change', () => this.changed());
+    s.on('ask', a => this.d.notify('warn', `"${task.title}" needs you: ${a.kind === 'question' ? 'Claude has a question' : `${a.tool} ${a.detail}`.slice(0, 120)}`, id));
+    s.onRules(rules => { this.store.addRules(rules); this.d.notify('info', `Approved for every task in ${path.basename(this.root)}: ${rules.join(', ')}`); });
+    s.on('rate', info => this.d.limits.update(info));
+    s.on('running', () => {
+      const cur = this.store.task(id);
+      if (cur?.status === 'review' && cur.where !== 'root' && !cur.init) this.store.updateTask(id, { status: 'doing', live: true });
+      else if (cur && !cur.live) this.store.updateTask(id, { live: true });
+    });
+    s.on('turn', turn => void this.turnEnded(id, turn).catch(e => this.d.notify('error', e.message, id)));
+    s.on('exit', error => {
+      if (this.sessions.get(id) === s) this.sessions.delete(id);
+      if (error && this.store.task(id)) this.fail(id, new Error(error));
+      this.changed();
+      this.pump();
+    });
+    try { await s.start(first); } catch (e) { this.sessions.delete(id); s.kill(); throw e; }
   }
 
-  // Sends a prompt to the task's session: typed into the live one, or a resumed one started with it.
-  async say(id: string, prompt: string) {
-    // A permission prompt takes the next keys as its answer: a message typed now would end up approving the tool.
-    if (this.state.get(id) === 'waiting') { this.notify('warn', 'Claude is waiting for your approval. Answer that first (Allow / Deny on the card).', id); return; }
-    prompt = prompt.replace(/\x1b/g, ''); // an escape inside the text could end the paste early
-    if (!this.ptys.has(id)) return this.run(id, prompt);
-    // The board's own messages (review fixes, "continue after the limit") must never land on a permission prompt or other
-    // menu: the paste wrapper starts with an Esc byte, which a menu reads as "No", cancelling it and every tool call queued behind it.
-    if (isMenu(await this.ptys.screen(id, 14))) {
-      this.notify('warn', 'Claude is showing a permission prompt. Answer it first; the message was not sent.', id);
-      return;
-    }
-    // Bracketed paste keeps a multi-line prompt as one message, but only when the program asked for it: otherwise its
-    // opening Esc is read as a keypress. Without it, send one plain line.
-    const text = this.ptys.bracketedPaste(id) ? `\x1b[200~${prompt}\x1b[201~` : prompt.replace(/\s*\n\s*/g, ' ');
-    this.ptys.write(id, text, 'board message');
-    setTimeout(() => this.ptys.write(id, '\r', 'board message'), 150); // separate Enter, so the TUI doesn't take it as part of a paste
+  private fail(id: string, e: unknown) {
+    const msg = String((e as any)?.message ?? e).slice(0, 600);
+    if (!this.store.task(id)) return;
+    if (isLimitError(msg)) { this.d.limits.setReached('usage'); this.store.updateTask(id, { limited: true }); return; }
+    this.store.updateTask(id, { error: msg, live: undefined });
   }
 
+  // A message for the task's Claude: into the open session, or a resumed one started with it.
+  async say(id: string, text: string) {
+    const s = this.sessions.get(id);
+    if (s?.open && s.send(text)) { this.store.updateTask(id, { live: true, error: undefined }); return; }
+    await this.run(id, text);
+  }
+
+  answer(id: string, a: Answer) { return this.sessions.get(id)?.answer(a) ?? false; }
+  async setMode(id: string, mode: string) {
+    this.store.updateTask(id, { mode: mode as Task['mode'] });
+    await this.sessions.get(id)?.setMode(mode);
+  }
+  async interrupt(id: string) { await this.sessions.get(id)?.interrupt(); }
+
+  // Ends the session (and Run all's claim on the task). Work stays in the task's folder; Resume continues it.
   stop(id: string) {
-    this.queue = this.queue.filter(q => q !== id);
-    this.ptys.kill(id);
-  }
-
-  // Queues every todo task in `ids` (board order) and keeps up to maxParallel of them going.
-  runAll(ids: string[]) {
-    for (const id of ids) if (!this.queue.includes(id) && this.store.task(id)?.status === 'todo') this.queue.push(id);
-    this.pump();
+    this.store.setQueue(this.store.queue.filter(q => q !== id));
+    const s = this.sessions.get(id);
+    this.sessions.delete(id);
+    s?.kill();
+    if (this.store.task(id)?.live) this.store.updateTask(id, { live: undefined });
     this.changed();
   }
 
-  cancelQueue() { this.queue = []; this.changed(); }
+  /* ---------- Remote Control hand-off ---------- */
 
-  // Tasks still on their way to Done: building, in review, being fixed, or waiting for you to merge. Each holds its slot
-  // until it is merged, so with maxParallel 1 the queue runs strictly one at a time and every task builds on the previous
-  // one's merged work. (A project-root task is finished when its turn ends: it has no branch to merge.)
-  private inFlight() {
-    return this.store.data.tasks.filter(t => {
-      if (t.archived || t.status === 'done' || t.init) return false;
-      const st = this.state.get(t.id);
-      if (st === 'running' || st === 'waiting') return true;
-      return t.where !== 'root' && !!(t.branch && t.worktree) && (t.status === 'doing' || t.status === 'review');
-    });
-  }
-
-  // What the queue is waiting for, for the toolbar.
-  queueInfo() {
-    const b = this.inFlight()[0], r = b?.review;
-    const why = !b ? '' : this.state.get(b.id) === 'waiting' ? 'approve a permission prompt'
-      : this.state.get(b.id) === 'running' ? 'finish'
-      : b.limited ? 'continue after the usage limit'
-      : r?.state === 'pass' ? 'be merged (✓ Merge)'
-      : r?.state === 'fail' ? (r.attempts >= this.reviewOpts().maxAttempts ? 'be fixed (the reviewer still finds issues)' : 'be fixed by Claude')
-      : r?.state === 'error' ? 'be reviewed (Retry review)'
-      : b.conflicts?.length ? 'have its conflicts resolved' : 'be reviewed';
-    return { queued: [...this.queue], blocker: b ? { id: b.id, title: b.title, why } : undefined };
-  }
-
-  private pump() {
-    if (this.limits?.held()) return; // out of quota: queued tasks wait for the reset (afterReset starts them)
-    let slots = this.maxParallel() - this.inFlight().length;
-    while (slots > 0 && this.queue.length) {
-      const id = this.queue.shift()!;
-      if (this.store.task(id)?.status !== 'todo') continue; // started by hand, moved or deleted meanwhile
-      slots--;
-      this.run(id).catch(e => { this.notify('error', `${this.store.task(id)?.title}: ${e.message}`, id); this.pump(); });
-    }
-  }
-
-  // Polls the status file the session's hooks append to (fs.watch misses appends on some filesystems).
-  private watch(id: string) {
-    this.watched.set(id, 0);
-    const file = this.statusFile(id);
-    fs.unwatchFile(file);
-    fs.watchFile(file, { interval: 400 }, () => {
-      let text = '';
-      try { text = fs.readFileSync(file, 'utf8'); } catch { return; }
-      const seen = this.watched.get(id) ?? 0;
-      const end = text.lastIndexOf('\n') + 1; // only whole lines; a hook may be mid-write
-      if (end <= seen) return;
-      this.watched.set(id, end);
-      for (const line of text.slice(seen, end).split('\n').filter(Boolean)) this.event(id, line);
-    });
-    // The status line command saves Claude's rate_limits here (percent used and reset time of the 5-hour / weekly windows).
-    const rate = this.statusFile(id).replace(/\.status$/, '.rate');
-    fs.unwatchFile(rate);
-    fs.watchFile(rate, { interval: 3000 }, () => {
-      try { this.limits?.setWindows(JSON.parse(fs.readFileSync(rate, 'utf8')).rate_limits); } catch { /* mid-write or no rate_limits */ }
-    });
-  }
-
-  private event(id: string, line: string) {
-    const [kind, raw] = line.split('\t');
-    let json: any = {};
-    try { json = raw ? JSON.parse(raw) : {}; } catch { /* partial or odd input: state still applies */ }
-    if (kind === 'tool') { this.lastTool.set(id, { tool: json.tool_name ?? '', detail: toolDetail(json.tool_input) }); return; }
-    if (kind === 'stop') { this.asks.delete(id); void this.turnEnded(id); return; }
-    if (kind === 'run') {
-      this.asks.delete(id);
-      this.state.set(id, 'running');
-      // Claude is working on it again (you typed, or it is fixing review issues): back to Doing.
-      const t = this.store.task(id);
-      if (t?.status === 'review' && !t.init) this.store.updateTask(id, { status: 'doing', review: t.review?.state === 'fail' ? t.review : undefined });
-      this.changed();
-      return;
-    }
-    if (kind === 'fail') {
-      // A turn ended on an API error. Rate limit → wait for the reset, then continue; anything else → say so.
-      const t = this.store.task(id);
-      this.asks.delete(id);
-      this.state.set(id, 'idle');
-      if (/rate_limit|billing/i.test(raw ?? '')) {
-        this.limits?.setReached('usage');
-        if (t && t.status !== 'done') this.store.updateTask(id, { limited: true });
-        this.notify('warn', `Claude's usage limit stopped "${t?.title}". It continues by itself after the reset.`, id);
-      } else {
-        this.notify('error', `Claude stopped on an API error in "${t?.title}": ${String(json.error ?? json.error_type ?? raw ?? 'unknown').slice(0, 200)}. Resume it when ready.`, id);
-      }
-      this.changed();
-      return;
-    }
-    if (kind === 'wait') {
-      const last = this.lastTool.get(id);
-      this.asks.set(id, { message: json.message ?? 'Claude needs your approval', tool: last?.tool, detail: last?.detail });
-      this.state.set(id, 'waiting');
-      this.notify('warn', `"${this.store.task(id)?.title}" needs your approval${last?.tool ? `: ${last.tool}` : ''}`, id);
-      this.changed();
-      void this.labelAsk(id);
-    }
-  }
-
-  // What "Always" will do, read from the menu's second choice, so the button says it.
-  private async labelAsk(id: string) {
-    await new Promise(r => setTimeout(r, 500)); // the menu is drawn a moment after the hook fires
-    const a = this.asks.get(id);
-    if (!a || this.state.get(id) !== 'waiting') return;
-    const screen = await this.ptys.screen(id);
-    const opt = alwaysOption(screen);
-    a.always = opt?.text.slice(0, 200);
-    a.noAlways = !opt;
-    // The menu exactly as Claude shows it, so the card never offers a choice that is not there.
-    a.choices = [];
-    for (let n = 1; n <= 6; n++) { const t = optionText(screen, n); if (!t) break; a.choices.push(t.slice(0, 60)); }
-    this.changed();
-  }
-
-  // Answers the permission prompt with one of the menu's own choices, by its number: only number keys and Enter are
-  // sent, never an arrow key (split in two, an arrow key reads as Esc and interrupts the session). `text` is the label the
-  // card showed; if the menu no longer has that choice at that number, nothing is sent.
-  async answerChoice(id: string, n: number, text?: string) {
-    if (this.state.get(id) !== 'waiting') return;
-    const screen = await this.ptys.screen(id);
-    if (!isMenu(screen)) return this.staleAsk(id);
-    const now = optionText(screen, n);
-    if (!now || (text && !now.toLowerCase().startsWith(text.toLowerCase().slice(0, 18)))) {
-      this.notify('warn', "Claude's menu changed, so nothing was sent. Pick again.", id);
-      void this.labelAsk(id);
-      return;
-    }
-    await this.sendAnswer(id, String(n), `card: choice ${n}`);
-  }
-
-  // Legacy shorthand (Allow = the first choice, Always = the menu's always choice or, if none, the first, Deny = Esc).
-  async answer(id: string, choice: 'allow' | 'always' | 'deny') {
-    if (this.state.get(id) !== 'waiting') return;
-    const screen = await this.ptys.screen(id);
-    if (!isMenu(screen)) return this.staleAsk(id);
-    if (choice === 'deny') return this.sendAnswer(id, 'esc', 'card: Deny');
-    const opt = choice === 'always' ? alwaysOption(screen) : undefined;
-    if (choice === 'always' && !opt) this.notify('info', 'Claude offers no "always" choice for this prompt, so it was allowed this once.', id);
-    await this.sendAnswer(id, String(opt?.n ?? 1), `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
-  }
-
-  // The hook said "waiting" but Claude isn't asking (answered in the terminal, or already moved on): don't type into the input.
-  private staleAsk(id: string) {
-    this.asks.delete(id);
-    this.state.set(id, 'running');
-    this.notify('info', 'Claude is not asking for permission any more.', id);
-    this.changed();
-  }
-
-  private async sendAnswer(id: string, key: string, src: string) {
-    const ask = this.asks.get(id);
-    if (key === 'esc') this.ptys.write(id, '\x1b', src);
-    else {
-      this.ptys.write(id, key, src);
-      await new Promise(r => setTimeout(r, 200));
-      this.ptys.write(id, '\r', src);
-    }
-    this.asks.delete(id);
-    this.state.set(id, 'running');
-    this.changed();
-    // Still showing the same prompt after a moment: it did not take the answer. Say so instead of looking stuck.
-    setTimeout(async () => {
-      if (!this.ptys.has(id) || this.state.get(id) !== 'running') return;
-      if (key !== 'esc' && isMenu(await this.ptys.screen(id, 14)) && !this.asks.has(id)) {
-        if (ask) this.asks.set(id, ask);
-        this.state.set(id, 'waiting');
-        this.notify('warn', 'Claude did not take that answer. Answer it in the terminal (⌨).', id);
-        this.changed();
-      }
-    }, 2500);
-  }
-
-  private unwatch(id: string) {
-    this.asks.delete(id);
-    this.lastTool.delete(id);
-    fs.unwatchFile(this.statusFile(id));
-    const rate = this.statusFile(id).replace(/\.status$/, '.rate');
-    fs.unwatchFile(rate);
-    fs.rmSync(rate, { force: true });
-    this.watched.delete(id);
-    fs.rmSync(this.statusFile(id), { force: true });
-  }
-
-  // Turn finished: commit what changed so the branch always holds the work, then move on in the queue.
-  private async turnEnded(id: string) {
-    this.state.set(id, 'idle');
-    this.ptys.save(id);
+  // The task leaves the board for a terminal running `claude --remote-control --resume <session>`, which shows it in
+  // the Claude app and on claude.ai. Its session here is closed first: two processes must never share one session.
+  async handoff(id: string) {
     const t = this.store.task(id);
-    this.emptyAt.delete(id);
-    // A turn that ends while a limit is in force was cut short: keep the task where it is and continue after the reset.
-    if (t && this.limits?.held() && t.status !== 'done' && !t.init) {
-      this.store.updateTask(id, { limited: true });
-      this.changed();
+    if (!t?.sessionId) throw new Error('Run the task first: there is no session to continue yet.');
+    const s = this.sessions.get(id);
+    if (s?.open) {
+      await new Promise<void>(res => { s.on('exit', () => res()); s.close(); setTimeout(res, 5000).unref?.(); });
+      this.sessions.delete(id);
+    }
+    this.store.updateTask(id, { remote: true, live: undefined, status: t.status === 'todo' ? 'doing' : t.status });
+    this.changed();
+    return { cwd: t.worktree && fs.existsSync(t.worktree) ? t.worktree : this.root, sessionId: t.sessionId, mode: t.mode };
+  }
+
+  // The Remote Control terminal closed: back on the board, its work committed and reviewed like any finished turn.
+  async remoteEnded(id: string) {
+    const t = this.store.task(id);
+    if (!t?.remote) return;
+    this.store.updateTask(id, { remote: undefined });
+    await this.turnEnded(id, { ok: true, text: '' });
+  }
+
+  /* ---------- turn ends ---------- */
+
+  private async turnEnded(id: string, turn: TurnEnd) {
+    const t = this.store.task(id);
+    if (!t) return;
+    const cost = (t.costUsd ?? 0) + (turn.costUsd ?? 0);
+    if (turn.limit || (this.d.limits.held() && !turn.ok)) {
+      this.d.limits.setReached('usage');
+      this.store.updateTask(id, { limited: true, costUsd: cost });
+      this.d.notify('warn', `Claude's usage limit stopped "${t.title}". It continues by itself after the reset.`, id);
       return;
     }
-    if (t?.worktree && !t.conflicts?.length) {
-      try { await g.commitAll(t.worktree, t.title); } catch (e: any) { this.notify('error', `Commit failed: ${e.message}`, id); }
+    if (!turn.ok) {
+      this.store.updateTask(id, { error: turn.error ?? 'Claude stopped on an error', live: undefined, costUsd: cost });
+      this.d.notify('error', `"${t.title}" stopped: ${String(turn.error).slice(0, 200)}`, id);
+      return this.pump();
     }
-    // The init run is one-shot: done when its turn ends. Other tasks wait in Review.
-    if (t?.init && t.status !== 'done') this.store.updateTask(id, { status: 'done' });
-    else if (t?.status === 'doing') this.store.updateTask(id, { status: 'review' });
+    let committed = false;
+    if (t.worktree && fs.existsSync(t.worktree) && !t.conflicts?.length) {
+      try { committed = await g.commitAll(t.worktree, t.title); } catch (e: any) {
+        this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });
+        return this.d.notify('error', `"${t.title}": ${e.message}`, id);
+      }
+    }
+    const reply = turn.text.trim().slice(-4000) || undefined;
+    if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
+    else this.store.updateTask(id, { status: t.status === 'done' ? 'done' : 'review', live: undefined, reply, costUsd: cost });
+    this.emptyAt.delete(id);
+    if (!committed && t.worktree && !(await this.hasWork(id))) this.emptyAt.add(id); // Claude only answered: nothing to review
     this.changed();
     this.pump();
     const cur = this.store.task(id);
-    if (cur?.status === 'review' && cur.branch && this.reviewOpts().auto) void this.review(id);
+    if (cur?.status === 'review' && cur.branch && this.d.settings().review.auto && !this.emptyAt.has(id)) await this.review(id);
   }
 
-  // Sends text that continues the task's work (review issues, "continue after the limit"). Every task has its own session;
-  // within a task the session is continued, unless its history has grown big (freshAfterKB): then a new session starts with
-  // a short handoff, so a long task does not drag its whole history into every further round.
-  async continueTask(id: string, text: string) {
+  private async hasWork(id: string) {
     const t = this.store.task(id);
-    if (!t) return;
-    const limit = this.reviewOpts().freshAfterKB ?? 600;
-    const cwd = t.worktree ?? this.root;
-    if (!t.sessionId || limit < 0 || sessionSize(cwd, t.sessionId) <= limit * 1024 || this.state.get(id) === 'waiting') return this.say(id, text);
-    this.store.updateTask(id, { sessionId: undefined, pastSessions: [...(t.pastSessions ?? []), t.sessionId] });
-    this.stop(id);
-    this.state.delete(id);
-    this.notify('info', `"${t.title}": its session got long, so it continues in a fresh one (cheaper).`, id);
-    const where = t.base ? `see git log and git diff ${t.base}...HEAD; uncommitted work is in git status` : 'see git log and git status';
-    await this.run(id, `Continue this task: ${t.title}\n${t.description ?? ''}\n\nWork on it is already in this folder (${where}). ${text}`);
+    if (!t?.worktree || !t.base) return false;
+    return !!(await g.git(t.worktree, ['diff', '--stat', `${t.base}...HEAD`]).catch(() => '')).trim();
+  }
+
+  /* ---------- queue ---------- */
+
+  runAll(ids: string[]) {
+    const q = [...this.store.queue];
+    for (const id of ids) if (!q.includes(id) && this.store.task(id)?.status === 'todo') q.push(id);
+    this.store.setQueue(q);
+    this.pump();
+  }
+  cancelQueue() { this.store.setQueue([]); }
+
+  // Tasks still on their way to Done. Each holds its slot until merged, so with maxParallel 1 Run all builds every
+  // task on the previous one's merged work. A project-root task is finished when its turn ends.
+  private inFlight() {
+    return this.store.data.tasks.filter(t => {
+      if (t.archived || t.status === 'done' || t.init) return false;
+      if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') return true;
+      if (this.starting.has(t.id) || t.remote) return true;
+      return t.where !== 'root' && !!t.worktree && (t.status === 'doing' || t.status === 'review');
+    });
+  }
+
+  // What Run all waits for, for the toolbar.
+  queueInfo() {
+    const b = this.inFlight()[0];
+    if (!b) return { queued: this.store.queue, blocker: undefined };
+    const s = this.sessions.get(b.id), r = b.review, max = this.d.settings().review.maxAttempts;
+    const why = s?.state === 'waiting' ? 'needs your answer'
+      : s?.open && s.state !== 'idle' || this.starting.has(b.id) ? 'is working'
+      : b.remote ? 'is open in Remote Control'
+      : b.limited ? 'waits for the usage limit to reset'
+      : b.error ? 'stopped on an error (Resume it)'
+      : this.reviews.has(b.id) ? 'is being reviewed'
+      : r?.state === 'pass' ? 'is ready to merge'
+      : r?.state === 'fail' ? (r.attempts >= max ? 'still has review issues' : 'is fixing review issues')
+      : b.conflicts?.length ? 'has merge conflicts'
+      : this.emptyAt.has(b.id) ? 'has a reply from Claude for you' : 'waits for review';
+    return { queued: this.store.queue, blocker: { id: b.id, title: b.title, why } };
+  }
+
+  private pump() {
+    if (this.disposed || this.d.limits.held()) return;
+    const q = [...this.store.queue];
+    let slots = this.d.settings().maxParallel - this.inFlight().length, changed = false;
+    while (slots > 0 && q.length) {
+      const id = q.shift()!;
+      changed = true;
+      if (this.store.task(id)?.status !== 'todo') continue; // started by hand, moved or deleted meanwhile
+      slots--;
+      this.run(id).catch(e => { this.d.notify('error', `${this.store.task(id)?.title ?? 'Task'}: ${e.message}`, id); });
+    }
+    if (changed) this.store.setQueue(q);
   }
 
   /* ---------- keeping cards moving ---------- */
 
-  private sweepTimer?: NodeJS.Timeout;
-  private sweeping = false;
   private sweepSoon(ms = 1500) {
     clearTimeout(this.sweepTimer);
     this.sweepTimer = setTimeout(() => void this.sweep(), ms);
     this.sweepTimer.unref?.();
   }
 
-  // Nothing should sit in Review waiting for a click that the board could do itself:
-  //  - a branch task in Review that was never reviewed (it got there before the reviewer existed, or the window was
-  //    closed during its review) gets reviewed;
-  //  - a review that failed while its session was closed (reload, restart) sends its issues back to Claude;
-  //  - an old "reviewer failed" result is retried as the error it was.
-  // One at a time, within maxParallel, never during a usage limit.
-  async sweep() {
-    const o = this.reviewOpts();
-    if (this.sweeping || !o.auto || this.limits?.held()) return;
+  // Nothing waits in Review for a click the board can do itself: an unreviewed branch is reviewed, and review issues
+  // whose session had closed go back to Claude. One at a time, never during a usage limit.
+  private async sweep() {
+    const o = this.d.settings().review;
+    if (this.disposed || this.sweeping || !o.auto || this.d.limits.held()) return;
     this.sweeping = true;
     try {
       for (const t of [...this.store.data.tasks]) {
-        if (t.archived || t.status === 'done' || t.init || !t.branch || !t.worktree || t.conflicts?.length) continue;
-        const st = this.state.get(t.id);
-        if (st === 'running' || st === 'waiting' || t.review?.state === 'running' || this.busy.has(t.id)) continue;
-        if (t.review?.state === 'fail' && t.review.issues?.[0]?.startsWith('Reviewer failed')) { this.store.updateTask(t.id, { review: undefined }); continue; }
-        if (t.status === 'review' && !t.review && !this.emptyAt.has(t.id)) { await this.review(t.id); continue; }
-        if (t.review?.state === 'fail' && t.review.issues?.length && t.review.attempts < o.maxAttempts && !this.ptys.has(t.id) && !st) {
-          const working = [...this.state.values()].filter(s => s !== 'idle').length;
-          if (working >= this.maxParallel()) continue;
-          this.store.updateTask(t.id, { status: 'doing' });
-          await this.continueTask(t.id, `The code reviewer found these issues (review ${t.review.attempts} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
-            t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
+        if (t.archived || t.status === 'done' || t.init || t.remote || !t.branch || !t.worktree || t.conflicts?.length || t.error || t.limited) continue;
+        if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') continue;
+        if (this.reviews.has(t.id) || this.busy.has(t.id) || this.starting.has(t.id)) continue;
+        if (t.status === 'review' && !t.review && !this.emptyAt.has(t.id) && await this.hasWork(t.id)) { await this.review(t.id); continue; }
+        if (t.review?.state === 'fail' && t.review.issues?.length && t.review.attempts < o.maxAttempts && t.status === 'doing' && !this.isOpen(t.id)) {
+          await this.sendIssues(t.id);
         }
       }
     } finally { this.sweeping = false; }
@@ -447,12 +390,11 @@ export class Runner {
 
   // The usage limit is over: tasks it cut short continue, failed reviews are retried, the queue restarts.
   afterReset() {
-    this.notify('info', 'Claude usage limit reset: continuing where tasks stopped.');
     for (const t of [...this.store.data.tasks]) {
       if (t.review?.state === 'error') this.store.updateTask(t.id, { review: undefined });
       if (!t.limited) continue;
       this.store.updateTask(t.id, { limited: undefined });
-      void this.continueTask(t.id, 'Your Claude usage limit has reset. Continue exactly where you stopped.').catch(e => this.notify('error', e.message, t.id));
+      void this.say(t.id, 'Your Claude usage limit has reset. Continue exactly where you stopped.').catch(e => this.d.notify('error', e.message, t.id));
     }
     this.pump();
     this.sweepSoon(500);
@@ -460,80 +402,79 @@ export class Runner {
 
   /* ---------- AI review ---------- */
 
-  // Reviews the branch's diff with a read-only reviewer. Fail → issues go back to the task's session (it fixes, its
-  // turn ends, the new commit is reviewed again), up to maxAttempts; then it waits for you. Pass → ready to merge,
-  // or merged right away with autoMerge (unless the reviewer marks it critical).
-  async review(id: string, force = false) {
-    const t = this.store.task(id), o = this.reviewOpts();
-    if (!t?.worktree || !t.base || !t.branch || t.conflicts?.length || this.reviewing.has(id)) return;
-    this.reviewing.add(id); // synchronously, before any await: two triggers must not start two reviewers
-    try { await this.reviewInner(id, t, o, force); } finally { this.reviewing.delete(id); }
-  }
-
-  private async reviewInner(id: string, t: Task, o: ReviewOpts, force: boolean) {
-    const stale = () => { const n = this.store.task(id); return !n || n.status === 'done' || n.worktree !== t.worktree || n.branch !== t.branch; };
-    const head = await g.git(t.worktree!, ['rev-parse', 'HEAD']).catch(() => '');
-    if (!force && t.review?.head === head) return; // this commit was already reviewed
-    const diff = await g.git(t.worktree!, ['diff', `${t.base}...HEAD`]).catch(() => '');
-    if (!diff.trim()) { this.emptyAt.add(id); return; } // nothing built yet (Claude asked a question): nothing to review
-    const attempts = (t.review?.state === 'fail' ? t.review.attempts : 0);
-    this.store.updateTask(id, { review: { state: 'running', attempts, head } });
-    const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
-    // Screenshots go outside the worktree (never committed) and in a path without spaces ("Side Hustle" would need quoting
-    // in the command Claude runs and in its permission rule). Fresh per review.
-    const shots = path.join(os.tmpdir(), 'justcode-reviews', id);
-    fs.rmSync(shots, { recursive: true, force: true });
-    fs.mkdirSync(shots, { recursive: true });
-    const device = adb();
-    const screenshots = () => { try { return fs.readdirSync(shots).filter(f => /\.(png|jpe?g)$/i.test(f)).map(f => path.join(shots, f)); } catch { return []; } };
-    let v;
-    const cli = path.join(__dirname, 'cli.js');
-    const prompt = reviewPrompt(t, t.base!, diff, { shots, adb: device, cli });
-    const run = (p: string) => runReview(this.bin(), t.worktree!, p, o.model, reviewer, shots, o.commands, device?.bin, cli);
-    try {
-      v = await run(prompt);
-      // A review that only read the code (or skipped the screenshot it could take) is sent back once to actually test.
-      const missing = [
-        !v.tested.some(c => TEST_CMD.test(c)) && 'you did not run any tests or build',
-        device?.devices.length && UI_FILE.test(diff) && !screenshots().length && 'an Android device is connected and the diff changes UI files, but you took no screenshot',
-      ].filter(Boolean);
-      if (missing.length) v = await run(`${prompt}\n\n## Your previous review was incomplete\n${missing.join('; ')}. Do it now, then give the verdict.`);
-    } catch (e: any) {
-      // The reviewer could not run (limit, crash, bad output). That is not a verdict: nothing goes to Claude to "fix".
-      const msg = String(e.message ?? e).slice(0, 400);
-      const limit = isLimitError(msg);
-      if (limit) this.limits?.setReached('usage');
-      this.store.updateTask(id, { review: { state: 'error', attempts, error: msg, screenshots: screenshots() } });
-      if (!limit) this.notify('error', `AI review of "${t.title}" could not run: ${msg}`, id);
-      return;
-    }
-    // Discarded, deleted or finished while the reviewer ran: its verdict is about work that no longer exists.
-    if (stale()) { if (this.store.task(id)?.review?.state === 'running') this.store.updateTask(id, { review: undefined }); return; }
-    if (v.pass) {
-      this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
-      if (o.autoMerge && v.risk !== 'critical') return this.merge(id, true);
-      this.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id);
-      return;
-    }
-    const n = attempts + 1;
-    this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
-    if (n >= o.maxAttempts) return this.notify('warn', `"${t.title}" failed AI review ${n} times. Check the issues on the card.`, id);
-    this.store.updateTask(id, { status: 'doing' });
-    await this.continueTask(id, `The code reviewer found these issues (review ${n} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
-      v.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
-  }
-
-  private async exited(id: string) {
-    if (this.ptys.has(id) || this.launching.has(id)) return; // a newer run of this task already took over
-    this.state.delete(id);
-    this.unwatch(id);
+  async sendIssues(id: string) {
     const t = this.store.task(id);
-    if (t?.worktree && fs.existsSync(t.worktree) && !t.conflicts?.length && !await g.merging(t.worktree)) {
-      try { await g.commitAll(t.worktree, t.title); } catch { /* reported on next turn */ }
-    }
-    this.changed();
-    this.pump();
+    if (!t?.review?.issues?.length) return;
+    const max = this.d.settings().review.maxAttempts;
+    this.store.updateTask(id, { status: 'doing' });
+    await this.say(id, `The code reviewer found these issues (review ${t.review.attempts} of ${max}). Fix them, verify, then finish your turn:\n` +
+      t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
   }
+
+  // A read-only reviewer checks the branch. Fail: its issues go back to the task's Claude, and the new commit is
+  // reviewed again, up to maxAttempts. Pass: ready to merge, or merged right away with autoMerge (unless critical).
+  async review(id: string, force = false) {
+    const t = this.store.task(id), o = this.d.settings().review;
+    const bin = this.d.bin();
+    if (!t?.worktree || !t.base || !t.branch || t.conflicts?.length || this.reviews.has(id) || !bin) return;
+    const ac = new AbortController();
+    this.reviews.set(id, { ac, started: Date.now() }); // synchronously: two triggers never start two reviewers
+    this.changed();
+    const shots = path.join(os.tmpdir(), 'justcode-reviews', id);
+    try {
+      const head = await g.git(t.worktree, ['rev-parse', 'HEAD']).catch(() => '');
+      if (!force && t.review?.head === head && t.review.state !== 'error') return;
+      const diff = await g.git(t.worktree, ['diff', `${t.base}...HEAD`]).catch(() => '');
+      if (!diff.trim()) { this.emptyAt.add(id); return; }
+      const attempts = t.review?.state === 'fail' ? t.review.attempts : 0;
+      this.store.updateTask(id, { review: { state: 'running', attempts, head } });
+      const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
+      fs.rmSync(shots, { recursive: true, force: true });
+      fs.mkdirSync(shots, { recursive: true });
+      const device = adb();
+      const screenshots = () => { try { return fs.readdirSync(shots).filter(f => /\.(png|jpe?g)$/i.test(f)).map(f => path.join(shots, f)); } catch { return []; } };
+      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli });
+      const exec = (p: string) => runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: o.model || undefined, agent: reviewer, signal: ac.signal,
+        timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli });
+      let v;
+      try {
+        v = await exec(prompt);
+        // A review that only read the code (or skipped a screenshot it could take) is sent back once to actually test.
+        const missing = [
+          !v.tested.some(c => TEST_CMD.test(c)) && 'you did not run any tests, type check or build',
+          device?.devices.length && UI_FILE.test(diff) && !screenshots().length && 'an Android device is connected and the diff changes UI files, but you took no screenshot',
+        ].filter(Boolean);
+        if (missing.length && !ac.signal.aborted) v = await exec(`${prompt}\n\n## Your previous review was incomplete\n${missing.join('; ')}. Do it now (or say in "tested" why it is impossible), then give the verdict.`);
+      } catch (e: any) {
+        // The reviewer could not run (cancelled, limit, timeout, bad output). Not a verdict: nothing goes to Claude to "fix".
+        if (ac.signal.aborted && !this.store.task(id)) return;
+        const msg = String(e.message ?? e).slice(0, 400);
+        if (isLimitError(msg)) this.d.limits.setReached('usage');
+        if (this.store.task(id)) this.store.updateTask(id, { review: { state: 'error', attempts, error: msg, screenshots: screenshots() } });
+        if (!isLimitError(msg) && msg !== 'cancelled') this.d.notify('error', `AI review of "${t.title}" could not run: ${msg}`, id);
+        return;
+      }
+      const now = this.store.task(id);
+      if (!now || now.status === 'done' || now.worktree !== t.worktree) return; // discarded, deleted or merged meanwhile
+      if (v.pass) {
+        this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
+        this.reviews.delete(id);
+        if (o.autoMerge && v.risk !== 'critical') { await this.merge(id, true); return; }
+        this.d.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id);
+        return;
+      }
+      const n = attempts + 1;
+      this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
+      this.reviews.delete(id);
+      if (n >= o.maxAttempts) return this.d.notify('warn', `"${t.title}" failed AI review ${n} times. The issues are on the card.`, id);
+      await this.sendIssues(id);
+    } finally {
+      if (this.reviews.get(id)?.ac === ac) this.reviews.delete(id);
+      this.changed();
+    }
+  }
+
+  cancelReview(id: string) { this.reviews.get(id)?.ac.abort(); }
 
   /* ---------- review / merge ---------- */
 
@@ -548,32 +489,28 @@ export class Runner {
     if (!t || this.busy.has(id)) return;
     this.busy.add(id);
     this.changed();
-    try { return await this.serial(() => fn(t)); } catch (e: any) { this.notify('error', e.message, id); } finally { this.busy.delete(id); this.changed(); }
+    try { return await this.serial(() => fn(t)); } catch (e: any) { this.d.notify('error', e.message, id); } finally { this.busy.delete(id); this.changed(); }
   }
-  isBusy(id: string) { return this.busy.has(id); }
 
-  // Approved by the user. Base is brought into the branch first, in the worktree; conflicts stop there.
+  // Base is brought into the branch first, inside the task's folder; conflicts stop there, never in the user's checkout.
   merge(id: string, auto = false) {
     return this.guarded(id, async t => {
-      if (!t.worktree || !t.branch || !t.base) throw new Error('Nothing to merge yet');
-      if (this.state.get(id) === 'running' || this.state.get(id) === 'waiting') throw new Error('Claude is still working on this task. Wait for it to finish or stop it.');
+      if (t.where === 'root' || !t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
+      if (!t.branch || !t.base) throw new Error('Nothing to merge yet');
+      const s = this.sessions.get(id);
+      if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
+      this.stop(id);
       await g.commitAll(t.worktree, t.title);
-      // Uncommitted files in the project folder would block the merge ("untracked working tree files would be
-      // overwritten"). Commit them on base first; then bringing base into the branch settles any differences in the worktree.
-      if (await g.currentBranch(this.root) === t.base) {
-        const snap = await g.snapshot(this.root);
-        if (snap.files.length) this.notify('info', `Committed ${snap.files.length} uncommitted file(s) on ${t.base} before merging.`);
-      }
       const conflicts = await g.syncWithBase(t.worktree, t.base);
       if (conflicts.length) {
         this.store.updateTask(id, { conflicts, status: 'review' });
-        this.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id);
+        this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id);
         return;
       }
       await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
       await this.cleanup(t);
-      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined });
-      this.notify('info', `${auto ? 'AI review passed: auto-merged' : 'Merged'} "${t.title}" into ${t.base}`);
+      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined });
+      this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`);
     });
   }
 
@@ -591,16 +528,16 @@ export class Runner {
       if (left.length) throw new Error(`Conflict markers still in: ${left.join(', ')}`);
       if (await g.merging(t.worktree)) await g.finishResolve(t.worktree);
       this.store.updateTask(id, { conflicts: undefined });
-      this.notify('info', `Conflicts resolved for "${t.title}". Review, then Merge.`);
+      this.d.notify('info', `Conflicts resolved for "${t.title}". Merge it when ready.`);
     });
   }
 
-  // Drops the branch and its work; the task goes back to todo with a fresh session next run.
+  // Drops the branch and its work; the task goes back to To do with a fresh session next run.
   discard(id: string) {
     return this.guarded(id, async t => {
-      this.stop(id);
       await this.cleanup(t);
-      this.store.updateTask(id, { status: 'todo', branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined });
+      this.store.updateTask(id, { status: 'todo', branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined,
+        review: undefined, error: undefined, live: undefined, reply: undefined, remote: undefined, limited: undefined });
     });
   }
 
@@ -615,6 +552,8 @@ export class Runner {
 
   private async cleanup(t: Task) {
     this.stop(t.id);
+    this.cancelReview(t.id);
+    fs.rmSync(path.join(os.tmpdir(), 'justcode-reviews', t.id), { recursive: true, force: true });
     if (t.worktree) await g.removeWorktree(this.root, t.worktree);
     if (t.branch) await g.deleteBranch(this.root, t.branch).catch(() => { /* never created */ });
   }
@@ -622,17 +561,22 @@ export class Runner {
   async remove(id: string) {
     const t = this.store.task(id);
     if (!t) return;
-    this.ptys.forget(id);
-    await this.serial(() => this.cleanup(t)).catch(e => this.notify('error', e.message));
+    await this.serial(() => this.cleanup(t)).catch(e => this.d.notify('error', e.message));
     fs.rmSync(path.join(this.root, '.justcode', 'attachments', id), { recursive: true, force: true });
     this.store.deleteTask(id);
   }
 
+  // Closing the window: every Claude process this project started ends. Tasks that were mid-turn keep `live`, so the
+  // next window continues them.
   dispose() {
-    this.unsubExit?.();
+    this.disposed = true;
+    this.unsub.dispose();
     clearTimeout(this.sweepTimer);
+    for (const s of this.sessions.values()) s.kill();
+    this.sessions.clear();
+    for (const r of this.reviews.values()) r.ac.abort();
+    this.reviews.clear();
     this.store.dispose();
-    for (const id of [...this.watched.keys()]) this.unwatch(id);
     this.ev.removeAllListeners();
   }
 }

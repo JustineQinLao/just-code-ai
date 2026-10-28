@@ -28,8 +28,13 @@ export interface Task {
   review?: Review;            // AI review of the task's branch
   limited?: boolean;          // a usage limit stopped this task; it continues by itself after the reset
   init?: boolean;             // the project's initialization run
-  allow?: string[];           // tools pre-approved for this task's session (--allowedTools)
+  allow?: string[];           // tools pre-approved for this task's session
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
+  live?: boolean;             // Claude was mid-turn; a window that closed then continues it when it opens again
+  reply?: string;             // Claude's last message when its turn ended (shown when it asks something instead of changing files)
+  remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
+  error?: string;             // the last run failed to start or ended on an error
+  costUsd?: number;           // estimated cost of the task's sessions so far (API pricing; plans are not billed per task)
   archived?: boolean;
   created: number;
 }
@@ -37,7 +42,9 @@ export interface Task {
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
 export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
-export interface Board { sprints: Sprint[]; tasks: Task[] }
+// rules: what you approved with "Always" on a card, kept for every task of this project.
+// queue: Run all's remaining tasks, so a reload continues it.
+export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[] }
 
 // One board per project folder, kept in the project at .justcode/board.json.
 export class Store {
@@ -56,7 +63,7 @@ export class Store {
     try { text = fs.readFileSync(this.file, 'utf8'); } catch { return { sprints: [], tasks: [] }; } // no board yet
     try {
       const b = JSON.parse(text);
-      return { sprints: b.sprints ?? [], tasks: b.tasks ?? [] };
+      return { sprints: b.sprints ?? [], tasks: b.tasks ?? [], rules: Array.isArray(b.rules) ? b.rules : [], queue: Array.isArray(b.queue) ? b.queue : [] };
     } catch {
       // Hand-edited or merge-conflicted: keep a copy before the next save replaces it, so nothing is lost.
       const copy = `${this.file}.corrupt-${Date.now()}`;
@@ -136,6 +143,30 @@ export class Store {
   deleteTask(id: string) {
     this.fresh();
     this.board.tasks = this.board.tasks.filter(t => t.id !== id);
+    this.board.queue = (this.board.queue ?? []).filter(q => q !== id);
+    this.save();
+  }
+
+  get rules() { return this.board.rules ?? []; }
+  addRules(rules: string[]) {
+    this.fresh();
+    const cur = this.board.rules ?? [];
+    const add = [...new Set(rules)].filter(r => r && !cur.includes(r));
+    if (!add.length) return;
+    this.board.rules = [...cur, ...add];
+    this.save();
+  }
+  setRules(rules: string[]) {
+    this.fresh();
+    this.board.rules = [...new Set(rules.map(r => r.trim()).filter(Boolean))];
+    this.save();
+  }
+
+  get queue() { return this.board.queue ?? []; }
+  setQueue(ids: string[]) {
+    this.fresh();
+    if (JSON.stringify(ids) === JSON.stringify(this.board.queue ?? [])) return;
+    this.board.queue = ids;
     this.save();
   }
 

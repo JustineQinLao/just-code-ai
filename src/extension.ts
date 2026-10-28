@@ -3,191 +3,238 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
 import { Store, Task } from './store';
-import { Ptys } from './pty';
-import { Runner } from './runner';
+import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
-import { claudeBin, discoverAgents, discoverSkills, plan, sessionLog } from './claude';
-import { findTasksFile } from './tasksmd';
+import { claudeBin, claudeEnv, discoverAgents, discoverSkills, plan, sessionLog } from './claude';
 import { Limits } from './limits';
-
-// Project has its own Claude agents (.claude/agents/*.md).
-const hasSetup = (root: string) => { try { return fs.readdirSync(path.join(root, '.claude', 'agents')).some(f => f.endsWith('.md')); } catch { return false; } };
+import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
+import { syncSkill } from './skill';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 
-// Settings changed on the board (⚙ Settings) are kept by JustCode itself, so saving never depends on VS Code's settings
-// registry (an extension updated while its window runs can leave the registry without the new keys: "Unable to write to
-// User Settings because justCode.x is not a registered configuration"). They are also written to VS Code's settings
-// when that works, and a change made in VS Code's own Settings UI replaces the board's copy of that key.
-let ctx: vscode.ExtensionContext | undefined;
-const overrides = () => ctx?.globalState.get<Record<string, unknown>>('settings', {}) ?? {};
+// Settings changed on the board are kept by JustCode itself (so saving never depends on VS Code's settings registry,
+// which can be out of date right after an update) and also written to VS Code's settings when that works.
+let ctx: vscode.ExtensionContext;
+const overrides = () => ctx.globalState.get<Record<string, unknown>>('settings', {});
 const setting = <T,>(key: string, fallback: T): T => { const o = overrides(); return key in o ? o[key] as T : cfg().get<T>(key, fallback); };
-const CLAUDE_EXT = 'anthropic.claude-code';
-const CLAUDE_OPEN = 'claude-vscode.primaryEditor.open'; // (sessionId?, prompt?)
 
-let panel: vscode.WebviewPanel | undefined;
 const runners = new Map<string, Runner>(); // project root → runner
-let ptys: Ptys;
-let current: string | undefined; // root shown on the board
+let panel: vscode.WebviewPanel | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   ctx = context;
-  ptys = new Ptys();
   const limits = new Limits();
   const out = vscode.window.createOutputChannel('JustCode');
-  context.subscriptions.push(out);
-  // An Esc byte cancels a permission prompt (and every tool call queued behind it). Say where each one came from.
-  ptys.onWrite = (id, data, src) => {
-    if (data !== '\x1b' && !data.includes('\x1b[200~')) return;
-    const title = [...runners.values()].map(r => r.store.task(id)?.title).find(Boolean) ?? id;
-    out.appendLine(`${new Date().toLocaleTimeString()}  "${title.slice(0, 50)}": ${data === '\x1b' ? 'Esc (interrupt)' : 'paste'} sent · from ${src}`);
-  };
-  ptys.dir = path.join(context.globalStorageUri.fsPath, 'screens');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'justCode.open';
   status.show();
+  let apiKey: string | undefined;
+  void context.secrets.get('apiKey').then(k => { apiKey = k || undefined; });
+
+  const bin = () => claudeBin(setting('claudePath', ''));
+  const env = () => claudeEnv(apiKey);
+  const runnerSettings = (): RunnerSettings => ({
+    maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
+    worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
+    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false),
+      commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
+  });
 
   const runnerFor = (root: string) => {
     let r = runners.get(root);
     if (r) return r;
-    const notify = (level: 'info' | 'warn' | 'error', text: string, taskId?: string) => {
-      const show = level === 'error' ? vscode.window.showErrorMessage : level === 'warn' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
-      // Approval prompts are only worth a toast when the board isn't on screen.
-      if (level === 'warn' && taskId && panel?.visible) return;
-      show(text, ...(taskId ? ['Show'] : [])).then(c => { if (c) { setCurrent(root); open(taskId); } });
-    };
-    r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(setting('claudePath', '')),
-      notify, () => setting('maxParallel', 1), () => setting('taskModel', 'sonnet'),
-      () => ({ auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), commands: setting<string[]>('reviewCommands', []), freshAfterKB: setting('freshSessionKB', 600) }));
-    r.limits = limits;
-    r.allowedTools = () => setting<string[]>('allowedTools', []);
-    r.copyFiles = () => setting<string[]>('worktreeCopy', ['.env', '.env.local']);
+    r = new Runner(new Store(root), {
+      bin, env, settings: runnerSettings, limits, cli: path.join(context.extensionPath, 'out', 'cli.js'),
+      notify: (level, text, taskId) => {
+        out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] ${level}: ${text}`);
+        // On screen, the board already shows it; only errors and "needs you" are worth a toast then.
+        if (panel?.visible && current === root && level === 'info') return;
+        if (panel?.visible && current === root && level === 'warn' && taskId) return;
+        const show = level === 'error' ? vscode.window.showErrorMessage : level === 'warn' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+        show(text, ...(taskId ? ['Show'] : [])).then(c => { if (c) { setCurrent(root); open(taskId); } });
+      },
+      choose: async (text, ...buttons) => vscode.window.showWarningMessage(text, { modal: true }, ...buttons),
+    });
     r.onChange(push);
     r.store.onChange(push);
     r.store.watch();
     runners.set(root, r);
     return r;
   };
-  // Projects = the window's workspace folders + folders added with "+ Project" (kept across windows).
+
+  // Projects = the window's folders + folders added with "+ Project" (remembered across windows).
   const workspace = () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
   const saved = () => context.globalState.get<string[]>('projects', []);
   const roots = () => [...new Set([...workspace(), ...saved()])].filter(p => fs.existsSync(p));
-  const setCurrent = (root: string) => { current = root; void context.globalState.update('current', root); };
-  current = context.globalState.get<string>('current');
+  let current: string | undefined = context.workspaceState.get<string>('current');
+  const setCurrent = (root: string) => { current = root; void context.workspaceState.update('current', root); };
   const runner = () => {
     if (!current || !roots().includes(current)) current = roots()[0];
     return current ? runnerFor(current) : undefined;
   };
+  // Runners for workspace folders start with the window, so tasks that were mid-turn continue without opening the board.
+  for (const root of workspace()) runnerFor(root);
 
-  async function addProject() {
-    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: 'Add project' });
-    if (!picked?.length) return;
-    const paths = picked.map(u => u.fsPath);
-    await context.globalState.update('projects', [...new Set([...saved(), ...paths])]);
-    setCurrent(paths[0]);
-    push();
+  /* ---------- setup checklist ---------- */
+
+  let setup: SetupState | undefined;
+  let checking: Promise<void> | undefined;
+  const recheck = () => checking ??= checkSetup(bin(), env(), runner()?.root, !!apiKey)
+    .then(s => { setup = s; }).catch(e => out.appendLine(`setup check failed: ${e.message}`)).finally(() => { checking = undefined; push(); });
+
+  async function fix(action: string) {
+    const term = (name: string, cmd: string) => {
+      const t = vscode.window.createTerminal({ name, env: { CLAUDECODE: null } });
+      t.sendText(cmd);
+      t.show();
+      const sub = vscode.window.onDidCloseTerminal(c => { if (c === t) { sub.dispose(); void recheck(); } });
+      vscode.window.showInformationMessage(`${name}: follow the steps in the terminal. The board checks again when you close it.`, 'Check again').then(c => { if (c) void recheck(); });
+    };
+    switch (action) {
+      case 'installClaude': return term('Install Claude Code', installCommand());
+      case 'login': return term('Sign in to Claude', `${q(bin() ?? 'claude')} auth login`);
+      case 'installGit': return vscode.env.openExternal(vscode.Uri.parse('https://git-scm.com/downloads'));
+      case 'gitIdentity': {
+        const name = await vscode.window.showInputBox({ title: 'git: your name', prompt: 'Shown as the author of commits', ignoreFocusOut: true });
+        if (!name) return;
+        const email = await vscode.window.showInputBox({ title: 'git: your email', prompt: 'Shown with your name on commits', ignoreFocusOut: true });
+        if (!email) return;
+        await new Promise(res => execFile('git', ['config', '--global', 'user.name', name], res));
+        await new Promise(res => execFile('git', ['config', '--global', 'user.email', email], res));
+        return recheck();
+      }
+      case 'gitInit': {
+        const r = runner();
+        if (!r) return;
+        if (await vscode.window.showWarningMessage(`Create a local git repository in ${path.basename(r.root)} and commit its files? Secrets (.env, keys) and node_modules are left out.`, { modal: true }, 'Create') !== 'Create') return;
+        await g.ensureRepo(r.root).catch(e => vscode.window.showErrorMessage(e.message));
+        return recheck();
+      }
+      case 'recheck': return recheck();
+    }
   }
 
-  // Forgets the project (its files and board stay). Its runs are stopped first.
-  async function removeProject(root: string) {
-    const r = runners.get(root);
-    const live = r ? [...r.state.keys()].length : 0;
-    if (!await confirm(`Remove ${path.basename(root)} from JustCode?${live ? ` Its ${live} running task(s) will be stopped.` : ''} Files and the board are kept.`, 'Remove')) return;
-    if (r) { for (const id of r.state.keys()) r.stop(id); r.dispose(); runners.delete(root); }
-    await context.globalState.update('projects', saved().filter(p => p !== root));
-    if (current === root) current = undefined;
-    push();
-  }
+  /* ---------- status bar ---------- */
 
   function updateStatus() {
     let run = 0, wait = 0;
-    for (const r of runners.values()) for (const s of r.state.values()) s === 'waiting' ? wait++ : s === 'running' && run++;
+    for (const r of runners.values()) { const c = r.counts(); run += c.running; wait += c.waiting; }
     const lv = limits.view();
     const pct = Math.max(lv.five?.pct ?? 0, lv.week?.pct ?? 0);
-    status.text = `$(checklist) JustCode${run ? ` $(sync~spin) ${run}` : ''}${wait ? ` $(warning) ${wait}` : ''}${lv.held ? ' $(watch) limit' : pct >= 80 ? ` $(watch) ${Math.round(pct)}%` : ''}`;
-    status.tooltip = lv.held ? 'Claude usage limit reached: tasks continue after the reset' : wait ? `${wait} task(s) waiting for your approval` : 'Open the JustCode board';
+    status.text = `$(checklist) JustCode${run ? ` $(sync~spin) ${run}` : ''}${wait ? ` $(bell-dot) ${wait}` : ''}${lv.held ? ' $(watch) limit' : pct >= 80 ? ` $(watch) ${Math.round(pct)}%` : ''}`;
+    status.tooltip = lv.held ? 'Claude usage limit reached: tasks continue after the reset' : wait ? `${wait} task(s) need you` : 'Open the JustCode board';
     status.backgroundColor = wait || lv.held ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
   }
+
+  /* ---------- board state ---------- */
 
   let pending: NodeJS.Timeout | undefined;
   function push() {
     updateStatus();
     if (pending) return;
-    pending = setTimeout(() => { pending = undefined; void post(); }, 50);
+    pending = setTimeout(() => { pending = undefined; post(); }, 60);
   }
 
-  async function post() {
+  let watching: { root: string; id: string; n: number; last?: string } | undefined; // the task whose log is open
+  function post() {
+    if (!panel) return;
     const r = runner();
-    if (!panel || !r) return panel?.webview.postMessage({ type: 'state', empty: true, roots: [] });
-    const tasks = r.store.data.tasks.map(t => ({
-      ...t, run: r.state.get(t.id), ask: r.asks.get(t.id), live: ptys.has(t.id), queued: r.queued().includes(t.id), busy: r.isBusy(t.id),
-    }));
-    panel.webview.postMessage({
+    if (!r) { void panel.webview.postMessage({ type: 'state', empty: true, roots: [], setup, version: context.extension.packageJSON.version }); return; }
+    const tasks = r.store.data.tasks.map(t => ({ ...t, ...r.live(t.id) }));
+    const s = runnerSettings();
+    void panel.webview.postMessage({
       type: 'state',
-      roots: roots().map(p => {
-        const states = [...(runners.get(p)?.state.values() ?? [])];
-        return { path: p, name: path.basename(p), removable: !workspace().includes(p),
-          running: states.filter(x => x === 'running').length, waiting: states.filter(x => x === 'waiting').length };
-      }), root: r.root,
+      roots: roots().map(p => ({ path: p, name: path.basename(p), removable: !workspace().includes(p), ...(runners.get(p)?.counts() ?? { running: 0, waiting: 0 }) })),
+      root: r.root,
       board: { ...r.store.data, tasks },
-      setup: hasSetup(r.root),
+      setup, project: projectSetup(r.root),
       limit: limits.view(),
       version: context.extension.packageJSON.version,
       queue: r.queueInfo(),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
-      git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
-      defaultMode: setting('defaultMode', 'default'),
-      settings: { plannerModel: setting('plannerModel', 'opus'), taskModel: setting('taskModel', 'sonnet'), maxParallel: setting('maxParallel', 1), defaultMode: setting('defaultMode', 'default'),
-        allowedTools: setting<string[]>('allowedTools', []), reviewModel: setting('reviewModel', 'opus'), autoReview: setting('autoReview', true), autoMerge: setting('autoMerge', false), maxReviews: setting('maxReviews', 3) },
-      claudeExt: !!vscode.extensions.getExtension(CLAUDE_EXT),
+      settings: { ...s, defaultMode: setting('defaultMode', 'auto'), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
+      guideSeen: context.globalState.get('guideSeen', false),
+      all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({
+        root, name: path.basename(root),
+        tasks: x.store.data.tasks.filter(t => !t.archived && (x.isOpen(t.id) || x.live(t.id).reviewing || t.status === 'doing' || t.status === 'review'))
+          .map(t => ({ id: t.id, title: t.title, status: t.status, ...x.live(t.id), review: t.review })),
+      })),
     });
+    sendSteps();
   }
 
-  ptys.onData((id, data) => { limits.feed(id, data); panel?.webview.postMessage({ type: 'data', id, data }); });
+  // The open task's activity: live from its session, or from Claude Code's saved transcript once it has closed.
+  function sendSteps(force = false) {
+    if (!panel || !watching) return;
+    const r = runners.get(watching.root), t = r?.store.task(watching.id);
+    if (!r || !t) return;
+    const live = r.steps(t.id);
+    const steps = live ?? (t.sessionId ? sessionLog(t.worktree && fs.existsSync(t.worktree) ? t.worktree : r.root, t.sessionId) : []);
+    const last = steps.length ? steps[steps.length - 1].time + steps[steps.length - 1].text.slice(0, 40) : '';
+    if (!force && steps.length === watching.n && last === watching.last) return;
+    watching.n = steps.length; watching.last = last;
+    void panel.webview.postMessage({ type: 'steps', id: t.id, steps, live: !!live });
+  }
+
   limits.onChange(push);
   limits.onReset(() => { for (const r of runners.values()) r.afterReset(); });
-  ptys.onExit(id => panel?.webview.postMessage({ type: 'exit', id }));
 
-  // Left side of a review diff: the file at the merge base, read straight from git.
+  // Left side of a review diff: the file at the merge base, straight from git.
   context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('justcode-base', {
-    provideTextDocumentContent: uri => { const q = JSON.parse(uri.query); return g.show(q.dir, q.ref, q.file); },
+    provideTextDocumentContent: uri => { const p = JSON.parse(uri.query); return g.show(p.dir, p.ref, p.file); },
   }));
 
-  // restored: a board tab VS Code kept across a reload or extension update. It is rewired here;
-  // a tab nobody rewires stays on screen but its clicks go nowhere.
+  /* ---------- webview ---------- */
+
   const open = (focusTask?: string, restored?: vscode.WebviewPanel) => {
     if (panel && restored && restored !== panel) restored.dispose();
-    if (panel) { panel.reveal(); }
+    if (panel) panel.reveal();
     else {
       const media = vscode.Uri.joinPath(context.extensionUri, 'media');
-      const xterm = vscode.Uri.joinPath(context.extensionUri, 'node_modules', '@xterm');
-      const options = { enableScripts: true, localResourceRoots: [media, xterm] };
+      const options = { enableScripts: true, localResourceRoots: [media] };
       panel = restored ?? vscode.window.createWebviewPanel('justCode.board', 'JustCode', vscode.ViewColumn.One, { ...options, retainContextWhenHidden: true });
       panel.webview.options = options;
+      panel.iconPath = vscode.Uri.joinPath(media, 'icon.svg');
       const w = panel.webview, nonce = randomUUID().replace(/-/g, '');
-      const u = (base: vscode.Uri, ...p: string[]) => w.asWebviewUri(vscode.Uri.joinPath(base, ...p));
+      const u = (...p: string[]) => w.asWebviewUri(vscode.Uri.joinPath(media, ...p));
       w.html = `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${w.cspSource} 'unsafe-inline'; font-src ${w.cspSource}; script-src 'nonce-${nonce}';">
-<link rel="stylesheet" href="${u(xterm, 'xterm', 'css', 'xterm.css')}"><link rel="stylesheet" href="${u(media, 'board.css')}"></head>
-<body><div id="app"></div><dialog id="dlg"></dialog>
-<script nonce="${nonce}" src="${u(xterm, 'xterm', 'lib', 'xterm.js')}"></script>
-<script nonce="${nonce}" src="${u(xterm, 'addon-fit', 'lib', 'addon-fit.js')}"></script>
-<script nonce="${nonce}" src="${u(media, 'board.js')}"></script></body></html>`;
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${w.cspSource} data:; style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<link rel="stylesheet" href="${u('board.css')}"></head>
+<body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
+<script nonce="${nonce}" src="${u('board.js')}"></script></body></html>`;
       w.onDidReceiveMessage(m => handle(m).catch(e => vscode.window.showErrorMessage(e.message)));
-      panel.onDidDispose(() => { panel = undefined; }); // runs keep going; reopening the board reattaches
+      panel.onDidDispose(() => { panel = undefined; watching = undefined; }); // runs keep going; reopening reattaches
+      void recheck();
     }
-    if (focusTask) panel.webview.postMessage({ type: 'focus', id: focusTask });
+    if (focusTask) void panel.webview.postMessage({ type: 'focus', id: focusTask });
     push();
   };
 
+  const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
+  const confirmBypass = () => confirm('Allow everything: this task runs with NO approvals. It can run any command and change any file it can reach, including outside its folder. Use it only for work you trust.', 'Allow everything');
+
   async function handle(m: any) {
-    if (m.type === 'ready') return push();
-    if (m.type === 'root') { if (roots().includes(m.root)) setCurrent(m.root); return push(); }
-    if (m.type === 'addProject') return addProject();
-    if (m.type === 'removeProject') return removeProject(m.root);
-    // Every request names the project it came from, so a switch mid-click can't send it to another folder.
+    switch (m.type) {
+      case 'ready': return push();
+      case 'root': if (roots().includes(m.root)) { setCurrent(m.root); watching = undefined; void recheck(); } return push();
+      case 'addProject': return addProject();
+      case 'removeProject': return removeProject(m.root);
+      case 'fix': return fix(m.action);
+      case 'guideSeen': await context.globalState.update('guideSeen', true); return;
+      case 'openUrl': if (/^https:\/\//.test(m.url)) void vscode.env.openExternal(vscode.Uri.parse(m.url)); return;
+      case 'settings':
+        await context.globalState.update('settings', { ...overrides(), ...m.values });
+        for (const [k, v] of Object.entries(m.values)) {
+          try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
+        }
+        return push();
+      case 'apiKey': return vscode.commands.executeCommand('justCode.setApiKey');
+      case 'resumeNow': limits.clear(); return;
+    }
+    // Every other request names its project, so a switch mid-click can't send it to another folder.
     if (m.root && !roots().includes(m.root)) return;
     const r = m.root ? runnerFor(m.root) : runner();
     if (!r) return;
@@ -195,87 +242,113 @@ export function activate(context: vscode.ExtensionContext) {
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
     switch (m.type) {
       case 'addTask': {
-        if (m.mode === 'bypassPermissions' && !await confirmBypass()) break;
-        const task = s.addTask({ title: m.title, description: m.description || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined, mode: m.mode, where: m.where === 'root' ? 'root' : undefined });
+        if (!String(m.title ?? '').trim()) return;
+        if (m.mode === 'bypassPermissions' && !await confirmBypass()) return;
+        const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
+          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'root' ? 'root' : undefined });
         if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
-        break;
+        if (m.start) await r.run(task.id);
+        return;
       }
       case 'editTask':
-        if (m.patch?.mode === 'bypassPermissions' && t?.mode !== 'bypassPermissions' && !await confirmBypass()) break;
-        s.updateTask(m.id, m.patch); break;
-      case 'move': s.updateTask(m.id, { status: m.status }); break;
-      case 'delete':
-        if (await confirm(`Delete "${t?.title}"? Its branch and uncommitted work are removed too.`, 'Delete')) await r.remove(m.id);
-        break;
-      case 'reorder': s.reorder(m.id, m.before); break;
-      case 'archive': s.updateTask(m.id, { archived: true }); break;
-      case 'clear': {
-        const ids: string[] = m.ids.filter((id: string) => s.task(id));
-        if (!ids.length) break;
-        const work = ids.filter(id => s.task(id)?.worktree).length; // a worktree still there = work not merged, whatever the column
-        const msg = `Delete all ${ids.length} task(s) in ${m.column}?${work ? ` ${work} of them have a branch; their work is deleted too.` : ''}`;
-        if (await confirm(msg, 'Delete all')) for (const id of ids) await r.remove(id);
-        break;
+        if (!t) return;
+        if (m.patch?.mode === 'bypassPermissions' && t.mode !== 'bypassPermissions' && !await confirmBypass()) return;
+        s.updateTask(m.id, pick(m.patch, ['title', 'description', 'agent', 'mode', 'where', 'sprintId']));
+        if (m.patch?.mode && r.isOpen(m.id)) await r.setMode(m.id, m.patch.mode);
+        return;
+      case 'move': {
+        if (!t) return;
+        // Done for a task with unmerged work means: merge it.
+        if (m.status === 'done' && t.worktree && t.where !== 'root') {
+          if (await confirm(`Merge "${t.title}" into ${t.base}?`, 'Merge')) await r.merge(m.id);
+          return;
+        }
+        if (m.status === 'todo' && t.worktree) { vscode.window.showInformationMessage('This task has work on its branch. Use Discard to start it over.'); return; }
+        s.updateTask(m.id, { status: m.status });
+        return;
       }
-      case 'addSprint': s.addSprint(m.name, m.goal || undefined); break;
-      case 'activateSprint': s.updateSprint(m.sprintId, { active: true }); break;
+      case 'reorder': s.reorder(m.id, m.before); return;
+      case 'archive': r.stop(m.id); s.updateTask(m.id, { archived: !t?.archived }); return;
+      case 'delete':
+        if (t && await confirm(`Delete "${t.title}"?${t.worktree ? ' Its branch and all its work are deleted too.' : ''}`, 'Delete')) await r.remove(m.id);
+        return;
+      case 'addSprint': s.addSprint(m.name, m.goal || undefined); return;
+      case 'activateSprint': s.updateSprint(m.sprintId, { active: true }); return;
       case 'closeSprint':
         if (await confirm('Close this sprint? Unfinished tasks go back to the backlog.', 'Close sprint')) s.closeSprint(m.sprintId);
-        break;
-      case 'run': await r.run(m.id, undefined, m.size); break;
-      case 'runAll': r.runAll(m.ids); break;
-      case 'cancelQueue': r.cancelQueue(); break;
-      case 'stop': r.stop(m.id); break;
-      case 'answer': if (typeof m.key === 'number') await r.answerChoice(m.id, m.key, m.text); else await r.answer(m.id, m.choice); break;
-      case 'resumeNow': limits.clear(); break;
-      case 'mergeReady': {
-        const ids: string[] = m.ids.filter((id: string) => s.task(id)?.review?.state === 'pass' && s.task(id)?.review?.risk !== 'critical');
-        if (!ids.length || !await confirm(`Merge ${ids.length} reviewed task(s) into their base branch, one at a time? A task that conflicts stays on its card for you to resolve.`, 'Merge all')) break;
-        for (const id of ids) await r.merge(id, false);
-        break;
-      }
-      case 'say': if (ptys.has(m.id) && typeof m.text === 'string' && m.text.trim()) await r.say(m.id, m.text); break;
-      case 'input': ptys.write(m.id, m.data, m.src ?? 'terminal'); break;
-      case 'resize': ptys.resize(m.id, m.cols, m.rows); ptys.size = { cols: m.cols, rows: m.rows }; break;
-      case 'attach': panel?.webview.postMessage({ type: 'replay', id: m.id, data: await ptys.snapshot(m.id) }); break;
-      case 'log': if (t) panel?.webview.postMessage({ type: 'log', id: m.id, steps: t.sessionId ? sessionLog(t.worktree ?? r.root, t.sessionId) : [] }); break;
-      case 'claudeCode': return openInClaudeCode(r, t);
-      case 'openFolder': if (t?.worktree) vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); break;
-      case 'changes': panel?.webview.postMessage({ type: 'changes', id: m.id, files: await r.changes(m.id) }); break;
+        return;
+      case 'run': await r.run(m.id); return;
+      case 'runAll': r.runAll(m.ids); return;
+      case 'cancelQueue': r.cancelQueue(); return;
+      case 'stop': r.stop(m.id); return;
+      case 'interrupt': await r.interrupt(m.id); return;
+      case 'say': if (typeof m.text === 'string' && m.text.trim()) await r.say(m.id, m.text.trim()); return;
+      case 'answer':
+        if (!r.answer(m.id, { id: m.ask, choice: m.choice, message: m.message, answers: m.answers }))
+          vscode.window.showWarningMessage('That request is no longer open (Claude moved on or the session closed).');
+        return;
+      case 'setMode':
+        if (m.mode === 'bypassPermissions' && !await confirmBypass()) return;
+        await r.setMode(m.id, m.mode); return;
+      case 'rules': s.setRules(Array.isArray(m.rules) ? m.rules.map(String) : []); return;
+      case 'watch': watching = m.id ? { root: r.root, id: m.id, n: -1 } : undefined; sendSteps(true); return;
+      case 'changes': void panel?.webview.postMessage({ type: 'changes', id: m.id, files: await r.changes(m.id) }); return;
       case 'diff': return diff(t, m.file);
-      case 'openFile': if (t?.worktree) vscode.window.showTextDocument(vscode.Uri.file(path.join(t.worktree, m.file))); break;
+      case 'openFile': if (t?.worktree) void vscode.window.showTextDocument(vscode.Uri.file(path.join(t.worktree, m.file))); return;
+      case 'openFolder': if (t?.worktree) void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); return;
       case 'merge':
         if (t && await confirm(`Merge "${t.title}" (${t.branch}) into ${t.base}?`, 'Merge')) await r.merge(m.id);
-        break;
-      case 'resolve': await r.resolveWithClaude(m.id); break;
-      case 'review': await r.review(m.id, true); break;
-      case 'shots': panel?.webview.postMessage({ type: 'shots', id: m.id, head: m.head, images: (t?.review?.screenshots ?? []).flatMap(f => {
-        try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
-      }) }); break;
-      case 'openShot': if (m.file) vscode.commands.executeCommand('vscode.open', vscode.Uri.file(m.file)); break;
-      case 'sendIssues': if (t?.review?.issues?.length) { s.updateTask(m.id, { status: 'doing' }); await r.say(m.id, `Fix these review issues, then finish your turn:\n${t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n')}`); } break;
-      case 'resolved': await r.markResolved(m.id); break;
+        return;
+      case 'mergeReady': {
+        const ids: string[] = (m.ids ?? []).filter((id: string) => s.task(id)?.review?.state === 'pass' && s.task(id)?.review?.risk !== 'critical');
+        if (!ids.length || !await confirm(`Merge ${ids.length} reviewed task(s), one at a time? A task that conflicts stays on its card for you.`, 'Merge all')) return;
+        for (const id of ids) await r.merge(id);
+        return;
+      }
+      case 'resolve': await r.resolveWithClaude(m.id); return;
+      case 'resolved': await r.markResolved(m.id); return;
+      case 'review': await r.review(m.id, true); return;
+      case 'cancelReview': r.cancelReview(m.id); return;
+      case 'sendIssues': await r.sendIssues(m.id); return;
       case 'discard':
-        if (await confirm(`Discard all work on "${t?.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);
-        break;
-      case 'remotePr': await r.remotePr(m.id); break;
-      case 'openUrl': vscode.env.openExternal(vscode.Uri.parse(m.url)); break;
+        if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);
+        return;
+      case 'remotePr': await r.remotePr(m.id); return;
+      case 'remote': return handoff(r, t);
+      case 'claudeCode': return openInTerminal(r, t, false);
+      case 'shots': void panel?.webview.postMessage({ type: 'shots', id: m.id, images: (t?.review?.screenshots ?? []).flatMap(f => {
+        try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
+      }) }); return;
       case 'plan': return runPlan(r, m);
-      case 'setupClaude': return initialize(r, true);
-      case 'settings':
-        await ctx!.globalState.update('settings', { ...overrides(), ...m.values });
-        for (const [k, v] of Object.entries(m.values)) {
-          try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
-        }
-        return push();
+      case 'initialize': return initialize(r);
     }
+  }
+
+  async function addProject() {
+    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: 'Add project' });
+    if (!picked?.length) return;
+    const paths = picked.map(u => u.fsPath);
+    await context.globalState.update('projects', [...new Set([...saved(), ...paths])]);
+    setCurrent(paths[0]);
+    void recheck();
+    push();
+  }
+
+  async function removeProject(root: string) {
+    const r = runners.get(root);
+    const live = r ? r.counts().running + r.counts().waiting : 0;
+    if (!await confirm(`Remove ${path.basename(root)} from JustCode?${live ? ` Its ${live} running task(s) are stopped.` : ''} Files and the board are kept.`, 'Remove')) return;
+    if (r) { r.dispose(); runners.delete(root); }
+    await context.globalState.update('projects', saved().filter(p => p !== root));
+    if (current === root) current = undefined;
+    push();
   }
 
   // Pasted images go to .justcode/attachments/<task>/ (outside git); the task's prompt points Claude at them.
   function saveImages(root: string, taskId: string, images: { name: string; data: string }[]) {
     const dir = path.join(root, '.justcode', 'attachments', taskId);
     fs.mkdirSync(dir, { recursive: true });
-    return images.map((img, i) => {
+    return images.slice(0, 8).map((img, i) => {
       const m = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/.exec(img.data);
       if (!m) throw new Error(`${img.name}: not an image`);
       const file = path.join(dir, `image-${i + 1}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`);
@@ -284,58 +357,65 @@ export function activate(context: vscode.ExtensionContext) {
     });
   }
 
-  // Optional: the Initialize button runs /just-code-ai-sync (Claude setup + TASKS.md from docs/project.md, then the board sync).
-  // Nothing needs it: the board works as is, with the project's own agents and skills.
-  async function initialize(r: Runner, _force: boolean) {
-    const s = r.store;
-    const task = s.addTask({ title: '/just-code-ai-sync', description: 'Initialize this project for JustCode: Claude setup and TASKS.md if missing, then sync the board.',
-      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.claude/**)', 'Edit(.claude/**)', 'Bash(node:*)', 'Bash(ls:*)', 'Bash(mkdir:*)'] });
-    await r.run(task.id);
-    open(task.id);
-  }
-
-  const confirmBypass = () => confirm('This task will run with NO permission prompts: it can run any command and change any file it can reach, including outside its worktree. Use it only for work you trust. Continue?', 'Allow everything');
-
-  const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
-
   async function diff(t: Task | undefined, file: string) {
     if (!t?.worktree || !t.base) return;
     const ref = await g.mergeBase(t.worktree, t.base);
     const left = vscode.Uri.from({ scheme: 'justcode-base', path: '/' + file, query: JSON.stringify({ dir: t.worktree, ref, file }) });
-    vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(path.join(t.worktree, file)), `${file} (${t.base} ↔ ${t.title})`);
+    void vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(path.join(t.worktree, file)), `${file} (${t.base} ↔ ${t.title})`);
   }
 
-  // The Claude Code extension resumes sessions of the folder it runs in; a task's session lives in its worktree.
-  // Continues the task's session in Claude Code. The extension only finds sessions of the folder it runs in, so:
-  // project-root tasks open in the Claude Code panel; branch tasks open as a Claude Code tab in the editor, in the
-  // task's worktree (resuming there keeps it on the task's branch, never the main folder).
-  async function openInClaudeCode(r: Runner, t: Task | undefined) {
-    if (!t?.sessionId) return;
-    if (ptys.has(t.id)) {
-      // Two processes on one session would both write the transcript.
-      if (!await confirm(`Stop the run in the card and continue "${t.title}" in Claude Code?`, 'Continue in Claude Code')) return;
-      r.stop(t.id);
-      await new Promise(res => setTimeout(res, 500)); // let the session file settle
-    }
-    const cwd = t.worktree && fs.existsSync(t.worktree) ? t.worktree : r.root;
-    const inWorkspace = (vscode.workspace.workspaceFolders ?? []).some(f => f.uri.fsPath === cwd);
-    if (inWorkspace && vscode.extensions.getExtension(CLAUDE_EXT)) {
-      await vscode.commands.executeCommand(CLAUDE_OPEN, t.sessionId);
+  /* ---------- Remote Control and Claude Code hand-off ---------- */
+
+  const q = (s: string) => process.platform === 'win32' ? `"${s.replace(/"/g, '""')}"` : `'${s.replace(/'/g, `'\\''`)}'`;
+  const remoteTerms = new Map<vscode.Terminal, { root: string; id: string }>();
+
+  // Continue on your phone: the task's session moves to `claude --remote-control`, which shows it in the Claude app and
+  // on claude.ai/code. The card waits; closing the terminal brings the task back to the board (committed, then reviewed).
+  async function handoff(r: Runner, t: Task | undefined) {
+    if (!t) return;
+    if (!setup?.remote) {
+      const c = await vscode.window.showWarningMessage('Remote Control needs Claude Code signed in with a Claude account (Pro, Max, Team or Enterprise), not an API key.', 'Check setup');
+      if (c) open();
       return;
     }
-    const term = vscode.window.createTerminal({ name: `Claude Code · ${t.title.slice(0, 40)}`, cwd, location: vscode.TerminalLocation.Editor });
-    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-    term.sendText([claudeBin(setting('claudePath', '')), '--resume', t.sessionId, ...(t.mode ? ['--permission-mode', t.mode] : [])].map(q).join(' '));
-    term.show();
+    if (r.isOpen(t.id) && r.live(t.id).run !== 'idle' && !await confirm(`"${t.title}" is working. Move it to Remote Control now? Its current step is stopped and continues there.`, 'Move')) return;
+    return openInTerminal(r, t, true);
   }
 
+  async function openInTerminal(r: Runner, t: Task | undefined, remote: boolean) {
+    if (!t) return;
+    const b = bin();
+    if (!b) { vscode.window.showErrorMessage('Claude Code is not installed. Open JustCode: Check Setup.'); return; }
+    if (!remote && r.isOpen(t.id) && !await confirm(`Stop the board's run of "${t.title}" and continue it in a terminal?`, 'Continue')) return;
+    const h = await r.handoff(t.id);
+    const args = [b, '--resume', h.sessionId, '--permission-mode', h.mode, ...(remote ? ['--remote-control', `JustCode: ${t.title.slice(0, 50)}`] : [])];
+    const term = vscode.window.createTerminal({ name: `${remote ? '📱 ' : ''}${t.title.slice(0, 40)}`, cwd: h.cwd, env: { CLAUDECODE: null, CLAUDE_CODE_ENTRYPOINT: null, ANTHROPIC_API_KEY: null }, location: vscode.TerminalLocation.Editor });
+    remoteTerms.set(term, { root: r.root, id: t.id });
+    term.sendText(`${args.map(q).join(' ')}; exit`);
+    term.show();
+    if (remote) vscode.window.showInformationMessage(`"${t.title}" is now in Remote Control: open the Claude app or claude.ai/code. Press space in the terminal for a QR code. Close the terminal to bring it back to the board.`);
+  }
+
+  context.subscriptions.push(vscode.window.onDidCloseTerminal(term => {
+    const h = remoteTerms.get(term);
+    if (!h) return;
+    remoteTerms.delete(term);
+    void runners.get(h.root)?.remoteEnded(h.id);
+  }));
+  // A reload loses the terminals' link to their tasks: those tasks come back to the board.
+  for (const r of runners.values()) for (const t of r.store.data.tasks) if (t.remote) void r.remoteEnded(t.id);
+
+  /* ---------- planning and the optional Claude setup ---------- */
+
   async function runPlan(r: Runner, m: any) {
+    const b = bin();
+    if (!b) { vscode.window.showErrorMessage('Claude Code is not installed. Open JustCode: Check Setup.'); return; }
     const tasks = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: 'Claude is planning…', cancellable: true },
+      { location: vscode.ProgressLocation.Notification, title: 'Claude is reading the code and planning…', cancellable: true },
       (_p, token) => {
         const ac = new AbortController();
         token.onCancellationRequested(() => ac.abort());
-        return plan(claudeBin(setting('claudePath', '')), r.root, m.goal, m.agent || undefined, setting('plannerModel', 'opus'), ac.signal);
+        return plan(m.goal, { bin: b, cwd: r.root, env: env(), model: setting('plannerModel', 'opus') || undefined, agent: m.agent || undefined, signal: ac.signal, timeoutMs: 15 * 60_000, onRate: i => limits.update(i) });
       });
     if (!tasks.length) return vscode.window.showWarningMessage('Claude returned no tasks.');
     const picked = await vscode.window.showQuickPick(tasks.map(t => ({ label: t.title, detail: t.description, picked: true, t })),
@@ -343,88 +423,63 @@ export function activate(context: vscode.ExtensionContext) {
     if (!picked?.length) return;
     let sprintId = m.sprintId || undefined;
     if (m.newSprint) sprintId = r.store.addSprint(m.newSprint, m.goal.split('\n')[0].slice(0, 120)).id;
-    for (const p of picked) r.store.addTask({ title: p.t.title, description: p.t.description, sprintId, agent: m.taskAgent || undefined, mode: m.mode });
+    for (const p of picked) r.store.addTask({ title: p.t.title, description: p.t.description, sprintId, mode: m.mode || setting('defaultMode', 'auto') });
+  }
+
+  // Optional: Claude drafts agents, skills, CLAUDE.md and TASKS.md for this project, then syncs TASKS.md to the board.
+  async function initialize(r: Runner) {
+    const file = installSkill();
+    if (!file) return;
+    const task = r.store.addTask({ title: '/just-code-ai-sync', description: 'Set up this project for Claude (agents, skills, CLAUDE.md, TASKS.md) where missing, then sync TASKS.md into the board.',
+      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/setup/**)', 'Bash(ls:*)', `Bash(node ${q(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`, `Bash(node ${q(path.join(context.extensionPath, 'out', 'cli.js'))} setup:*)`] });
+    await r.run(task.id);
+    open(task.id);
+  }
+
+  // The skill lives in ~/.claude/skills; written only when the user asks for it (Initialize, or the command).
+  function installSkill() {
+    const file = path.join(os.homedir(), '.claude', 'skills', 'just-code-ai-sync', 'SKILL.md');
+    try {
+      const text = syncSkill(path.join(context.extensionPath, 'out', 'cli.js'));
+      if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, text);
+      }
+      return file;
+    } catch (e: any) { vscode.window.showErrorMessage(`Could not write ${file}: ${e.message}`); }
   }
 
   context.subscriptions.push(
     vscode.commands.registerCommand('justCode.open', () => open()),
     vscode.commands.registerCommand('justCode.addProject', async () => { open(); await addProject(); }),
+    vscode.commands.registerCommand('justCode.setup', () => { open(); void panel?.webview.postMessage({ type: 'showSetup' }); void recheck(); }),
+    vscode.commands.registerCommand('justCode.setApiKey', async () => {
+      const key = await vscode.window.showInputBox({ title: 'Anthropic API key (optional)', prompt: 'Tasks use it instead of your Claude login and are billed per token. Remote Control needs a Claude login. Leave empty to remove the key.', password: true, ignoreFocusOut: true });
+      if (key === undefined) return;
+      if (key.trim()) await context.secrets.store('apiKey', key.trim()); else await context.secrets.delete('apiKey');
+      apiKey = key.trim() || undefined;
+      void recheck();
+    }),
+    vscode.commands.registerCommand('justCode.installSyncSkill', () => { const f = installSkill(); if (f) vscode.window.showInformationMessage(`Installed /just-code-ai-sync at ${f}`); }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
-    // A key changed in VS Code's own Settings UI replaces the board's copy of it (unless it is the same value).
+    // A key changed in VS Code's own Settings UI replaces the board's copy of it.
     vscode.workspace.onDidChangeConfiguration(e => {
       const o = { ...overrides() }; let changed = false;
       for (const k of Object.keys(o)) if (e.affectsConfiguration(`justCode.${k}`) && JSON.stringify(cfg().get(k)) !== JSON.stringify(o[k])) { delete o[k]; changed = true; }
       if (changed) void context.globalState.update('settings', o).then(push);
+      if (e.affectsConfiguration('justCode.claudePath')) void recheck();
     }),
-    vscode.window.registerWebviewPanelSerializer('justCode.board', {
-      async deserializeWebviewPanel(p) { open(undefined, p); },
-    }),
-    { dispose: () => { for (const r of runners.values()) r.dispose(); ptys.dispose(); limits.dispose(); } },
+    vscode.window.registerWebviewPanelSerializer('justCode.board', { async deserializeWebviewPanel(p) { open(undefined, p); } }),
+    { dispose: () => { for (const r of runners.values()) r.dispose(); runners.clear(); limits.dispose(); } },
+    out, status,
   );
   updateStatus();
-  installSyncSkill(context);
 }
 
-// ~/.claude/skills/just-code-ai-sync: lets Claude sync TASKS.md into the board from any project.
-// Rewritten on every activation so it always points at this version's CLI.
-export function installSyncSkill(context: vscode.ExtensionContext) {
-  const cli = path.join(context.extensionPath, 'out', 'cli.js');
-  const file = path.join(os.homedir(), '.claude', 'skills', 'just-code-ai-sync', 'SKILL.md');
-  const text = `---
-name: just-code-ai-sync
-description: Initialize and sync this project's JustCode board. Creates the Claude setup (.claude agents, skills, CLAUDE.md) and TASKS.md when missing, from docs/project.md, then syncs TASKS.md into the board backlog (new tasks, status changes; removed items archived; sprints are left to the user). Use when the user says "sync tasks", "initialize JustCode", "/just-code-ai-sync", or after editing TASKS.md.
----
+const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter(k => o && k in o).map(k => [k, o[k] === '' ? undefined : o[k]]));
 
-# Initialize and sync the JustCode board
-
-The board is this project's \`.justcode/board.json\`. Work from the project root. The user ran this to get the
-project ready, so do every step below without stopping to ask; never overwrite a file that already exists.
-Run each \`node\` command below exactly as written, as its own command (no variables, \`cd\` or \`&&\`): those are pre-approved.
-
-## 1. Claude setup, if \`.claude/agents\` has no .md files
-
-Read docs/project.md (it describes the project), then CLAUDE.md, README and enough code to learn the stack, commands
-and conventions. Write these drafts with the Write tool, tailored to this project. They go under \`.justcode/setup/\`
-because Claude Code asks before every write into \`.claude/\`; the CLI installs them there:
-- \`.justcode/setup/agents/planner.md\`: splits a goal into small tasks that can each be built, reviewed and merged on their own. Frontmatter \`model: opus\`.
-- \`.justcode/setup/agents/implementer.md\`: builds one task following the project's conventions and runs its tests or build. Frontmatter \`model: sonnet\`.
-- \`.justcode/setup/agents/reviewer.md\`: reviews a diff for bugs, missed edge cases and convention breaks, and tests it: runs the
-  project's tests and build, and for UI changes captures screenshots and looks at them (\`node "${cli}" screenshot <file>.png\` when an
-  Android device is connected, else \`npx playwright screenshot <url> <file>.png\` for a web UI), then reads the PNG. When asked for a JSON
-  verdict it ends with it. Frontmatter \`model: opus\`, \`tools: Read, Grep, Glob, Bash\`.
-- \`.justcode/setup/skills/<name>/SKILL.md\` for recurring workflows the project clearly has (tests, release, deploy…). Only ones that apply.
-
-Agent files start with frontmatter: name, description, model, optionally tools. Then install them (existing files in
-\`.claude/\` are kept): \`node "${cli}" setup\`
-
-Also write \`CLAUDE.md\` at the project root if missing: stack, how to run, test and build, conventions.
-
-## 2. TASKS.md, if the project has none
-
-Write \`TASKS.md\` at the project root from docs/project.md (else the README, else the code), with a single
-\`## Backlog\` heading: what is already built as \`- [x]\`, everything else as \`- [ ]\` in build order. No sprint
-headings: the user plans sprints on the board. Each item is one task a developer could build, review and merge on its
-own; put details on indented lines under it.
-
-## 3. Sync
-
-\`node "${cli}" sync\`
-
-The open JustCode board updates by itself. Finish with a short summary: what you created, and what the sync added,
-moved and archived. Sprints are not created; the user plans them on the board.
-
-Notes: \`--dry-run\` previews without writing; \`--file path/to/TASKS.md\` picks a file. Only tasks that came from
-TASKS.md are changed; tasks made on the board are never touched, and a task with an unmerged branch is not marked done.
-`;
-  try {
-    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text) return;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, text);
-  } catch { /* no home dir access: the board still works */ }
-}
-
-// Kills every Claude process this window started, so none outlive it.
+// Every Claude process this window started ends with it.
 export function deactivate() {
   for (const r of runners.values()) r.dispose();
-  ptys?.dispose();
+  runners.clear();
 }

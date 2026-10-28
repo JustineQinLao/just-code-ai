@@ -1,178 +1,141 @@
 # JustCode
 
-A small VS Code board for running Claude Code on tasks. Each task gets its own Claude session, its own git
-branch and worktree, and a live terminal inside its card. When Claude finishes, the branch is your PR:
-review the diff, then approve the merge yourself.
+A task board for VS Code that runs Claude Code on each task. Every task gets its own branch and its own copy of the
+project. Claude asks for approval right on the card, and an AI reviewer tests the work before you merge it.
+
+- **Works on any folder:** an existing project or an empty one. Nothing to configure first.
+- **Few interruptions:** the default *Auto* mode lets Claude approve what is safe. Anything else waits on the card,
+  with **Allow / Always allow / Deny** buttons. "Always" is remembered for the whole project.
+- **Hands-off lists:** **Run all** works through a list in order. Each task is built, reviewed, fixed and (optionally)
+  merged before the next one starts.
+- **Agent map:** every Claude session, subagent and reviewer at work, with elapsed time and tokens.
+- **Continue on your phone:** move any task to Claude Code Remote Control and steer it from the Claude app or
+  claude.ai/code.
 
 ## Install
 
-```sh
-npm install
-npm run compile
-npx @vscode/vsce package --allow-missing-repository --skip-license
-code --install-extension just-code-0.1.0.vsix
-```
+You need VS Code 1.90+, [git](https://git-scm.com), and [Claude Code](https://code.claude.com) signed in with your
+Claude account. The board's setup checklist can install and sign in Claude Code for you.
 
-Or open this folder in VS Code and press F5. Needs the `claude` CLI (set `justCode.claudePath` if it isn't found).
-
-## Use
-
-Run **JustCode: Open Board** (or click **JustCode** in the status bar). The board belongs to the open folder and is
-kept at `.justcode/board.json`. Workspace folders show up as projects automatically; **+ Project** adds any other folder
-(remembered across windows, **×** removes it, files are kept). Click a project to switch; each shows its running (▶) and waiting (⚠) tasks.
-Every action runs in the root of the project it was made in.
-
-1. **Add a task**: type it and press Enter. Pick Backlog or a sprint, an agent from `.claude/agents`, and permissions:
-   - *Ask me*: Claude asks before edits and commands; you approve in the card's terminal.
-   - *Auto-edit*: file edits are approved automatically; commands still ask.
-   - *Plan only*: read-only.
-
-   **Runs in**: *Own branch (PR)* (default) works in an isolated copy that you review and merge. *Project root* runs in the project
-   folder itself, for project-wide commands like sync, deploy or release; finish it with **✓ Done**. A task that is just a `/skill` defaults to Project root.
-
-   Skills from `.claude/skills` and `.claude/commands` show under the box; click one to add `/skill` to the details.
-2. **Sprints** (optional): **+ Sprint**, then pick it in the view menu. **Set active** makes new tasks go there.
-   **Close sprint** sends unfinished tasks back to the backlog.
-3. **Initialize** (optional): nothing needs it. The board works as is, with the project's own agents and skills; sync or not, you add
-   tasks, add a sprint and press **▶ Run sprint**. **✦ Initialize** runs `/just-code-ai-sync` if you want Claude to draft agents, skills,
-   `CLAUDE.md` and `TASKS.md` from `docs/project.md`. Skills from other tools (LexCode's) are never offered as chips.
-4. **Plan with Claude**: describe a goal. Claude reads the code read-only and proposes tasks. You pick which to
-   add, to the backlog, an existing sprint or a new one. A planner-like agent (planner, architect, lead) is preselected.
-4. **Run**: **▶ Run** on a card, or **▶ Run sprint / Run all** for every To do task in view.
-   - **One at a time, in the order you arranged** (the numbers on the To do cards; drag a card to change the order). The next task starts
-     only when the previous one is finished: built, reviewed and **merged**, so it builds on that merged work. The toolbar says what the
-     queue waits for ("“X” must be merged (✓ Merge)"). Turn on *Merge automatically when the review passes* and a whole list runs unattended.
-     `justCode.maxParallel` > 1 allows several in progress at once, each in its own worktree.
-   - **Every task is a fresh Claude session** (its own session id, process and worktree); tasks never share history, and the reviewer is a
-     fresh run each time. Within one task the session continues for review fixes, unless its transcript passed `justCode.freshSessionKB`
-     (default 600 KB): then the fix round starts a new session with a short handoff, so long tasks don't carry their history forward.
-   - The card's terminal is the real Claude session. Type in it, approve prompts in it.
-   - A card that needs approval turns yellow with **⚠ Approve…**. The status bar shows it too, even when the board is closed.
-   - **Claude Code** continues the session in the Claude Code extension; the card's run stops first so two processes never share one session.
-5. **Review**: when Claude's turn ends, JustCode commits the changes on the task branch and moves the card to Review.
-   **▸ Changes** lists the files; click one for a side-by-side diff. Keep talking to Claude in the terminal to change things; each turn is committed again.
-6. **AI review** (automatic, after LexCode's builder → reviewer loop): when a branch task's turn ends, a read-only reviewer
-   (your project's `reviewer` agent if it has one, on `justCode.reviewModel`, default Opus) checks the diff and returns a verdict.
-   - Issues: the card goes back to **Doing**, the issues are sent to the task's session, Claude fixes them, and the new commit is
-     reviewed again, up to `justCode.maxReviews` (3). Then the issues stay on the card: **Send to Claude to fix** or **Review again**.
-   - The reviewer tests, not only reads: it runs the project's tests and build, and for UI changes with an Android device connected
-     (`adb devices`) opens the app on it and captures screenshots (`cli.js screenshot`, no shell redirect), then looks at them.
-     Screenshots show on the card. A review that ran no tests, or skipped a screenshot it could take, is sent back once.
-     It may run git read commands, common test/build runners, `docker compose exec/run`, `./gradlew`, `adb`, `npx playwright` and `curl`,
-     plus `justCode.reviewCommands`; it can never edit files.
-   - Pass: **✓ review passed**. With `justCode.autoMerge` it merges and moves to **Done** by itself (not when the reviewer marks it critical).
-   - Any time Claude works on a Review task again (you type, or it fixes), the card moves back to **Doing**.
-7. **Merge** (your approval): **✓ Merge** first merges the latest base into the task branch, inside the task's worktree.
-   - No conflicts: the branch is merged into base (`--no-ff`), the worktree and branch are removed, and the task is Done.
-   - Conflicts: they stay in the task's worktree, never in your checkout. The card lists the files. Use **Resolve with Claude**, or click a file to fix it in the editor, then **Mark resolved** and **✓ Merge** again.
-   - **Discard** deletes the branch and its work; the task goes back to To do.
-   - With a git remote, **Push PR** pushes the branch and opens a GitHub PR with `gh`.
-
-## Sync TASKS.md
-
-JustCode installs a Claude skill, `/just-code-ai-sync`, in `~/.claude/skills/`, so it shows as a skill chip in every project.
-Run it as a task (it runs in the project root). It previews, asks you, then applies the project's `TASKS.md` to the board:
-
-- Tasks go to the backlog; sprints are never created, you plan them. A `## Sprint X` heading only places tasks in a sprint you already made.
-- `- [ ]` todo, `- [~]` doing, `- [x]` (or ~~struck~~, ✅) done. Indented lines become the task's details.
-- Items removed from TASKS.md are archived. Only tasks that came from TASKS.md are changed; tasks made on the board never are,
-  and a task with an unmerged branch is not marked done.
-
-The open board updates by itself. The same sync from a terminal: `node <extension>/out/cli.js sync [--dry-run]`.
-
-## Permission prompts
-
-**Don't want to click?** Per task and as the default in ⚙ Settings, *Permissions* can be **Ask me**, **Auto-edit** (file edits approved, commands
-asked), **Auto (Claude decides)** (its own classifier approves what it judges safe), **Allow everything ⚠** (no prompts at all; confirmed once
-per task, use only for work you trust) or **Plan only**. Narrower and safer: **Always allow these without asking** in ⚙ Settings
-(`justCode.allowedTools`), rules like `Bash(docker compose:*)`, `Bash(npm run:*)`, `Bash(cd:*)`, `Edit`, applied to every task; a compound
-command like `cd x && docker compose exec …` needs a rule for each part. Settings saved on the board are kept by JustCode itself (and also
-written to VS Code's settings when possible), so saving never fails on a settings registry that is out of date.
-
-A card that is waiting shows what Claude asks and **the buttons of Claude's own menu**: one per choice, labeled with its text
-(a `cd … && …` command offers only **Yes** and **No**; a file write may add “Yes, and switch to accept edits”; others add “Yes, and always
-allow …”). Each button sends its own number, checked against the live menu first, so the card never offers a choice that is not there.
-Answers are sent as menu number keys plus
-Enter, never as arrow keys, and only when the prompt is really on screen; if Claude does not take the answer, the card says so.
-A message from the board (review fixes, “continue after the limit”) is never sent while a permission prompt or other menu is on screen:
-the paste wrapper starts with an Esc byte, which a menu reads as “No”, cancelling it and every tool call queued behind it (that is how a
-whole batch of writes ends up “User rejected”). Without bracketed-paste support the board sends one plain line instead. Every Esc the board
-sends is logged with its source in **Output → JustCode**, and the header shows the installed version (`v0.4.3`).
-Task sessions are kept from linking to your editor (`CLAUDE_CODE_AUTO_CONNECT_IDE=false`): linked, Claude Code opens a diff tab for every
-edit and waits there, where the card's buttons cannot answer.
-
-## Usage limits
-
-The header shows how much of your **5-hour** and **weekly** Claude limits are used (`5h 51% · wk 19%`), read from Claude Code's own
-status data, so it is exact. From 85% a banner warns you. When a limit stops work:
-- queued tasks wait, tasks the limit cut short are marked **⏳ waiting for reset**, and a reviewer that could not run shows
-  **review couldn't run** (never sent to Claude as "issues to fix");
-- after the reset (the banner says when; **Try again now** skips the wait) the tasks are told to continue exactly where they stopped,
-  failed reviews are retried and the queue restarts.
-
-## Keeping cards moving
-
-Every card says what is happening or what to do next (“→ The AI reviewer checks this next…”, “→ Reviewer passed. Press ✓ Merge…”).
-Nothing waits for a click the board can do itself: a Review card that was never reviewed gets reviewed, a failed review whose session was
-closed sends its issues back to Claude, and **✓ Merge ready (N)** merges every reviewed, non-critical task one at a time.
-Gitignored files listed in `justCode.worktreeCopy` (default `.env`, `.env.local`) are copied into each task's worktree so tests can run.
-
-## Terminal modal
-
-Opens on the live Claude session. Under it, a message box (Enter to send, **Esc** to interrupt) types into the session even if the
-terminal itself doesn't have keyboard focus. **✳ Open in Claude Code** continues the session there; **Log** shows the saved transcript.
-
-## Git
-
-- No git repo? The first run creates a local one (`git init`, no remote) and commits the current files.
-  If there is no `.gitignore`, `node_modules/`, `.env`, `.env.*` and `.DS_Store` are excluded first, so secrets are not committed.
-- `.justcode/` is excluded through `.git/info/exclude`; your `.gitignore` is not changed.
-- Before a branch task starts, uncommitted files in the project folder are committed on your current branch
-  ("chore: snapshot project files for JustCode tasks"), so the task sees the project as it is. `.env`, `node_modules/`,
-  `*.vsix` and `.claude/settings.local.json` stay out unless your `.gitignore` covers them; files over 10 MB are never committed.
-  A task whose worktree is behind is brought up to date, and its resumed session is told.
-- Each task works in `.justcode/worktrees/<id>` on branch `jc/<title>-<id>`, cut from the branch you had checked out.
-  Your own checkout is never switched. Parallel tasks never touch each other's files.
-- Project agents, skills and settings that are not committed yet are passed to Claude on the command line,
-  so a worktree still has them and the auto-commit never picks them up.
-
-## Processes
-
-- Claude runs in the extension host, not in the board. Closing or hiding the board never stops a run; reopening it replays the output.
-- **■ Stop** ends a run. Closing the VS Code window ends all of its runs.
-- Sessions are saved by Claude Code. After a reload, **↻ Resume** continues where the task left off; uncommitted work stays in the worktree.
-- JustCode learns what a session is doing from Claude Code hooks (Stop, Notification, UserPromptSubmit, PostToolUse) added
-  with `--settings` for its runs only. Your project's own hooks keep running.
-
-## Settings
-
-| Setting | Default | |
-|---|---|---|
-| `justCode.claudePath` | auto | Path to `claude` |
-| `justCode.maxParallel` | 1 | Tasks Run all keeps going at once |
-| `justCode.defaultMode` | `default` | Permissions for new tasks |
-| `justCode.plannerModel` | `opus` | Model for Plan with Claude |
-| `justCode.taskModel` | `sonnet` | Model for task runs and conflict resolving |
-
-## Limits
-
-- **Claude Code** button: the Claude Code extension looks for sessions of the folder it runs in. A task's session belongs
-  to its worktree, so the extension may not find it. Then use **▸ Terminal** or **↻ Resume** on the card.
-- macOS and Linux. Windows is untested (the status hooks use `printf`).
-
-## Release
-
-Push a version tag; GitHub Actions builds both packages and attaches them to the release:
-
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-Install from the latest release (Linux, e.g. Devin):
+From a release (on a Mac, use `just-code-mac.vsix` instead):
 
 ```sh
 curl -LO https://github.com/JustineQinLao/just-code-ai/releases/latest/download/just-code-linux-x64.vsix
 code --install-extension just-code-linux-x64.vsix
 ```
 
-On a Mac, use `just-code-mac.vsix` instead.
+From source:
+
+```sh
+npm install
+npm run package          # type-checks, bundles to out/, writes just-code-1.0.0.vsix
+code --install-extension just-code-1.0.0.vsix
+```
+
+You can also open this folder in VS Code and press F5 (run `npm run compile` first).
+
+## Quick start
+
+1. Run **JustCode: Open Board**, or click **JustCode** in the status bar.
+2. Work through the **setup checklist** at the top until every line has a ✓. Each line that fails has a button that
+   fixes it.
+3. Type a task, for example *"Add a dark mode toggle to the settings page"*, and press **⌘/Ctrl+Enter** to add it and
+   run it.
+4. Watch the card:
+   - **Working**: Claude is building in the task's own branch.
+   - **Needs you**: Claude asked a question or wants approval. Answer it on the card.
+   - **Review**: the AI reviewer ran the tests and checked the diff. Issues go back to Claude by themselves.
+   - Press **✓ Merge** when it passes.
+
+The full walkthrough is in [docs/GUIDE.md](docs/GUIDE.md), or press **?** on the board.
+
+## How it works
+
+| | |
+|---|---|
+| **Sessions** | Each task runs through the Claude Agent SDK, using the `claude` CLI you installed and its login. Approvals and questions arrive as structured data and are answered by the buttons on the card. No terminal is scraped. |
+| **Isolation** | Each task works in `.justcode/worktrees/<id>` on branch `jc/<title>-<id>`. Your checkout is never switched, and parallel tasks never share files. |
+| **Permissions** | *Auto* (default, Claude's classifier), *Auto-edit*, *Ask me*, *Plan only*, *Allow everything ⚠*. You can change the mode per task, even while it runs. "Always allow" rules are stored in `.justcode/board.json` and given to every task in the project. Rules for every project go under ⚙ Settings. |
+| **Review** | After each finished turn, a read-only reviewer runs your tests and build, then returns a verdict. It uses your project's `reviewer` agent if there is one, and can take Android/Playwright screenshots of UI changes. If it fails, the issues go back to Claude, up to 3 rounds. If it passes, you merge, or JustCode merges automatically when that is turned on. |
+| **Merge** | The latest base is merged into the task branch first, inside the task's folder, so conflicts never touch your checkout. **Resolve with Claude** fixes them. The branch is then merged with `--no-ff`, and the task folder and branch are removed. |
+| **Remote** | **📱 Continue on phone** closes the board's session and resumes it as `claude --resume <id> --remote-control` in a terminal. The task then shows in the Claude app and on claude.ai/code. Close the terminal to bring it back to the board, where it is committed and reviewed. This needs a Claude account login, not an API key. |
+| **Limits** | The header shows your 5-hour and weekly plan usage, read from Claude's own rate-limit events. At the limit, tasks pause and continue after the reset. |
+| **Lifecycle** | Closing the board never stops work. An idle Claude process closes after 10 minutes and resumes with its full history when needed. Closing VS Code ends every process; tasks that were mid-step continue when the window opens again. Task folders without a task are cleaned up at startup. |
+
+## Safety
+
+- JustCode asks before it creates a git repository, and before it commits uncommitted files ("Commit and run" or "Run
+  without them").
+- These are kept out of git through `.git/info/exclude` (your `.gitignore` is not changed):
+  - `.env*`, keys and certificates (`*.pem`, `*.key`, `id_rsa*`, …)
+  - `credentials*.json`, `.npmrc`, `*.tfstate`
+  - `node_modules/`, `.venv/`
+  - the files listed in `justCode.worktreeCopy`
+- `.env` and `.env.local` are copied into each task's folder so tests can run. They are never committed.
+- Settings files are passed to Claude as file paths, never on the command line.
+- An `ANTHROPIC_API_KEY` in your environment is not passed to Claude. Tasks use your Claude login unless you set a key
+  with **JustCode: Use an Anthropic API Key**; the key is kept in VS Code's secret storage.
+- *Allow everything* asks you to confirm each time you choose it.
+
+## Settings
+
+The everyday settings are on the board (⚙). All of them are also in VS Code Settings under *JustCode*.
+
+| Setting | Default | |
+|---|---|---|
+| `justCode.defaultMode` | `auto` | Permissions for new tasks |
+| `justCode.maxParallel` | 1 | Tasks **Run all** keeps in progress at once |
+| `justCode.taskModel` / `reviewModel` / `plannerModel` | `sonnet` / `opus` / `opus` | Models |
+| `justCode.autoReview` | true | AI review after each finished task |
+| `justCode.autoMerge` | false | Merge automatically when the review passes (never when it is flagged critical) |
+| `justCode.maxReviews` | 3 | Review rounds before it waits for you |
+| `justCode.reviewTimeoutMinutes` | 20 | A review running longer than this is stopped |
+| `justCode.reviewCommands` | [] | Extra commands the reviewer may run |
+| `justCode.allowedTools` | [] | Rules allowed in every project, e.g. `Bash(npm run:*)` |
+| `justCode.worktreeCopy` | `.env`, `.env.local` | Gitignored files copied into each task's folder |
+| `justCode.idleMinutes` | 10 | Idle Claude processes close after this long |
+| `justCode.claudePath` | auto | Path to `claude`, if it is not found automatically |
+
+## TASKS.md sync (optional)
+
+**JustCode: Install the TASKS.md Sync Skill** adds `/just-code-ai-sync` to `~/.claude/skills`. **✦ Initialize**
+runs the skill as a task and adds it first if needed. The skill:
+
+- drafts agents, skills, `CLAUDE.md` and `TASKS.md` where the project has none;
+- syncs `TASKS.md` into the board: `- [ ]` todo, `- [~]` doing, `- [x]` done, with indented lines as details.
+
+Items removed from `TASKS.md` are archived. Tasks made on the board are never touched.
+
+You can also run the sync from a terminal: `node <extension>/out/cli.js sync [--dry-run]`.
+
+## Development
+
+```sh
+npm install
+npm run compile    # tsc --noEmit, then esbuild bundles out/extension.js and out/cli.js (SDK included)
+npm test           # node:test unit tests (policy, verdicts, limits, store, git, session)
+npm run package    # VSIX
+```
+
+| File | Role |
+|---|---|
+| `src/session.ts` | One task's Claude session through the Agent SDK: messages, approvals, agent map |
+| `src/runner.ts` | Per project: worktrees, queue, turn ends, review, merge, cleanup |
+| `src/extension.ts` | VS Code wiring: board webview, setup fixes, Remote Control hand-off, status bar |
+| `src/policy.ts` | Permission rules ("Always allow") |
+| `media/board.js`, `media/board.css` | The board UI |
+
+## Release
+
+Push a version tag. GitHub Actions builds the VSIX and attaches it to the release.
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+## Limits
+
+- Windows: the code avoids POSIX-only tools, but it has not been tested there yet.
+- Remote Control needs a Pro, Max, Team or Enterprise login. On Team and Enterprise, an admin must turn it on.
+- Using a Claude plan login through the Agent SDK is meant for your own use. Anthropic's terms do not allow offering
+  claude.ai login inside products you distribute to others without their approval. For that, use an API key.

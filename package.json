@@ -1,12 +1,17 @@
 {
   "name": "just-code",
   "displayName": "JustCode",
-  "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.4.6",
+  "description": "Task board that runs Claude Code on each task in its own branch: approvals on the card, AI review, one-click merge, agent map, continue on your phone",
+  "version": "1.0.0",
   "publisher": "justine",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JustineQinLao/just-code-ai.git"
+  },
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.90.0",
+    "node": ">=18.14.0"
   },
   "main": "./out/extension.js",
   "activationEvents": [
@@ -23,6 +28,18 @@
       {
         "command": "justCode.addProject",
         "title": "JustCode: Add Project"
+      },
+      {
+        "command": "justCode.setup",
+        "title": "JustCode: Check Setup"
+      },
+      {
+        "command": "justCode.setApiKey",
+        "title": "JustCode: Use an Anthropic API Key (optional)"
+      },
+      {
+        "command": "justCode.installSyncSkill",
+        "title": "JustCode: Install the TASKS.md Sync Skill"
       }
     ],
     "configuration": {
@@ -31,63 +48,77 @@
         "justCode.claudePath": {
           "type": "string",
           "default": "",
-          "description": "Path to the claude CLI (auto-detected if empty)"
-        },
-        "justCode.maxParallel": {
-          "type": "integer",
-          "default": 1,
-          "minimum": 1,
-          "maximum": 6,
-          "description": "Tasks in progress at once. Each holds its slot until it is merged, so 1 (default) runs Run all strictly one at a time, in board order, each task building on the previous one's merged work. More runs several side by side in separate worktrees."
+          "description": "Path to the claude CLI. Empty: found automatically (PATH, ~/.local/bin, Homebrew, npm global)."
         },
         "justCode.defaultMode": {
           "type": "string",
           "enum": [
-            "default",
-            "acceptEdits",
             "auto",
-            "bypassPermissions",
-            "plan"
+            "acceptEdits",
+            "default",
+            "plan",
+            "bypassPermissions"
           ],
-          "default": "default",
+          "enumItemLabels": [
+            "Auto (recommended)",
+            "Auto-edit",
+            "Ask me",
+            "Plan only",
+            "Allow everything"
+          ],
+          "default": "auto",
           "enumDescriptions": [
-            "Ask before edits and commands (approve on the card)",
-            "Auto-approve file edits, ask for commands",
-            "Claude decides what is safe (its own classifier); asks only when unsure",
-            "Allow everything: NO prompts at all. Use only for work you trust",
-            "Read-only planning"
-          ]
-        },
-        "justCode.plannerModel": {
-          "type": "string",
-          "default": "opus",
-          "description": "Model for Plan with Claude (alias like opus, sonnet, haiku, or a full model id). Empty = your Claude default."
+            "Claude's safety classifier approves what is safe and asks you only when unsure",
+            "File edits are approved; commands outside your rules ask",
+            "Every edit and command outside your rules asks on the card",
+            "Read-only: Claude plans, changes nothing",
+            "No approvals at all. Only for work you trust"
+          ],
+          "description": "Permissions for new tasks."
         },
         "justCode.taskModel": {
           "type": "string",
           "default": "sonnet",
-          "description": "Model for task runs and conflict resolving. Empty = your Claude default."
-        },
-        "justCode.autoReview": {
-          "type": "boolean",
-          "default": true,
-          "description": "After a branch task's turn ends, an AI reviewer checks its diff. Issues go back to the task to fix, then it is reviewed again."
+          "description": "Model for tasks (alias like opus, sonnet, haiku, or a full model id). Empty: your Claude default."
         },
         "justCode.reviewModel": {
           "type": "string",
           "default": "opus",
           "description": "Model for the AI reviewer."
         },
-        "justCode.maxReviews": {
+        "justCode.plannerModel": {
+          "type": "string",
+          "default": "opus",
+          "description": "Model for Plan with Claude."
+        },
+        "justCode.maxParallel": {
           "type": "integer",
-          "default": 3,
+          "default": 1,
           "minimum": 1,
-          "description": "Failed reviews before the fix loop stops and waits for you."
+          "maximum": 6,
+          "description": "Tasks Run all keeps in progress at once. 1: one after another, each building on the previous one's merged work."
+        },
+        "justCode.autoReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "An AI reviewer checks each finished task, and its issues go back to Claude to fix."
         },
         "justCode.autoMerge": {
           "type": "boolean",
           "default": false,
-          "description": "Merge into the base branch automatically when the AI review passes (not when it flags the change critical)."
+          "description": "Merge automatically when the AI review passes (never when it flags the change critical)."
+        },
+        "justCode.maxReviews": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "description": "Review rounds before the fix loop stops and waits for you."
+        },
+        "justCode.reviewTimeoutMinutes": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 2,
+          "description": "A review still running after this long is stopped."
         },
         "justCode.reviewCommands": {
           "type": "array",
@@ -95,7 +126,15 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra command prefixes the AI reviewer may run (e.g. \"make test\", \"flutter test\"). Built in: git read commands, common test/build runners, docker compose exec/run, ./gradlew, adb, npx playwright, curl."
+          "description": "Extra command prefixes the reviewer may run (e.g. \"make check\"). Built in: git read commands, npm/yarn/pnpm/bun scripts, common test and build runners, docker compose exec/run, gradle, adb, playwright, curl."
+        },
+        "justCode.allowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Rules approved for every task in every project, e.g. \"Bash(npm run:*)\", \"Edit\". Each project also keeps the rules you approve with \"Always\" on a card."
         },
         "justCode.worktreeCopy": {
           "type": "array",
@@ -106,40 +145,31 @@
             ".env",
             ".env.local"
           ],
-          "description": "Gitignored files copied from the project folder into each task's worktree (never committed, never overwritten), so tests that need them run. A worktree only has committed files."
+          "description": "Gitignored files copied into each task's copy of the project so its tests can run. They are never committed."
         },
-        "justCode.freshSessionKB": {
-          "type": "number",
-          "default": 600,
-          "description": "Every task has its own fresh Claude session. Review fixes and the continue-after-limit step keep using it, unless its saved transcript is bigger than this many KB: then a new session starts with a short handoff instead, so long tasks don't drag their history into every round. 0 = always start fresh for those steps; -1 = never."
-        },
-        "justCode.allowedTools": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Rules approved for every task without asking, e.g. \"Bash(docker compose:*)\", \"Bash(npm run:*)\", \"Bash(cd:*)\", \"Edit\". A compound command like `cd x && docker compose exec \u2026` needs a rule for each part. Narrower and safer than 'Allow everything'."
+        "justCode.idleMinutes": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "description": "A task's Claude process that has been idle this long is closed to free memory. It resumes with its full history when needed."
         }
       }
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p .",
-    "postinstall": "node scripts/fix-pty.js",
-    "test": "tsc -p . && node --test out/test/"
+    "compile": "tsc -p . --noEmit && node build.mjs",
+    "watch": "node build.mjs --watch",
+    "test": "tsc -p . --outDir out-test && node --test out-test/test/*.test.js",
+    "package": "npm run compile && npx --yes @vscode/vsce package --allow-missing-repository --skip-license",
+    "vscode:prepublish": "npm run compile"
   },
   "dependencies": {
-    "@xterm/addon-fit": "^0.10.0",
-    "@xterm/addon-serialize": "^0.13.0",
-    "@xterm/headless": "^5.5.0",
-    "@xterm/xterm": "^5.5.0",
-    "node-pty": "^1.0.0"
+    "@anthropic-ai/claude-agent-sdk": "0.3.312"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.2",
     "typescript": "^5.4.0"
   },
   "bin": {
