@@ -174,7 +174,8 @@ function renderBoard() {
   board.innerHTML = '';
   for (const [st, label] of COLS) {
     const list = tasks.filter(t => t.status === st);
-    const col = h(`<div class="col" data-status="${st}"><h2><span>${label}</span><span>${list.length}</span></h2></div>`);
+    const col = h(`<div class="col" data-status="${st}"><h2><span>${label}</span><span class="row">${list.length ? '<button class="clear" title="Delete every task in this column">Clear</button>' : ''}<span>${list.length}</span></span></h2></div>`);
+    col.querySelector('.clear')?.addEventListener('click', () => send({ type: 'clear', column: label, ids: list.map(t => t.id) }));
     if (!list.length) col.append(h('<div class="empty">Drop here</div>'));
     for (const t of list) col.append(card(t));
     col.ondragover = e => { e.preventDefault(); col.classList.add('over'); };

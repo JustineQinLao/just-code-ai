@@ -60,22 +60,17 @@ export function parseTasks(md: string): MdTask[] {
 
 const key = (s: string) => s.toLowerCase().replace(/[`*_]/g, '').replace(/\s+/g, ' ').trim();
 
-export interface SyncResult { file: string; added: string[]; moved: string[]; archived: string[]; skipped: string[]; sprints: string[] }
+export interface SyncResult { file: string; added: string[]; moved: string[]; archived: string[]; skipped: string[] }
 
+// Applies TASKS.md to the board. Sprints are never created: you plan them on the board. A "## Sprint X" heading only
+// places tasks in a sprint of that name that already exists; everything else goes to the backlog.
 // Applies TASKS.md to the board. Only tasks that came from TASKS.md are updated or archived; tasks made on the
 // board are never touched. A task with a branch in progress is not moved to done from markdown (merge it on the board).
 export function syncTasks(store: Store, file: string, dryRun: boolean): SyncResult {
   const items = parseTasks(fs.readFileSync(file, 'utf8'));
-  const res: SyncResult = { file, added: [], moved: [], archived: [], skipped: [], sprints: [] };
+  const res: SyncResult = { file, added: [], moved: [], archived: [], skipped: [] };
   const fromMd = store.data.tasks.filter(t => t.src === 'TASKS.md');
-  const sprintId = (name?: string) => {
-    if (!name) return undefined;
-    const s = store.data.sprints.find(x => key(x.name) === key(name) && !x.closed);
-    if (s) return s.id;
-    if (dryRun && res.sprints.includes(name)) return undefined;
-    res.sprints.push(name);
-    return dryRun ? undefined : store.addSprint(name).id;
-  };
+  const sprintId = (name?: string) => name ? store.data.sprints.find(x => key(x.name) === key(name) && !x.closed)?.id : undefined;
   const seen = new Set<string>();
   for (const it of items) {
     const k = key(it.title);
@@ -85,7 +80,6 @@ export function syncTasks(store: Store, file: string, dryRun: boolean): SyncResu
     if (!t) {
       res.added.push(it.title);
       if (!dryRun) store.addTask({ title: it.title, description: it.description, sprintId: sprintId(it.sprint), mode: 'default', status: it.status, src: 'TASKS.md' });
-      else sprintId(it.sprint);
       continue;
     }
     if (t.src !== 'TASKS.md' || t.status === it.status) continue;
@@ -106,6 +100,6 @@ export function syncTasks(store: Store, file: string, dryRun: boolean): SyncResu
 
 export function formatResult(r: SyncResult, dryRun: boolean) {
   const sec = (label: string, xs: string[]) => xs.length ? `${label} (${xs.length}):\n${xs.map(x => `  - ${x}`).join('\n')}` : '';
-  const body = [sec('New sprints', r.sprints), sec('Add', r.added), sec('Move', r.moved), sec('Archive', r.archived), sec('Skipped', r.skipped)].filter(Boolean).join('\n');
+  const body = [sec('Add', r.added), sec('Move', r.moved), sec('Archive', r.archived), sec('Skipped', r.skipped)].filter(Boolean).join('\n');
   return `${dryRun ? 'Dry run, nothing written. ' : ''}${path.basename(r.file)} → JustCode board\n${body || 'Already in sync.'}`;
 }
