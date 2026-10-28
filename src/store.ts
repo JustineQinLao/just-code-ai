@@ -16,6 +16,7 @@ export interface Task {
   status: Status;
   agent?: string;             // .claude/agents name, run as `claude --agent <name>`
   mode: Mode;
+  where?: 'branch' | 'root';  // branch (default): own worktree + PR; root: runs in the project folder, no merge
   sessionId?: string;         // Claude session, fixed up front with --session-id
   base?: string;              // branch the task forks from and merges back into
   branch?: string;            // jc/<slug>-<id>

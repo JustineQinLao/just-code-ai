@@ -8,6 +8,23 @@ import { Runner } from './runner';
 import * as g from './git';
 import { claudeBin, discoverAgents, discoverSkills, plan } from './claude';
 
+// Project has its own Claude agents (.claude/agents/*.md).
+const hasSetup = (root: string) => { try { return fs.readdirSync(path.join(root, '.claude', 'agents')).some(f => f.endsWith('.md')); } catch { return false; } };
+
+const SETUP_PROMPT = `Set up Claude Code for this project.
+
+Read docs/project.md first if it exists (it describes the project), then CLAUDE.md, README and enough of the code to learn the stack, commands and conventions.
+
+Create these, never overwriting a file that already exists:
+- .claude/agents/planner.md: splits a goal into small tasks that can each be built, reviewed and merged on their own. Frontmatter model: opus
+- .claude/agents/implementer.md: builds one task following this project's conventions, and runs its tests or build. Frontmatter model: sonnet
+- .claude/agents/reviewer.md: reviews a diff for bugs, missed edge cases and convention breaks. Frontmatter model: opus
+- .claude/skills/<name>/SKILL.md for recurring workflows this project clearly has (for example running tests, a release, a sync). Only ones that apply.
+- CLAUDE.md, if missing: stack, how to run, test and build, and conventions.
+
+Agent files start with frontmatter: name, description, model, and optionally tools. Tailor every file to this project; nothing generic.
+Finish with a short list of what you created.`;
+
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 const CLAUDE_EXT = 'anthropic.claude-code';
 const CLAUDE_OPEN = 'claude-vscode.primaryEditor.open'; // (sessionId?, prompt?)
@@ -99,6 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
           running: states.filter(x => x === 'running').length, waiting: states.filter(x => x === 'waiting').length };
       }), root: r.root,
       board: { ...r.store.data, tasks },
+      setup: hasSetup(r.root),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
       git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
@@ -156,7 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
     switch (m.type) {
       case 'addTask': {
-        const task = s.addTask({ title: m.title, description: m.description || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined, mode: m.mode });
+        const task = s.addTask({ title: m.title, description: m.description || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined, mode: m.mode, where: m.where === 'root' ? 'root' : undefined });
         if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
         break;
       }
@@ -194,6 +212,11 @@ export function activate(context: vscode.ExtensionContext) {
       case 'remotePr': await r.remotePr(m.id); break;
       case 'openUrl': vscode.env.openExternal(vscode.Uri.parse(m.url)); break;
       case 'plan': return runPlan(r, m);
+      case 'setupClaude': {
+        const task = s.addTask({ title: 'Set up Claude for this project', description: SETUP_PROMPT, mode: 'acceptEdits', where: 'root' });
+        await r.run(task.id);
+        return open(task.id);
+      }
       case 'settings':
         for (const [k, v] of Object.entries(m.values)) await cfg().update(k, v, vscode.ConfigurationTarget.Global);
         return push();

@@ -13,6 +13,7 @@ let S = null;
 
 const COLS = [['todo', 'To do'], ['doing', 'Doing'], ['review', 'Review'], ['done', 'Done']];
 const MODES = { default: 'Ask me', acceptEdits: 'Auto-edit', plan: 'Plan only' };
+const WHERE = { branch: 'Own branch (PR)', root: 'Project root' };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -33,6 +34,7 @@ app.innerHTML = `
     <button id="closeSprint" hidden>Close sprint</button>
     <span class="grow"></span>
     <label class="muted small"><input type="checkbox" id="archived"> archived</label>
+    <button id="setupClaude" hidden title="This project has no .claude/agents. Claude reads docs/project.md and the code, then creates agents and skills for it.">✦ Set up Claude</button>
     <button id="plan">✦ Plan with Claude</button>
     <button id="runAll" class="primary">▶ Run all</button>
   </div>
@@ -42,6 +44,7 @@ app.innerHTML = `
       <select id="target" title="Backlog or sprint"></select>
       <select id="agent" title="Agent from .claude/agents"></select>
       <select id="mode" title="Permissions">${opts(Object.entries(MODES))}</select>
+      <select id="where" title="Own branch: isolated copy, reviewed and merged. Project root: runs in the project folder itself (sync, deploy, release…)">${opts(Object.entries(WHERE))}</select>
       <button id="add" class="primary">Add</button>
     </div>
     <textarea id="desc" placeholder="Details, acceptance criteria (optional)" hidden></textarea>
@@ -58,6 +61,7 @@ $('newSprint').onclick = () => sprintDialog();
 $('activate').onclick = () => send({ type: 'activateSprint', sprintId: ui.view });
 $('closeSprint').onclick = () => send({ type: 'closeSprint', sprintId: ui.view });
 $('plan').onclick = () => planDialog();
+$('setupClaude').onclick = () => send({ type: 'setupClaude' });
 $('runAll').onclick = () => {
   if (S.board.tasks.some(t => t.queued)) return send({ type: 'cancelQueue' });
   send({ type: 'runAll', ids: visible().filter(t => t.status === 'todo').map(t => t.id) });
@@ -67,7 +71,9 @@ const add = () => {
   let title = $('title').value.trim(), description = $('desc').value.trim();
   if (!title && description) [title, description] = [description.split('\n')[0], description.split('\n').slice(1).join('\n').trim()];
   if (!title) return $('title').focus();
-  send({ type: 'addTask', title, description, images: images.splice(0),  sprintId: $('target').value, agent: $('agent').value, mode: $('mode').value });
+  // A bare /skill is usually a project-wide command, so it runs in the project root unless you chose otherwise.
+  const where = $('where').dataset.touched ? $('where').value : (title.startsWith('/') ? 'root' : 'branch');
+  send({ type: 'addTask', title, description, where, images: images.splice(0),  sprintId: $('target').value, agent: $('agent').value, mode: $('mode').value });
   $('title').value = ''; $('desc').value = ''; renderThumbs(); $('title').focus();
 };
 $('add').onclick = add;
@@ -122,6 +128,7 @@ function render() {
   $('activate').hidden = !inSprint || inSprint.active;
   $('closeSprint').hidden = !inSprint;
   $('archived').checked = ui.archived;
+  $('setupClaude').hidden = S.setup || S.board.tasks.some(t => t.title === 'Set up Claude for this project' && t.status !== 'done');
   const keep = (sel, list) => { const v = sel.value; sel.innerHTML = opts(list, v); if ([...sel.options].some(o => o.value === v)) sel.value = v; };
   keep($('target'), [['', 'Backlog'], ...live.map(s => [s.id, s.name])]);
   if (!$('target').dataset.touched && inSprint) $('target').value = inSprint.id;
@@ -184,6 +191,7 @@ function card(t) {
       t.agent && `<span class="chip">@${esc(t.agent)}</span>`,
       t.images?.length && `<span class="chip">🖼 ${t.images.length}</span>`,
       t.mode !== 'default' && `<span class="chip">${MODES[t.mode]}</span>`,
+      t.where === 'root' && '<span class="chip" title="Runs in the project folder, no branch">project root</span>',
       t.queued && '<span class="chip">queued</span>',
       t.run === 'waiting' && '<span class="chip warn">needs approval</span>',
       t.run === 'running' && '<span class="chip">working…</span>',
@@ -214,6 +222,7 @@ function card(t) {
     if (S.git.remote && !t.pr) btn('Push PR', () => send({ type: 'remotePr', id: t.id }), '', 'Push the branch and open a GitHub PR (gh)');
     btn('Discard', () => send({ type: 'discard', id: t.id }), 'danger');
   }
+  if (!t.branch && t.status === 'review') btn('✓ Done', () => send({ type: 'move', id: t.id, status: 'done' }), 'primary');
   if (t.status === 'todo') btn('Edit', () => taskDialog(t));
   if (t.status === 'done' && !t.archived) btn('Archive', () => send({ type: 'archive', id: t.id }));
   btn('🗑', () => send({ type: 'delete', id: t.id }), 'danger', 'Delete task');
@@ -310,8 +319,9 @@ function taskDialog(t) {
     <label>Details<textarea name="description">${esc(t.description)}</textarea></label>
     <div class="row"><label>Sprint<select name="sprintId">${opts([['', 'Backlog'], ...sprints().map(s => [s.id, s.name])], t.sprintId ?? '')}</select></label>
     <label>Agent<select name="agent">${opts([['', 'No agent'], ...S.agents.map(a => [a.name, a.name])], t.agent ?? '')}</select></label>
-    <label>Permissions<select name="mode">${opts(Object.entries(MODES), t.mode)}</select></label></div>`,
-  d => send({ type: 'editTask', id: t.id, patch: { title: d.title.trim(), description: d.description.trim() || undefined, sprintId: d.sprintId || undefined, agent: d.agent || undefined, mode: d.mode } }));
+    <label>Permissions<select name="mode">${opts(Object.entries(MODES), t.mode)}</select></label>
+    <label>Runs in<select name="where">${opts(Object.entries(WHERE), t.where ?? 'branch')}</select></label></div>`,
+  d => send({ type: 'editTask', id: t.id, patch: { title: d.title.trim(), description: d.description.trim() || undefined, sprintId: d.sprintId || undefined, agent: d.agent || undefined, mode: d.mode, where: d.where === 'root' ? 'root' : undefined } }));
 }
 
 const MODELS = [['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['', 'Claude default']];
@@ -350,6 +360,7 @@ function planDialog() {
 
 $('target').onchange = () => { $('target').dataset.touched = '1'; };
 $('mode').onchange = () => { $('mode').dataset.touched = '1'; };
+$('where').onchange = () => { $('where').dataset.touched = '1'; };
 
 /* ---------- host messages ---------- */
 
