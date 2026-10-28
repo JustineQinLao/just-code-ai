@@ -74,6 +74,7 @@ export function activate(context: vscode.ExtensionContext) {
       skills: discoverSkills(r.root),
       git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
       defaultMode: cfg().get('defaultMode', 'default'),
+      settings: { plannerModel: cfg().get('plannerModel', 'opus'), taskModel: cfg().get('taskModel', 'sonnet'), maxParallel: cfg().get('maxParallel', 1), defaultMode: cfg().get('defaultMode', 'default') },
       claudeExt: !!vscode.extensions.getExtension(CLAUDE_EXT),
     });
   }
@@ -160,6 +161,9 @@ export function activate(context: vscode.ExtensionContext) {
       case 'remotePr': await r.remotePr(m.id); break;
       case 'openUrl': vscode.env.openExternal(vscode.Uri.parse(m.url)); break;
       case 'plan': return runPlan(r, m);
+      case 'settings':
+        for (const [k, v] of Object.entries(m.values)) await cfg().update(k, v, vscode.ConfigurationTarget.Global);
+        return push();
     }
   }
 

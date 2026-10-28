@@ -24,7 +24,7 @@ const sprintName = id => S.board.sprints.find(s => s.id === id)?.name;
 const app = document.getElementById('app');
 app.innerHTML = `
   <div id="offline" class="banner" hidden>The board lost its connection to JustCode (usually after an update). Close this tab and run <b>JustCode: Open Board</b>, or reload the window.</div>
-  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><button id="guide">? Guide</button></header>
+  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><button id="settings">⚙ Settings</button><button id="guide">? Guide</button></header>
   <div class="row toolbar">
     <select id="view"></select>
     <button id="newSprint">+ Sprint</button>
@@ -71,6 +71,7 @@ const add = () => {
 };
 $('add').onclick = add;
 $('guide').onclick = () => guide();
+$('settings').onclick = () => settingsDialog();
 
 // Screenshots pasted anywhere in the add form are attached to the next task.
 function renderThumbs() {
@@ -292,6 +293,19 @@ function taskDialog(t) {
     <label>Agent<select name="agent">${opts([['', 'No agent'], ...S.agents.map(a => [a.name, a.name])], t.agent ?? '')}</select></label>
     <label>Permissions<select name="mode">${opts(Object.entries(MODES), t.mode)}</select></label></div>`,
   d => send({ type: 'editTask', id: t.id, patch: { title: d.title.trim(), description: d.description.trim() || undefined, sprintId: d.sprintId || undefined, agent: d.agent || undefined, mode: d.mode } }));
+}
+
+const MODELS = [['opus', 'Opus'], ['sonnet', 'Sonnet'], ['haiku', 'Haiku'], ['', 'Claude default']];
+function settingsDialog() {
+  const v = S.settings;
+  const model = (name, cur) => `<select name="${name}">${opts([...MODELS, ...(MODELS.some(([m]) => m === cur) ? [] : [[cur, cur]])], cur)}</select>`;
+  dialog(`<h3>Settings</h3>
+    <label>Planner model (Plan with Claude)${model('plannerModel', v.plannerModel)}</label>
+    <label>Task model (running tasks, resolving conflicts)${model('taskModel', v.taskModel)}</label>
+    <label>Run all: tasks at once<input name="maxParallel" type="number" min="1" max="6" value="${v.maxParallel}"></label>
+    <label>Default permissions for new tasks<select name="defaultMode">${opts(Object.entries(MODES), v.defaultMode)}</select></label>
+    <div class="small muted">Applies to new runs. An agent with its own <code>model:</code> may use that instead.</div>`,
+  d => send({ type: 'settings', values: { plannerModel: d.plannerModel, taskModel: d.taskModel, maxParallel: Math.min(6, Math.max(1, +d.maxParallel || 1)), defaultMode: d.defaultMode } }));
 }
 
 function planDialog() {
