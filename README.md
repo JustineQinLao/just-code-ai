@@ -51,6 +51,18 @@ Every action runs in the root of the project it was made in.
    - **Discard** deletes the branch and its work; the task goes back to To do.
    - With a git remote, **Push PR** pushes the branch and opens a GitHub PR with `gh`.
 
+## Sync TASKS.md
+
+JustCode installs a Claude skill, `/just-code-ai-sync`, in `~/.claude/skills/`, so it shows as a skill chip in every project.
+Run it as a task (it runs in the project root). It previews, asks you, then applies the project's `TASKS.md` to the board:
+
+- `## Sprint 1` / `## Backlog` headings place tasks; missing sprints are created.
+- `- [ ]` todo, `- [~]` doing, `- [x]` (or ~~struck~~, ✅) done. Indented lines become the task's details.
+- Items removed from TASKS.md are archived. Only tasks that came from TASKS.md are changed; tasks made on the board never are,
+  and a task with an unmerged branch is not marked done.
+
+The open board updates by itself. The same sync from a terminal: `node <extension>/out/cli.js sync [--dry-run]`.
+
 ## Git
 
 - No git repo? The first run creates a local one (`git init`, no remote) and commits the current files.

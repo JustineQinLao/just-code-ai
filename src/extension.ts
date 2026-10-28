@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { Store, Task } from './store';
@@ -53,6 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
       notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'));
     r.onChange(push);
     r.store.onChange(push);
+    r.store.watch();
     runners.set(root, r);
     return r;
   };
@@ -285,6 +287,41 @@ export function activate(context: vscode.ExtensionContext) {
     { dispose: () => { for (const r of runners.values()) r.dispose(); ptys.dispose(); } },
   );
   updateStatus();
+  installSyncSkill(context);
+}
+
+// ~/.claude/skills/just-code-ai-sync: lets Claude sync TASKS.md into the board from any project.
+// Rewritten on every activation so it always points at this version's CLI.
+export function installSyncSkill(context: vscode.ExtensionContext) {
+  const cli = path.join(context.extensionPath, 'out', 'cli.js');
+  const file = path.join(os.homedir(), '.claude', 'skills', 'just-code-ai-sync', 'SKILL.md');
+  const text = `---
+name: just-code-ai-sync
+description: Sync this project's TASKS.md into its JustCode board (new tasks, sprints, status changes; removed items archived). Use when the user says "sync tasks", "sync TASKS.md to JustCode", "/just-code-ai-sync", or after editing TASKS.md.
+---
+
+# Sync TASKS.md to the JustCode board
+
+The board is this project's \`.justcode/board.json\`. Run everything from the project root.
+
+1. Preview, which writes nothing:
+   \`node "${cli}" sync --dry-run\`
+2. Show the user the preview and ask them to confirm.
+3. On yes, apply it:
+   \`node "${cli}" sync\`
+   The open JustCode board updates by itself.
+
+If the CLI says there is no TASKS.md, offer to write one from docs/project.md (or the README): \`## Sprint 1\`, \`## Backlog\` headings with \`- [ ] task\` items, \`- [~]\` for doing, \`- [x]\` for done. Write it only after the user agrees, then sync.
+
+If the project has no \`.claude/agents\`, tell the user they can click **Set up Claude** on the JustCode board.
+
+Pass \`--file path/to/TASKS.md\` to sync a specific file. Only tasks that came from TASKS.md are changed; tasks made on the board are never touched, and a task with an unmerged branch is not marked done.
+`;
+  try {
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text);
+  } catch { /* no home dir access: the board still works */ }
 }
 
 // Kills every Claude process this window started, so none outlive it.

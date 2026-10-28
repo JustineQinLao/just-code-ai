@@ -108,7 +108,7 @@ function carryOver(root: string, worktree: string, statusFile: string): string[]
 }
 
 export function taskPrompt(t: Task) {
-  return [t.title, t.description,
+  return [t.title, t.description?.trim() === t.title.trim() ? undefined : t.description,
     t.images?.length && `Screenshots for this task (read them first):\n${t.images.map(f => `- ${f}`).join('\n')}`,
     t.where !== 'root' && 'Work only inside the current directory (this task\'s git worktree). JustCode commits your changes when you finish; do not push.']
     .filter(Boolean).join('\n\n');

@@ -279,6 +279,7 @@ export class Runner {
   }
 
   dispose() {
+    this.store.dispose();
     for (const id of [...this.watched.keys()]) this.unwatch(id);
     this.ev.removeAllListeners();
   }
