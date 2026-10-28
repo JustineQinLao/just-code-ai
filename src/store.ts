@@ -40,6 +40,7 @@ export class Store {
   constructor(readonly root: string) {
     this.file = path.join(root, '.justcode', 'board.json');
     this.board = this.read();
+    try { this.written = fs.readFileSync(this.file, 'utf8'); } catch { /* no board yet */ }
   }
 
   private read(): Board {
@@ -51,6 +52,16 @@ export class Store {
 
   // tmp + rename: a crash mid-write never leaves a half-written board.
   private written = '';
+
+  // Reloads if someone else (the sync CLI, another window) wrote the file since our last write, so a save
+  // never puts back a stale board over their changes.
+  private fresh() {
+    let text: string;
+    try { text = fs.readFileSync(this.file, 'utf8'); } catch { return; }
+    if (text === this.written) return;
+    this.written = text;
+    this.board = this.read();
+  }
 
   private save() {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
@@ -64,12 +75,9 @@ export class Store {
   // Picks up writes from outside (the sync CLI, another window), so the board shows them and never overwrites them.
   watch() {
     fs.watchFile(this.file, { interval: 1000 }, () => {
-      let text: string;
-      try { text = fs.readFileSync(this.file, 'utf8'); } catch { return; }
-      if (text === this.written) return;
-      this.written = text;
-      this.board = this.read();
-      this.ev.emit('change');
+      const before = this.written;
+      this.fresh();
+      if (this.written !== before) this.ev.emit('change');
     });
   }
   dispose() { fs.unwatchFile(this.file); this.ev.removeAllListeners(); }
@@ -81,6 +89,7 @@ export class Store {
   sprint(id: string) { return this.board.sprints.find(s => s.id === id); }
 
   addTask(t: Omit<Task, 'id' | 'created' | 'status'> & { status?: Status }) {
+    this.fresh();
     const task: Task = { status: 'todo', ...t, id: randomUUID().slice(0, 8), created: Date.now() };
     this.board.tasks.push(task);
     this.save();
@@ -88,6 +97,7 @@ export class Store {
   }
 
   updateTask(id: string, patch: Partial<Task>) {
+    this.fresh();
     const t = this.task(id);
     if (!t) return;
     Object.assign(t, patch);
@@ -97,11 +107,13 @@ export class Store {
   }
 
   deleteTask(id: string) {
+    this.fresh();
     this.board.tasks = this.board.tasks.filter(t => t.id !== id);
     this.save();
   }
 
   addSprint(name: string, goal?: string) {
+    this.fresh();
     const s: Sprint = { id: randomUUID().slice(0, 8), name, goal, active: !this.board.sprints.some(x => x.active) };
     this.board.sprints.push(s);
     this.save();
@@ -109,6 +121,7 @@ export class Store {
   }
 
   updateSprint(id: string, patch: Partial<Sprint>) {
+    this.fresh();
     const s = this.sprint(id);
     if (!s) return;
     if (patch.active) this.board.sprints.forEach(x => { x.active = false; });
@@ -118,6 +131,7 @@ export class Store {
 
   // Closing a sprint sends its unfinished tasks back to the backlog.
   closeSprint(id: string) {
+    this.fresh();
     for (const t of this.board.tasks) if (t.sprintId === id && t.status !== 'done') delete t.sprintId;
     const s = this.sprint(id);
     if (s) { s.closed = true; s.active = false; }
