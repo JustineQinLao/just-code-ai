@@ -34,7 +34,7 @@ app.innerHTML = `
     <button id="closeSprint" hidden>Close sprint</button>
     <span class="grow"></span>
     <label class="muted small"><input type="checkbox" id="archived"> archived</label>
-    <button id="setupClaude" hidden title="This project has no .claude/agents. Claude reads docs/project.md and the code, then creates agents and skills for it.">✦ Set up Claude</button>
+    <button id="setupClaude" title="Create the Claude setup (agents, skills, CLAUDE.md) and TASKS.md if missing, from docs/project.md, then sync the board. Runs by itself the first time a project that isn't set up is opened.">✦ Initialize</button>
     <button id="plan">✦ Plan with Claude</button>
     <button id="runAll" class="primary">▶ Run all</button>
   </div>
@@ -132,7 +132,7 @@ function render() {
   $('activate').hidden = !inSprint || inSprint.active;
   $('closeSprint').hidden = !inSprint;
   $('archived').checked = ui.archived;
-  $('setupClaude').hidden = S.setup || S.board.tasks.some(t => t.title === 'Set up Claude for this project' && t.status !== 'done');
+  $('setupClaude').disabled = S.board.tasks.some(t => t.init && t.live);
   const keep = (sel, list) => { const v = sel.value; sel.innerHTML = opts(list, v); if ([...sel.options].some(o => o.value === v)) sel.value = v; };
   keep($('target'), [['', 'Backlog'], ...live.map(s => [s.id, s.name])]);
   if (!$('target').dataset.touched && inSprint) $('target').value = inSprint.id;

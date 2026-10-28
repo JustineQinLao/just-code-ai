@@ -122,6 +122,7 @@ export function sessionArgs(o: { task: Task; root: string; worktree: string; sta
     '--permission-mode', task.mode,
     ...(o.model ? ['--model', o.model] : []),
     ...(task.agent ? ['--agent', task.agent] : []),
+    ...(task.allow?.length ? ['--allowedTools', ...task.allow] : []),
     ...carryOver(o.root, o.worktree, o.statusFile),
     ...(task.images?.length ? ['--add-dir', path.dirname(task.images[0])] : []), // attachments sit outside the worktree
     ...(o.resume ? ['--resume', task.sessionId!] : ['--session-id', task.sessionId!]),
