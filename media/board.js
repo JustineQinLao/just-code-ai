@@ -341,7 +341,12 @@ function openTerm(id, v) {
   termId = id;
   if (!termdlg.open) termdlg.showModal();
   renderTermHeader();
+  const had = terms.has(id);
   setView(v ?? 'term');
+  // A session that isn't running: ask for its saved last screen each time (a terminal created earlier in this
+  // window would otherwise show whatever it held, or nothing). Empty → the log is shown instead.
+  const t = S?.board.tasks.find(x => x.id === id);
+  if (had && !t?.live && t?.sessionId && (v ?? 'term') === 'term') send({ type: 'attach', id });
 }
 
 let headerKey = '';

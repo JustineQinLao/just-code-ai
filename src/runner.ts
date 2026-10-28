@@ -205,6 +205,7 @@ export class Runner {
   // Turn finished: commit what changed so the branch always holds the work, then move on in the queue.
   private async turnEnded(id: string) {
     this.state.set(id, 'idle');
+    this.ptys.save(id);
     const t = this.store.task(id);
     if (t?.worktree && !t.conflicts?.length) {
       try { await g.commitAll(t.worktree, t.title); } catch (e: any) { this.notify('error', `Commit failed: ${e.message}`, id); }
@@ -370,6 +371,7 @@ export class Runner {
   async remove(id: string) {
     const t = this.store.task(id);
     if (!t) return;
+    this.ptys.forget(id);
     await this.serial(() => this.cleanup(t)).catch(e => this.notify('error', e.message));
     fs.rmSync(path.join(this.root, '.justcode', 'attachments', id), { recursive: true, force: true });
     this.store.deleteTask(id);

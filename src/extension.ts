@@ -24,6 +24,7 @@ let current: string | undefined; // root shown on the board
 
 export function activate(context: vscode.ExtensionContext) {
   ptys = new Ptys();
+  ptys.dir = path.join(context.globalStorageUri.fsPath, 'screens');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'justCode.open';
   status.show();
