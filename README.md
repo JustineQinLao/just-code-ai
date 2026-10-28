@@ -27,10 +27,16 @@ Every action runs in the root of the project it was made in.
    - *Auto-edit*: file edits are approved automatically; commands still ask.
    - *Plan only*: read-only.
 
+   **Runs in**: *Own branch (PR)* (default) works in an isolated copy that you review and merge. *Project root* runs in the project
+   folder itself, for project-wide commands like sync, deploy or release; finish it with **✓ Done**. A task that is just a `/skill` defaults to Project root.
+
    Skills from `.claude/skills` and `.claude/commands` show under the box; click one to add `/skill` to the details.
 2. **Sprints** (optional): **+ Sprint**, then pick it in the view menu. **Set active** makes new tasks go there.
    **Close sprint** sends unfinished tasks back to the backlog.
-3. **Plan with Claude**: describe a goal. Claude reads the code read-only and proposes tasks. You pick which to
+3. **Set up Claude**: shown when the project has no `.claude/agents`. Claude reads `docs/project.md` (then CLAUDE.md, README, the code)
+   and creates a planner (Opus), implementer (Sonnet) and reviewer agent, matching skills, and CLAUDE.md if missing. Existing files are never overwritten.
+   It runs as a project-root task, so you watch and approve it in the card.
+4. **Plan with Claude**: describe a goal. Claude reads the code read-only and proposes tasks. You pick which to
    add, to the backlog, an existing sprint or a new one. A planner-like agent (planner, architect, lead) is preselected.
 4. **Run**: **▶ Run** on a card, or **▶ Run all** for every To do task in the current view. Run all keeps
    `justCode.maxParallel` tasks going (default 1) and starts the next when one finishes.

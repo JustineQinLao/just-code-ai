@@ -52,6 +52,7 @@ export class Runner {
 
   private async launch(t: Task, prompt?: string, size?: { cols: number; rows: number }) {
     const id = t.id;
+    if (t.where === 'root') return this.spawn(t, this.root, {}, prompt, size);
     const { base, branch, worktree } = await this.serial(async () => {
       await g.ensureRepo(this.root);
       const base = t.base ?? await g.currentBranch(this.root);
@@ -60,13 +61,19 @@ export class Runner {
       await g.addWorktree(this.root, worktree, branch, base);
       return { base, branch, worktree };
     });
+    await this.spawn(t, worktree, { base, branch, worktree }, prompt, size);
+  }
+
+  // Starts (or resumes) the task's session in `cwd`: its worktree, or the project root for root tasks.
+  private async spawn(t: Task, cwd: string, patch: Partial<Task>, prompt?: string, size?: { cols: number; rows: number }) {
+    const id = t.id;
     const sessionId = t.sessionId ?? randomUUID();
-    const resume = !!t.sessionId && sessionExists(worktree, sessionId);
-    const task = this.store.updateTask(id, { base, branch, worktree, sessionId, status: t.status === 'todo' ? 'doing' : t.status })!;
+    const resume = !!t.sessionId && sessionExists(cwd, sessionId);
+    const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status })!;
     const statusFile = this.statusFile(id);
     fs.writeFileSync(statusFile, '');
     this.watch(id);
-    this.ptys.start(id, worktree, this.bin(), sessionArgs({ task, root: this.root, worktree, statusFile, resume, prompt, model: this.model() }), size?.cols, size?.rows);
+    this.ptys.start(id, cwd, this.bin(), sessionArgs({ task, root: this.root, worktree: cwd, statusFile, resume, prompt, model: this.model() }), size?.cols, size?.rows);
     this.changed();
   }
 
@@ -129,8 +136,8 @@ export class Runner {
     const t = this.store.task(id);
     if (t?.worktree && !t.conflicts?.length) {
       try { await g.commitAll(t.worktree, t.title); } catch (e: any) { this.notify('error', `Commit failed: ${e.message}`, id); }
-      if (t.status === 'doing') this.store.updateTask(id, { status: 'review' });
     }
+    if (t?.status === 'doing') this.store.updateTask(id, { status: 'review' });
     this.changed();
     this.pump();
   }
