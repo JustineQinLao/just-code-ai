@@ -174,6 +174,14 @@ export function activate(context: vscode.ExtensionContext) {
         if (await confirm(`Delete "${t?.title}"? Its branch and uncommitted work are removed too.`, 'Delete')) await r.remove(m.id);
         break;
       case 'archive': s.updateTask(m.id, { archived: true }); break;
+      case 'clear': {
+        const ids: string[] = m.ids.filter((id: string) => s.task(id));
+        if (!ids.length) break;
+        const work = ids.filter(id => s.task(id)?.branch && s.task(id)?.status !== 'done').length;
+        const msg = `Delete all ${ids.length} task(s) in ${m.column}?${work ? ` ${work} of them have a branch; their work is deleted too.` : ''}`;
+        if (await confirm(msg, 'Delete all')) for (const id of ids) await r.remove(id);
+        break;
+      }
       case 'addSprint': s.addSprint(m.name, m.goal || undefined); break;
       case 'activateSprint': s.updateSprint(m.sprintId, { active: true }); break;
       case 'closeSprint':
@@ -297,7 +305,7 @@ export function installSyncSkill(context: vscode.ExtensionContext) {
   const file = path.join(os.homedir(), '.claude', 'skills', 'just-code-ai-sync', 'SKILL.md');
   const text = `---
 name: just-code-ai-sync
-description: Initialize and sync this project's JustCode board. Creates the Claude setup (.claude agents, skills, CLAUDE.md) and TASKS.md when missing, from docs/project.md, then syncs TASKS.md into the board (new tasks, sprints, status changes; removed items archived). Use when the user says "sync tasks", "initialize JustCode", "/just-code-ai-sync", or after editing TASKS.md.
+description: Initialize and sync this project's JustCode board. Creates the Claude setup (.claude agents, skills, CLAUDE.md) and TASKS.md when missing, from docs/project.md, then syncs TASKS.md into the board backlog (new tasks, status changes; removed items archived; sprints are left to the user). Use when the user says "sync tasks", "initialize JustCode", "/just-code-ai-sync", or after editing TASKS.md.
 ---
 
 # Initialize and sync the JustCode board
@@ -323,16 +331,17 @@ Also write \`CLAUDE.md\` at the project root if missing: stack, how to run, test
 
 ## 2. TASKS.md, if the project has none
 
-Write \`TASKS.md\` at the project root from docs/project.md (else the README, else the code): what is already built
-as \`- [x]\`, the next deliverable as \`## Sprint 1\` with \`- [ ]\` items, the rest under \`## Backlog\`. Each item is one
-task a developer could build, review and merge on its own; put details on indented lines under it.
+Write \`TASKS.md\` at the project root from docs/project.md (else the README, else the code), with a single
+\`## Backlog\` heading: what is already built as \`- [x]\`, everything else as \`- [ ]\` in build order. No sprint
+headings: the user plans sprints on the board. Each item is one task a developer could build, review and merge on its
+own; put details on indented lines under it.
 
 ## 3. Sync
 
 \`node "${cli}" sync\`
 
 The open JustCode board updates by itself. Finish with a short summary: what you created, and what the sync added,
-moved and archived.
+moved and archived. Sprints are not created; the user plans them on the board.
 
 Notes: \`--dry-run\` previews without writing; \`--file path/to/TASKS.md\` picks a file. Only tasks that came from
 TASKS.md are changed; tasks made on the board are never touched, and a task with an unmerged branch is not marked done.

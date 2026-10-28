@@ -35,7 +35,7 @@ Every action runs in the root of the project it was made in.
    **Close sprint** sends unfinished tasks back to the backlog.
 3. **Initialize** (automatic): the first time you open a project that isn't set up (no `.claude/agents`, or nothing for the board),
    JustCode runs `/just-code-ai-sync` in the project root with no prompts. Claude reads `docs/project.md` (else README, else the code) and creates
-   a planner (Opus), implementer (Sonnet) and reviewer agent, fitting skills, `CLAUDE.md` and `TASKS.md`, then syncs the board.
+   a planner (Opus), implementer (Sonnet) and reviewer agent, fitting skills, `CLAUDE.md` and `TASKS.md`, then syncs the tasks into the backlog (no sprints).
    Existing files are never overwritten. **✦ Initialize** runs it again on demand.
 4. **Plan with Claude**: describe a goal. Claude reads the code read-only and proposes tasks. You pick which to
    add, to the backlog, an existing sprint or a new one. A planner-like agent (planner, architect, lead) is preselected.
@@ -57,7 +57,7 @@ Every action runs in the root of the project it was made in.
 JustCode installs a Claude skill, `/just-code-ai-sync`, in `~/.claude/skills/`, so it shows as a skill chip in every project.
 Run it as a task (it runs in the project root). It previews, asks you, then applies the project's `TASKS.md` to the board:
 
-- `## Sprint 1` / `## Backlog` headings place tasks; missing sprints are created.
+- Tasks go to the backlog; sprints are never created, you plan them. A `## Sprint X` heading only places tasks in a sprint you already made.
 - `- [ ]` todo, `- [~]` doing, `- [x]` (or ~~struck~~, ✅) done. Indented lines become the task's details.
 - Items removed from TASKS.md are archived. Only tasks that came from TASKS.md are changed; tasks made on the board never are,
   and a task with an unmerged branch is not marked done.

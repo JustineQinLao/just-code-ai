@@ -117,3 +117,7 @@ dialog.termdlg .log { flex: 1; overflow: auto; font-family: var(--vscode-editor-
 .step.result .tx { color: var(--muted); }
 .step.error .tx, .step.error .ic { color: var(--err); }
 .step.say { margin-top: 4px; }
+
+.col h2 .row { gap: 6px; }
+.col h2 .clear { font-size: 10px; padding: 0 6px; letter-spacing: normal; text-transform: none; color: var(--muted); opacity: 0; transition: opacity .1s; }
+.col:hover h2 .clear, .col h2 .clear:focus { opacity: 1; }
