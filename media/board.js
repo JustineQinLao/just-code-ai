@@ -355,7 +355,7 @@ function mountTerm(id, slot) {
   let e = terms.get(id);
   if (!e) {
     const el = document.createElement('div');
-    el.style.height = '100%';
+    el.className = 'term-host'; // pinned to the slot's inner box (CSS), so fit() measures the real visible area
     slot.prepend(el);
     const term = new Terminal({ fontSize: 12, fontFamily: getComputedStyle(document.body).getPropertyValue('--vscode-editor-font-family') || 'Menlo, monospace', cursorBlink: true, theme: themeFromVscode(), scrollback: 5000 });
     const fit = new FitAddon.FitAddon();
@@ -374,10 +374,21 @@ function mountTerm(id, slot) {
     new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (el.isConnected && el.clientWidth) try { fit.fit(); } catch { /* hidden */ } }, 120); }).observe(el);
     e = { term, fit, el };
     terms.set(id, e);
+    // The editor font can finish loading after the first fit; rows measured with the fallback font overflow by a line.
+    document.fonts?.ready.then(() => refit(id));
     send({ type: 'attach', id });
   } else if (e.el.parentElement !== slot) slot.prepend(e.el);
   // Report the size once laid out: the pty may have started (at a guessed size) since the last fit.
   requestAnimationFrame(() => { try { e.fit.fit(); } catch { /* hidden */ } sendSize(id, true); });
+}
+
+// Fits the terminal to its box again and keeps the newest line in view.
+function refit(id) {
+  const e = terms.get(id);
+  if (!e || !e.el.isConnected || !e.el.clientHeight) return;
+  try { e.fit.fit(); } catch { /* hidden */ }
+  e.term.scrollToBottom?.();
+  sendSize(id);
 }
 
 // Sends the terminal's size to its pty, only when it changed (each resize makes Claude redraw the whole screen).
@@ -503,7 +514,7 @@ window.addEventListener('message', ({ data: m }) => {
   // Snapshot of the current screen, drawn while hidden so opening a terminal never shows it being rebuilt.
   else if (m.type === 'replay') {
     const e = terms.get(m.id);
-    if (e) { e.el.style.visibility = 'hidden'; e.term.reset(); e.term.write(m.data, () => { e.el.style.visibility = ''; }); }
+    if (e) { e.el.style.visibility = 'hidden'; e.term.reset(); e.term.write(m.data, () => { e.el.style.visibility = ''; refit(m.id); }); }
     const t = S?.board.tasks.find(x => x.id === m.id);
     if (!m.data && m.id === termId && view === 'term' && t && !t.live && t.sessionId) setView('log');
   }
