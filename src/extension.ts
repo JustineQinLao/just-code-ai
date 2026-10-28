@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext) {
       const show = level === 'error' ? vscode.window.showErrorMessage : level === 'warn' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
       // Approval prompts are only worth a toast when the board isn't on screen.
       if (level === 'warn' && taskId && panel?.visible) return;
-      show(text, ...(taskId ? ['Show'] : [])).then(c => c && open(taskId));
+      show(text, ...(taskId ? ['Show'] : [])).then(c => { if (c) { setCurrent(root); open(taskId); } });
     };
     r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
       notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'));
@@ -39,11 +39,36 @@ export function activate(context: vscode.ExtensionContext) {
     runners.set(root, r);
     return r;
   };
-  const roots = () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+  // Projects = the window's workspace folders + folders added with "+ Project" (kept across windows).
+  const workspace = () => (vscode.workspace.workspaceFolders ?? []).map(f => f.uri.fsPath);
+  const saved = () => context.globalState.get<string[]>('projects', []);
+  const roots = () => [...new Set([...workspace(), ...saved()])].filter(p => fs.existsSync(p));
+  const setCurrent = (root: string) => { current = root; void context.globalState.update('current', root); };
+  current = context.globalState.get<string>('current');
   const runner = () => {
     if (!current || !roots().includes(current)) current = roots()[0];
     return current ? runnerFor(current) : undefined;
   };
+
+  async function addProject() {
+    const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: true, openLabel: 'Add project' });
+    if (!picked?.length) return;
+    const paths = picked.map(u => u.fsPath);
+    await context.globalState.update('projects', [...new Set([...saved(), ...paths])]);
+    setCurrent(paths[0]);
+    push();
+  }
+
+  // Forgets the project (its files and board stay). Its runs are stopped first.
+  async function removeProject(root: string) {
+    const r = runners.get(root);
+    const live = r ? [...r.state.keys()].length : 0;
+    if (!await confirm(`Remove ${path.basename(root)} from JustCode?${live ? ` Its ${live} running task(s) will be stopped.` : ''} Files and the board are kept.`, 'Remove')) return;
+    if (r) { for (const id of r.state.keys()) r.stop(id); r.dispose(); runners.delete(root); }
+    await context.globalState.update('projects', saved().filter(p => p !== root));
+    if (current === root) current = undefined;
+    push();
+  }
 
   function updateStatus() {
     let run = 0, wait = 0;
@@ -62,13 +87,17 @@ export function activate(context: vscode.ExtensionContext) {
 
   async function post() {
     const r = runner();
-    if (!panel || !r) return panel?.webview.postMessage({ type: 'state', empty: true });
+    if (!panel || !r) return panel?.webview.postMessage({ type: 'state', empty: true, roots: [] });
     const tasks = r.store.data.tasks.map(t => ({
       ...t, run: r.state.get(t.id), live: ptys.has(t.id), queued: r.queued().includes(t.id), busy: r.isBusy(t.id),
     }));
     panel.webview.postMessage({
       type: 'state',
-      roots: roots().map(p => ({ path: p, name: path.basename(p) })), root: r.root,
+      roots: roots().map(p => {
+        const states = [...(runners.get(p)?.state.values() ?? [])];
+        return { path: p, name: path.basename(p), removable: !workspace().includes(p),
+          running: states.filter(x => x === 'running').length, waiting: states.filter(x => x === 'waiting').length };
+      }), root: r.root,
       board: { ...r.store.data, tasks },
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
@@ -115,9 +144,13 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   async function handle(m: any) {
-    const r = runner();
     if (m.type === 'ready') return push();
-    if (m.type === 'root') { current = m.root; return push(); }
+    if (m.type === 'root') { if (roots().includes(m.root)) setCurrent(m.root); return push(); }
+    if (m.type === 'addProject') return addProject();
+    if (m.type === 'removeProject') return removeProject(m.root);
+    // Every request names the project it came from, so a switch mid-click can't send it to another folder.
+    if (m.root && !roots().includes(m.root)) return;
+    const r = m.root ? runnerFor(m.root) : runner();
     if (!r) return;
     const s = r.store;
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
@@ -220,6 +253,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('justCode.open', () => open()),
+    vscode.commands.registerCommand('justCode.addProject', async () => { open(); await addProject(); }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
     vscode.window.registerWebviewPanelSerializer('justCode.board', {
       async deserializeWebviewPanel(p) { open(undefined, p); },

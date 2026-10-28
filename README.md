@@ -18,7 +18,9 @@ Or open this folder in VS Code and press F5. Needs the `claude` CLI (set `justCo
 ## Use
 
 Run **JustCode: Open Board** (or click **JustCode** in the status bar). The board belongs to the open folder and is
-kept at `.justcode/board.json`. With several workspace folders, switch between them in the header.
+kept at `.justcode/board.json`. Workspace folders show up as projects automatically; **+ Project** adds any other folder
+(remembered across windows, **×** removes it, files are kept). Click a project to switch; each shows its running (▶) and waiting (⚠) tasks.
+Every action runs in the root of the project it was made in.
 
 1. **Add a task**: type it and press Enter. Pick Backlog or a sprint, an agent from `.claude/agents`, and permissions:
    - *Ask me*: Claude asks before edits and commands; you approve in the card's terminal.

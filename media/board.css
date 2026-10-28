@@ -87,3 +87,9 @@ dialog .row.end { justify-content: flex-end; margin-top: 8px; }
 .guide { padding-left: 18px; line-height: 1.5; }
 .guide li { margin-bottom: 6px; }
 code { font-family: var(--vscode-editor-font-family); font-size: 12px; }
+
+.proj { display: inline-flex; }
+.proj .pick { border-radius: 4px 0 0 4px; }
+.proj .pick:only-child { border-radius: 4px; }
+.proj .x { border-left: 0; border-radius: 0 4px 4px 0; padding: 3px 6px; color: var(--muted); }
+.proj.on .pick { border-color: var(--accent); background: var(--vscode-list-activeSelectionBackground); }
