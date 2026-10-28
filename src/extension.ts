@@ -33,7 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
       show(text, ...(taskId ? ['Show'] : [])).then(c => c && open(taskId));
     };
     r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
-      notify, () => cfg().get('maxParallel', 1));
+      notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'));
     r.onChange(push);
     r.store.onChange(push);
     runners.set(root, r);
@@ -203,7 +203,7 @@ export function activate(context: vscode.ExtensionContext) {
       (_p, token) => {
         const ac = new AbortController();
         token.onCancellationRequested(() => ac.abort());
-        return plan(claudeBin(cfg().get('claudePath', '')), r.root, m.goal, m.agent || undefined, ac.signal);
+        return plan(claudeBin(cfg().get('claudePath', '')), r.root, m.goal, m.agent || undefined, cfg().get('plannerModel', 'opus'), ac.signal);
       });
     if (!tasks.length) return vscode.window.showWarningMessage('Claude returned no tasks.');
     const picked = await vscode.window.showQuickPick(tasks.map(t => ({ label: t.title, detail: t.description, picked: true, t })),

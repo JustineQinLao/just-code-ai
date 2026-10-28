@@ -68,6 +68,8 @@ kept at `.justcode/board.json`. With several workspace folders, switch between t
 | `justCode.claudePath` | auto | Path to `claude` |
 | `justCode.maxParallel` | 1 | Tasks Run all keeps going at once |
 | `justCode.defaultMode` | `default` | Permissions for new tasks |
+| `justCode.plannerModel` | `opus` | Model for Plan with Claude |
+| `justCode.taskModel` | `sonnet` | Model for task runs and conflict resolving |
 
 ## Limits
 
