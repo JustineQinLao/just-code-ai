@@ -1,0 +1,14 @@
+src/**
+scripts/**
+**/*.map
+**/test/**
+tsconfig.json
+.gitignore
+node_modules/node-pty/third_party/**
+node_modules/node-pty/deps/**
+node_modules/node-pty/src/**
+node_modules/node-pty/scripts/**
+node_modules/node-pty/typings/**
+node_modules/node-addon-api/**
+node_modules/@xterm/*/src/**
+node_modules/@xterm/*/typings/**

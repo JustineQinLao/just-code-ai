@@ -1,0 +1,72 @@
+{
+  "name": "just-code",
+  "displayName": "JustCode",
+  "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
+  "version": "0.1.0",
+  "publisher": "justine",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onWebviewPanel:justCode.board"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "justCode.open",
+        "title": "JustCode: Open Board",
+        "icon": "$(project)"
+      }
+    ],
+    "configuration": {
+      "title": "JustCode",
+      "properties": {
+        "justCode.claudePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the claude CLI (auto-detected if empty)"
+        },
+        "justCode.maxParallel": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 6,
+          "description": "Tasks Run all keeps running at once. Each task has its own git worktree, so parallel runs never touch each other's files."
+        },
+        "justCode.defaultMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "acceptEdits",
+            "plan"
+          ],
+          "default": "default",
+          "enumDescriptions": [
+            "Ask before edits and commands (approve inside the card)",
+            "Auto-approve file edits, ask for commands",
+            "Read-only planning"
+          ]
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "postinstall": "node scripts/fix-pty.js",
+    "test": "tsc -p . && node --test out/test/"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}
