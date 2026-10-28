@@ -38,7 +38,8 @@ export function activate(context: vscode.ExtensionContext) {
       show(text, ...(taskId ? ['Show'] : [])).then(c => { if (c) { setCurrent(root); open(taskId); } });
     };
     r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
-      notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'));
+      notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'),
+      () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false) }));
     r.onChange(push);
     r.store.onChange(push);
     r.store.watch();
@@ -111,7 +112,8 @@ export function activate(context: vscode.ExtensionContext) {
       skills: discoverSkills(r.root),
       git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
       defaultMode: cfg().get('defaultMode', 'default'),
-      settings: { plannerModel: cfg().get('plannerModel', 'opus'), taskModel: cfg().get('taskModel', 'sonnet'), maxParallel: cfg().get('maxParallel', 1), defaultMode: cfg().get('defaultMode', 'default') },
+      settings: { plannerModel: cfg().get('plannerModel', 'opus'), taskModel: cfg().get('taskModel', 'sonnet'), maxParallel: cfg().get('maxParallel', 1), defaultMode: cfg().get('defaultMode', 'default'),
+        reviewModel: cfg().get('reviewModel', 'opus'), autoReview: cfg().get('autoReview', true), autoMerge: cfg().get('autoMerge', false), maxReviews: cfg().get('maxReviews', 3) },
       claudeExt: !!vscode.extensions.getExtension(CLAUDE_EXT),
     });
   }
@@ -205,6 +207,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (t && await confirm(`Merge "${t.title}" (${t.branch}) into ${t.base}?`, 'Merge')) await r.merge(m.id);
         break;
       case 'resolve': await r.resolveWithClaude(m.id); break;
+      case 'review': await r.review(m.id, true); break;
+      case 'sendIssues': if (t?.review?.issues?.length) { s.updateTask(m.id, { status: 'doing' }); await r.say(m.id, `Fix these review issues, then finish your turn:\n${t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n')}`); } break;
       case 'resolved': await r.markResolved(m.id); break;
       case 'discard':
         if (await confirm(`Discard all work on "${t?.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);

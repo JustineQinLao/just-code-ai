@@ -199,7 +199,10 @@ function card(t) {
       t.where === 'root' && '<span class="chip" title="Runs in the project folder, no branch">project root</span>',
       t.queued && '<span class="chip">queued</span>',
       t.run === 'running' && '<span class="chip">working…</span>',
-      t.run === 'idle' && '<span class="chip ok">turn done</span>',
+      t.run === 'idle' && !t.review && '<span class="chip ok">turn done</span>',
+      t.review?.state === 'running' && '<span class="chip">AI reviewing…</span>',
+      t.review?.state === 'pass' && `<span class="chip ok">✓ review passed${t.review.risk === 'critical' ? ' · critical' : ''}</span>`,
+      t.review?.state === 'fail' && `<span class="chip err">✗ review: ${t.review.issues?.length ?? 0} issue(s) · try ${t.review.attempts}</span>`,
       conflict && `<span class="chip err">${conflict} conflict${conflict > 1 ? 's' : ''}</span>`,
       t.branch && t.status !== 'done' && `<span class="chip" title="${esc(t.branch)} → ${esc(t.base)}">⎇ ${esc(t.base)}</span>`,
       t.pr && `<button class="chip btn" data-act="openUrl">PR ↗</button>`,
@@ -242,6 +245,14 @@ function card(t) {
   }
   c.querySelectorAll('[data-act="openUrl"]').forEach(b => b.onclick = () => send({ type: 'openUrl', url: t.pr }));
 
+  if (t.review?.state === 'fail' && t.review.issues?.length && !t.live || (t.review?.state === 'fail' && t.status === 'review')) {
+    const p = h(`<div class="panel"><div class="small">Reviewer issues:</div><ol class="issues">${t.review.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ol>
+      <div class="actions"><button class="primary" data-a="fix">Send to Claude to fix</button><button data-a="again">Review again</button></div></div>`);
+    p.querySelector('[data-a="fix"]').onclick = () => send({ type: 'sendIssues', id: t.id });
+    p.querySelector('[data-a="again"]').onclick = () => send({ type: 'review', id: t.id });
+    c.append(p);
+  }
+  if (t.branch && t.status === 'review' && !t.review && !t.live) icon('⚖', 'Run the AI review', () => send({ type: 'review', id: t.id }));
   if (conflict) {
     const p = h(`<div class="panel"><div class="small">Conflicts with <b>${esc(t.base)}</b> — fix them here, never in your checkout:</div><ul class="files"></ul>
       <div class="actions"><button data-a="resolve" class="primary">Resolve with Claude</button><button data-a="resolved">Mark resolved</button></div></div>`);
@@ -416,8 +427,13 @@ function settingsDialog() {
     <label>Task model (running tasks, resolving conflicts)${model('taskModel', v.taskModel)}</label>
     <label>Run all: tasks at once<input name="maxParallel" type="number" min="1" max="6" value="${v.maxParallel}"></label>
     <label>Default permissions for new tasks<select name="defaultMode">${opts(Object.entries(MODES), v.defaultMode)}</select></label>
+    <label>AI review model${model('reviewModel', v.reviewModel)}</label>
+    <label><span><input type="checkbox" name="autoReview" ${v.autoReview ? 'checked' : ''}> AI review after each finished turn (issues go back to Claude to fix)</span></label>
+    <label>Review attempts before stopping<input name="maxReviews" type="number" min="1" max="10" value="${v.maxReviews}"></label>
+    <label><span><input type="checkbox" name="autoMerge" ${v.autoMerge ? 'checked' : ''}> Merge automatically when the review passes</span></label>
     <div class="small muted">Applies to new runs. An agent with its own <code>model:</code> may use that instead.</div>`,
-  d => send({ type: 'settings', values: { plannerModel: d.plannerModel, taskModel: d.taskModel, maxParallel: Math.min(6, Math.max(1, +d.maxParallel || 1)), defaultMode: d.defaultMode } }));
+  d => send({ type: 'settings', values: { plannerModel: d.plannerModel, taskModel: d.taskModel, maxParallel: Math.min(6, Math.max(1, +d.maxParallel || 1)), defaultMode: d.defaultMode,
+    reviewModel: d.reviewModel, autoReview: !!d.autoReview, maxReviews: Math.max(1, +d.maxReviews || 3), autoMerge: !!d.autoMerge } }));
 }
 
 function planDialog() {

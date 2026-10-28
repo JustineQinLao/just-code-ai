@@ -179,6 +179,53 @@ export function sessionLog(cwd: string, sessionId: string): Step[] {
   return steps.slice(-600);
 }
 
+export interface Verdict { pass: boolean; issues: string[]; risk: 'minor' | 'critical' }
+
+const MAX_DIFF = 150_000;
+
+// Read-only reviewer prompt (after LexCode's): the task, its diff, and a strict JSON verdict.
+export function reviewPrompt(t: Task, base: string, diff: string) {
+  const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
+  return [
+    `# Review task: ${t.title}`, t.description ?? '',
+    `You review work another agent did on this branch (diff against ${base} below). You do not change code.`,
+    'Check: does it do what the task asks, completely? Bugs, unhandled errors, edge cases, regressions in callers. ' +
+    'Tests for the changed behaviour. Security: validation, authorization, data isolation, injection, secrets. Fits the codebase\'s conventions.',
+    'Fail only for real problems. Make every issue specific and actionable: file, line, what to change.',
+    `## Diff\n\`\`\`diff\n${clipped}\n\`\`\``,
+    'You are running unattended in read-only mode: do not ask questions and do not write files. Read files if you need more context.',
+    'End your final message with exactly one ```json block:\n```json\n{"pass": true, "issues": [], "risk": "minor"}\n```\n' +
+    'A failing verdict must list issues. Use risk "critical" for security-sensitive code, migrations, public API or config changes, or anything you are unsure is safe to merge.',
+  ].filter(Boolean).join('\n\n');
+}
+
+export function parseVerdict(text: string): Verdict {
+  const raw = [...text.matchAll(/```json\s*([\s\S]*?)```/g)].pop()?.[1] ?? /\{[\s\S]*"pass"[\s\S]*\}/.exec(text)?.[0];
+  if (!raw) throw new Error('no JSON verdict in the reviewer reply');
+  const v = JSON.parse(raw);
+  if (typeof v.pass !== 'boolean') throw new Error('verdict has no "pass"');
+  const issues = Array.isArray(v.issues) ? v.issues.map((i: any) => typeof i === 'string' ? i : JSON.stringify(i)) : [];
+  if (!v.pass && !issues.length) throw new Error('failing verdict without issues');
+  return { pass: v.pass, issues, risk: v.risk === 'critical' ? 'critical' : 'minor' };
+}
+
+// Runs the reviewer headless (claude -p, plan mode, no edit tools) in the task's worktree.
+export function runReview(bin: string, cwd: string, prompt: string, model: string, agent: string | undefined, signal?: AbortSignal): Promise<Verdict> {
+  const args = ['-p', '--output-format', 'json', '--permission-mode', 'plan', '--disallowedTools', 'Write', 'Edit', 'NotebookEdit', 'ExitPlanMode',
+    ...(model ? ['--model', model] : []), ...(agent ? ['--agent', agent] : []), '--', prompt];
+  return new Promise((resolve, reject) => {
+    const p = spawn(bin, args, { cwd, env: ptyEnv(), signal, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    p.stdout.on('data', d => { out += d; });
+    p.stderr.on('data', d => { err += d; });
+    p.on('error', reject);
+    p.on('close', code => {
+      if (code !== 0) return reject(new Error(err.trim() || `reviewer exited with ${code}`));
+      try { resolve(parseVerdict(JSON.parse(out).result ?? '')); } catch (e) { reject(e); }
+    });
+  });
+}
+
 export interface PlannedTask { title: string; description?: string }
 
 // Read-only planning run: Claude reads the code and answers with a JSON task list.

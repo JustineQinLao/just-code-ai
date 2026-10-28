@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -63,6 +63,27 @@
           "type": "string",
           "default": "sonnet",
           "description": "Model for task runs and conflict resolving. Empty = your Claude default."
+        },
+        "justCode.autoReview": {
+          "type": "boolean",
+          "default": true,
+          "description": "After a branch task's turn ends, an AI reviewer checks its diff. Issues go back to the task to fix, then it is reviewed again."
+        },
+        "justCode.reviewModel": {
+          "type": "string",
+          "default": "opus",
+          "description": "Model for the AI reviewer."
+        },
+        "justCode.maxReviews": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "description": "Failed reviews before the fix loop stops and waits for you."
+        },
+        "justCode.autoMerge": {
+          "type": "boolean",
+          "default": false,
+          "description": "Merge into the base branch automatically when the AI review passes (not when it flags the change critical)."
         }
       }
     }
