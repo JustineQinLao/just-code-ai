@@ -69,6 +69,10 @@ The open board updates by itself. The same sync from a terminal: `node <extensio
 - No git repo? The first run creates a local one (`git init`, no remote) and commits the current files.
   If there is no `.gitignore`, `node_modules/`, `.env`, `.env.*` and `.DS_Store` are excluded first, so secrets are not committed.
 - `.justcode/` is excluded through `.git/info/exclude`; your `.gitignore` is not changed.
+- Before a branch task starts, uncommitted files in the project folder are committed on your current branch
+  ("chore: snapshot project files for JustCode tasks"), so the task sees the project as it is. `.env`, `node_modules/`,
+  `*.vsix` and `.claude/settings.local.json` stay out unless your `.gitignore` covers them; files over 10 MB are never committed.
+  A task whose worktree is behind is brought up to date, and its resumed session is told.
 - Each task works in `.justcode/worktrees/<id>` on branch `jc/<title>-<id>`, cut from the branch you had checked out.
   Your own checkout is never switched. Parallel tasks never touch each other's files.
 - Project agents, skills and settings that are not committed yet are passed to Claude on the command line,

@@ -71,15 +71,25 @@ export class Runner {
   private async launch(t: Task, prompt?: string, size?: { cols: number; rows: number }) {
     const id = t.id;
     if (t.where === 'root') return this.spawn(t, this.root, {}, prompt, size);
-    const { base, branch, worktree } = await this.serial(async () => {
+    const { base, branch, worktree, refreshed } = await this.serial(async () => {
       await g.ensureRepo(this.root);
       const base = t.base ?? await g.currentBranch(this.root);
+      // The worktree is cut from base, so base must hold the project's current files, committed or not.
+      if (await g.currentBranch(this.root) === base) {
+        const snap = await g.snapshot(this.root);
+        if (snap.files.length) this.notify('info', `Committed ${snap.files.length} uncommitted file(s) on ${base} so tasks see the current project.`);
+        if (snap.skipped.length) this.notify('warn', `Left out of git (over 10 MB): ${snap.skipped.join(', ')}`);
+      }
       const branch = t.branch ?? g.taskBranch(t.title, t.id);
       const worktree = t.worktree ?? g.worktreeDir(this.root, t.id);
       await g.addWorktree(this.root, worktree, branch, base);
-      return { base, branch, worktree };
+      const refreshed = await g.catchUp(worktree, base).catch(() => false);
+      return { base, branch, worktree, refreshed };
     });
-    await this.spawn(t, worktree, { base, branch, worktree }, prompt, size);
+    // A resumed session was looking at the old files; tell it they changed.
+    const note = refreshed && t.sessionId && !prompt
+      ? `JustCode updated this worktree with the latest ${base}: the project's files are here now. Re-check them and continue the task.` : prompt;
+    await this.spawn(t, worktree, { base, branch, worktree }, note, size);
   }
 
   // Starts (or resumes) the task's session in `cwd`: its worktree, or the project root for root tasks.
