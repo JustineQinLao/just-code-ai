@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
 export type Status = 'todo' | 'doing' | 'review' | 'done';
-export type Mode = 'default' | 'acceptEdits' | 'plan';
+export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 
 export interface Sprint { id: string; name: string; goal?: string; active?: boolean; closed?: boolean }
 

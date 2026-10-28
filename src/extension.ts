@@ -15,6 +15,14 @@ import { Limits } from './limits';
 const hasSetup = (root: string) => { try { return fs.readdirSync(path.join(root, '.claude', 'agents')).some(f => f.endsWith('.md')); } catch { return false; } };
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
+
+// Settings changed on the board (⚙ Settings) are kept by JustCode itself, so saving never depends on VS Code's settings
+// registry (an extension updated while its window runs can leave the registry without the new keys: "Unable to write to
+// User Settings because justCode.x is not a registered configuration"). They are also written to VS Code's settings
+// when that works, and a change made in VS Code's own Settings UI replaces the board's copy of that key.
+let ctx: vscode.ExtensionContext | undefined;
+const overrides = () => ctx?.globalState.get<Record<string, unknown>>('settings', {}) ?? {};
+const setting = <T,>(key: string, fallback: T): T => { const o = overrides(); return key in o ? o[key] as T : cfg().get<T>(key, fallback); };
 const CLAUDE_EXT = 'anthropic.claude-code';
 const CLAUDE_OPEN = 'claude-vscode.primaryEditor.open'; // (sessionId?, prompt?)
 
@@ -24,6 +32,7 @@ let ptys: Ptys;
 let current: string | undefined; // root shown on the board
 
 export function activate(context: vscode.ExtensionContext) {
+  ctx = context;
   ptys = new Ptys();
   const limits = new Limits();
   const out = vscode.window.createOutputChannel('JustCode');
@@ -48,11 +57,12 @@ export function activate(context: vscode.ExtensionContext) {
       if (level === 'warn' && taskId && panel?.visible) return;
       show(text, ...(taskId ? ['Show'] : [])).then(c => { if (c) { setCurrent(root); open(taskId); } });
     };
-    r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
-      notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'),
-      () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false), commands: cfg().get<string[]>('reviewCommands', []), freshAfterKB: cfg().get('freshSessionKB', 600) }));
+    r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(setting('claudePath', '')),
+      notify, () => setting('maxParallel', 1), () => setting('taskModel', 'sonnet'),
+      () => ({ auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), commands: setting<string[]>('reviewCommands', []), freshAfterKB: setting('freshSessionKB', 600) }));
     r.limits = limits;
-    r.copyFiles = () => cfg().get<string[]>('worktreeCopy', ['.env', '.env.local']);
+    r.allowedTools = () => setting<string[]>('allowedTools', []);
+    r.copyFiles = () => setting<string[]>('worktreeCopy', ['.env', '.env.local']);
     r.onChange(push);
     r.store.onChange(push);
     r.store.watch();
@@ -128,9 +138,9 @@ export function activate(context: vscode.ExtensionContext) {
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
       git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
-      defaultMode: cfg().get('defaultMode', 'default'),
-      settings: { plannerModel: cfg().get('plannerModel', 'opus'), taskModel: cfg().get('taskModel', 'sonnet'), maxParallel: cfg().get('maxParallel', 1), defaultMode: cfg().get('defaultMode', 'default'),
-        reviewModel: cfg().get('reviewModel', 'opus'), autoReview: cfg().get('autoReview', true), autoMerge: cfg().get('autoMerge', false), maxReviews: cfg().get('maxReviews', 3) },
+      defaultMode: setting('defaultMode', 'default'),
+      settings: { plannerModel: setting('plannerModel', 'opus'), taskModel: setting('taskModel', 'sonnet'), maxParallel: setting('maxParallel', 1), defaultMode: setting('defaultMode', 'default'),
+        allowedTools: setting<string[]>('allowedTools', []), reviewModel: setting('reviewModel', 'opus'), autoReview: setting('autoReview', true), autoMerge: setting('autoMerge', false), maxReviews: setting('maxReviews', 3) },
       claudeExt: !!vscode.extensions.getExtension(CLAUDE_EXT),
     });
   }
@@ -185,11 +195,14 @@ export function activate(context: vscode.ExtensionContext) {
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
     switch (m.type) {
       case 'addTask': {
+        if (m.mode === 'bypassPermissions' && !await confirmBypass()) break;
         const task = s.addTask({ title: m.title, description: m.description || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined, mode: m.mode, where: m.where === 'root' ? 'root' : undefined });
         if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
         break;
       }
-      case 'editTask': s.updateTask(m.id, m.patch); break;
+      case 'editTask':
+        if (m.patch?.mode === 'bypassPermissions' && t?.mode !== 'bypassPermissions' && !await confirmBypass()) break;
+        s.updateTask(m.id, m.patch); break;
       case 'move': s.updateTask(m.id, { status: m.status }); break;
       case 'delete':
         if (await confirm(`Delete "${t?.title}"? Its branch and uncommitted work are removed too.`, 'Delete')) await r.remove(m.id);
@@ -250,7 +263,10 @@ export function activate(context: vscode.ExtensionContext) {
       case 'plan': return runPlan(r, m);
       case 'setupClaude': return initialize(r, true);
       case 'settings':
-        for (const [k, v] of Object.entries(m.values)) await cfg().update(k, v, vscode.ConfigurationTarget.Global);
+        await ctx!.globalState.update('settings', { ...overrides(), ...m.values });
+        for (const [k, v] of Object.entries(m.values)) {
+          try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
+        }
         return push();
     }
   }
@@ -277,6 +293,8 @@ export function activate(context: vscode.ExtensionContext) {
     await r.run(task.id);
     open(task.id);
   }
+
+  const confirmBypass = () => confirm('This task will run with NO permission prompts: it can run any command and change any file it can reach, including outside its worktree. Use it only for work you trust. Continue?', 'Allow everything');
 
   const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
 
@@ -307,7 +325,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
     const term = vscode.window.createTerminal({ name: `Claude Code · ${t.title.slice(0, 40)}`, cwd, location: vscode.TerminalLocation.Editor });
     const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-    term.sendText([claudeBin(cfg().get('claudePath', '')), '--resume', t.sessionId, ...(t.mode ? ['--permission-mode', t.mode] : [])].map(q).join(' '));
+    term.sendText([claudeBin(setting('claudePath', '')), '--resume', t.sessionId, ...(t.mode ? ['--permission-mode', t.mode] : [])].map(q).join(' '));
     term.show();
   }
 
@@ -317,7 +335,7 @@ export function activate(context: vscode.ExtensionContext) {
       (_p, token) => {
         const ac = new AbortController();
         token.onCancellationRequested(() => ac.abort());
-        return plan(claudeBin(cfg().get('claudePath', '')), r.root, m.goal, m.agent || undefined, cfg().get('plannerModel', 'opus'), ac.signal);
+        return plan(claudeBin(setting('claudePath', '')), r.root, m.goal, m.agent || undefined, setting('plannerModel', 'opus'), ac.signal);
       });
     if (!tasks.length) return vscode.window.showWarningMessage('Claude returned no tasks.');
     const picked = await vscode.window.showQuickPick(tasks.map(t => ({ label: t.title, detail: t.description, picked: true, t })),
@@ -332,6 +350,12 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('justCode.open', () => open()),
     vscode.commands.registerCommand('justCode.addProject', async () => { open(); await addProject(); }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
+    // A key changed in VS Code's own Settings UI replaces the board's copy of it (unless it is the same value).
+    vscode.workspace.onDidChangeConfiguration(e => {
+      const o = { ...overrides() }; let changed = false;
+      for (const k of Object.keys(o)) if (e.affectsConfiguration(`justCode.${k}`) && JSON.stringify(cfg().get(k)) !== JSON.stringify(o[k])) { delete o[k]; changed = true; }
+      if (changed) void context.globalState.update('settings', o).then(push);
+    }),
     vscode.window.registerWebviewPanelSerializer('justCode.board', {
       async deserializeWebviewPanel(p) { open(undefined, p); },
     }),

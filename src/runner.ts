@@ -58,6 +58,7 @@ export class Runner {
   private launching = new Set<string>();   // runs between claim and process start (an old process's exit must not touch them)
   private reviewing = new Set<string>();   // reviews in flight (in memory: a persisted "running" would survive a crash)
   limits?: Limits;                 // shared usage-limit tracker (set by the extension)
+  allowedTools: () => string[] = () => [];   // justCode.allowedTools: rules approved without asking, e.g. "Bash(docker compose:*)"
   copyFiles: () => string[] = () => [];   // env files copied into each new worktree
   private emptyAt = new Set<string>();    // tasks whose branch had nothing to review yet
   asks = new Map<string, Ask>();
@@ -146,7 +147,7 @@ export class Runner {
     const statusFile = this.statusFile(id);
     fs.writeFileSync(statusFile, '');
     this.watch(id);
-    this.ptys.start(id, cwd, this.bin(), sessionArgs({ task, root: this.root, worktree: cwd, statusFile, resume, prompt, model: this.model() }), size?.cols, size?.rows);
+    this.ptys.start(id, cwd, this.bin(), sessionArgs({ task, root: this.root, worktree: cwd, statusFile, resume, prompt, model: this.model(), allowed: this.allowedTools() }), size?.cols, size?.rows);
     this.changed();
   }
 

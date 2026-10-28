@@ -15,7 +15,7 @@ const terms = new Map(); // task id → { term, fit, el }
 let S = null;
 
 const COLS = [['todo', 'To do'], ['doing', 'Doing'], ['review', 'Review'], ['done', 'Done']];
-const MODES = { default: 'Ask me', acceptEdits: 'Auto-edit', plan: 'Plan only' };
+const MODES = { default: 'Ask me', acceptEdits: 'Auto-edit', auto: 'Auto (Claude decides)', bypassPermissions: 'Allow everything ⚠', plan: 'Plan only' };
 const WHERE = { branch: 'Own branch (PR)', root: 'Project root' };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -269,7 +269,7 @@ function card(t, order) {
       ui.view === 'all' && t.sprintId && `<span class="chip">${esc(sprintName(t.sprintId))}</span>`,
       t.agent && `<span class="chip">@${esc(t.agent)}</span>`,
       t.images?.length && `<span class="chip">🖼 ${t.images.length}</span>`,
-      t.mode !== 'default' && `<span class="chip">${MODES[t.mode]}</span>`,
+      t.mode !== 'default' && `<span class="chip ${t.mode === 'bypassPermissions' ? 'err' : ''}" title="${t.mode === 'bypassPermissions' ? 'No permission prompts at all' : ''}">${MODES[t.mode]}</span>`,
       t.where === 'root' && '<span class="chip" title="Runs in the project folder, no branch">project root</span>',
       t.queued && '<span class="chip">queued</span>',
       t.run === 'running' && '<span class="chip">working…</span>',
@@ -574,13 +574,15 @@ function settingsDialog() {
     <label>Task model (running tasks, resolving conflicts)${model('taskModel', v.taskModel)}</label>
     <label>Run all: tasks at once<input name="maxParallel" type="number" min="1" max="6" value="${v.maxParallel}"></label>
     <label>Default permissions for new tasks<select name="defaultMode">${opts(Object.entries(MODES), v.defaultMode)}</select></label>
+    <label>Always allow these without asking (one rule per line)<textarea name="allowedTools" placeholder="Bash(docker compose:*)&#10;Bash(npm run:*)&#10;Bash(cd:*)">${esc((v.allowedTools ?? []).join('\n'))}</textarea></label>
+    <div class="small muted">Rules for commands you trust, applied to every task. A command like <code>cd x &amp;&amp; docker compose exec …</code> needs a rule for each part. Safer than “Allow everything”.</div>
     <label>AI review model${model('reviewModel', v.reviewModel)}</label>
     <label><span><input type="checkbox" name="autoReview" ${v.autoReview ? 'checked' : ''}> AI review after each finished turn (issues go back to Claude to fix)</span></label>
     <label>Review attempts before stopping<input name="maxReviews" type="number" min="1" max="10" value="${v.maxReviews}"></label>
     <label><span><input type="checkbox" name="autoMerge" ${v.autoMerge ? 'checked' : ''}> Merge automatically when the review passes</span></label>
     <div class="small muted">Applies to new runs. An agent with its own <code>model:</code> may use that instead.</div>`,
   d => send({ type: 'settings', values: { plannerModel: d.plannerModel, taskModel: d.taskModel, maxParallel: Math.min(6, Math.max(1, +d.maxParallel || 1)), defaultMode: d.defaultMode,
-    reviewModel: d.reviewModel, autoReview: !!d.autoReview, maxReviews: Math.max(1, +d.maxReviews || 3), autoMerge: !!d.autoMerge } }));
+    allowedTools: d.allowedTools.split('\n').map(x => x.trim()).filter(Boolean), reviewModel: d.reviewModel, autoReview: !!d.autoReview, maxReviews: Math.max(1, +d.maxReviews || 3), autoMerge: !!d.autoMerge } }));
 }
 
 function planDialog() {
