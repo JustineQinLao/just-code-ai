@@ -25,10 +25,16 @@ export const currentBranch = (dir: string) => git(dir, ['rev-parse', '--abbrev-r
 
 // Keeps .justcode/ (board, worktrees) out of git without touching the tracked .gitignore.
 // fresh: a repo JustCode just created, which also gets the usual secrets/deps excluded before its first commit.
-async function exclude(repo: string, fresh: boolean) {
+// Never committed by JustCode, unless the project's .gitignore already decides about them.
+const PROTECT = ['node_modules/', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json'];
+
+async function exclude(repo: string, _fresh: boolean) {
   const file = path.join(path.resolve(repo, await git(repo, ['rev-parse', '--git-common-dir'])), 'info', 'exclude');
   const cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-  const want = ['/.justcode/', ...(fresh && !fs.existsSync(path.join(repo, '.gitignore')) ? ['node_modules/', '.env', '.env.*', '.DS_Store'] : [])]
+  let ignore = '';
+  try { ignore = fs.readFileSync(path.join(repo, '.gitignore'), 'utf8'); } catch { /* none */ }
+  const mentioned = (p: string) => ignore.split('\n').some(l => l.trim().replace(/^!/, '').replace(/^\//, '') === p.replace(/^!/, ''));
+  const want = ['/.justcode/', ...PROTECT.filter(p => !mentioned(p))]
     .filter(l => !cur.split('\n').includes(l));
   if (!want.length) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -44,6 +50,32 @@ export async function ensureRepo(dir: string) {
     await git(dir, ['add', '-A']);
     await git(dir, ['commit', '-q', '--allow-empty', '-m', 'chore: initial commit (JustCode)']);
   }
+}
+
+const MAX_FILE = 10 * 1024 * 1024;
+
+// Commits the main folder's uncommitted work on its current branch, so a task's worktree (cut from that branch)
+// has the same files. Secrets and deps stay out (see PROTECT), and files over 10 MB are never committed.
+// Returns the committed paths and the ones left out for size.
+export async function snapshot(repo: string) {
+  await exclude(repo, false);
+  if (!(await git(repo, ['status', '--porcelain'])).trim()) return { files: [] as string[], skipped: [] as string[] };
+  await git(repo, ['add', '-A']);
+  const staged = (await git(repo, ['diff', '--cached', '--name-only', '-z'])).split('\0').filter(Boolean);
+  const skipped = staged.filter(f => { try { return fs.statSync(path.join(repo, f)).size > MAX_FILE; } catch { return false; } });
+  if (skipped.length) await git(repo, ['reset', '-q', '--', ...skipped]);
+  const files = staged.filter(f => !skipped.includes(f));
+  if (files.length) await git(repo, ['commit', '-q', '-m', 'chore: snapshot project files for JustCode tasks']);
+  return { files, skipped };
+}
+
+// Brings `base` into a worktree that is behind it and has no work of its own in progress. true = updated.
+export async function catchUp(dir: string, base: string) {
+  if (!fs.existsSync(path.join(dir, '.git'))) return false;
+  if ((await git(dir, ['status', '--porcelain'])).trim()) return false;
+  if (await ok(dir, ['merge-base', '--is-ancestor', base, 'HEAD'])) return false; // already has it
+  await git(dir, ['merge', '--no-edit', '-q', base]);
+  return true;
 }
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'task';
