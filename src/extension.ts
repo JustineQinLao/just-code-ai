@@ -193,7 +193,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'stop': r.stop(m.id); break;
       case 'answer': r.answer(m.id, m.choice); break;
       case 'input': ptys.write(m.id, m.data); break;
-      case 'resize': ptys.resize(m.id, m.cols, m.rows); break;
+      case 'resize': ptys.resize(m.id, m.cols, m.rows); ptys.size = { cols: m.cols, rows: m.rows }; break;
       case 'attach': panel?.webview.postMessage({ type: 'replay', id: m.id, data: ptys.buffer(m.id) }); break;
       case 'log': if (t) panel?.webview.postMessage({ type: 'log', id: m.id, steps: t.sessionId ? sessionLog(t.worktree ?? r.root, t.sessionId) : [] }); break;
       case 'claudeCode': return openInClaudeCode(r, t);
