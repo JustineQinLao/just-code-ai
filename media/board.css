@@ -129,3 +129,10 @@ dialog.termdlg .term { overflow: hidden; min-height: 0; }
 .issues li { margin-bottom: 3px; white-space: pre-wrap; }
 
 .shots img { height: 90px; cursor: zoom-in; }
+
+/* The terminal fills the slot exactly: absolute inset instead of height:100% inside a padded flex item, which made
+   fit() count a row more than is visible and cut off the bottom line. */
+.term { position: relative; }
+.term .term-host { position: absolute; inset: 6px 4px 6px 8px; }
+.term .term-host .xterm { height: 100%; }
+dialog.termdlg .term { padding: 0; }
