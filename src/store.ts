@@ -24,6 +24,8 @@ export interface Task {
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
   src?: 'TASKS.md';           // created by TASKS.md sync; only these are updated or archived by it
+  init?: boolean;             // the project's initialization run
+  allow?: string[];           // tools pre-approved for this task's session (--allowedTools)
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
   archived?: boolean;
   created: number;

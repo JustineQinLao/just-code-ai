@@ -8,23 +8,10 @@ import { Ptys } from './pty';
 import { Runner } from './runner';
 import * as g from './git';
 import { claudeBin, discoverAgents, discoverSkills, plan } from './claude';
+import { findTasksFile } from './tasksmd';
 
 // Project has its own Claude agents (.claude/agents/*.md).
 const hasSetup = (root: string) => { try { return fs.readdirSync(path.join(root, '.claude', 'agents')).some(f => f.endsWith('.md')); } catch { return false; } };
-
-const SETUP_PROMPT = `Set up Claude Code for this project.
-
-Read docs/project.md first if it exists (it describes the project), then CLAUDE.md, README and enough of the code to learn the stack, commands and conventions.
-
-Create these, never overwriting a file that already exists:
-- .claude/agents/planner.md: splits a goal into small tasks that can each be built, reviewed and merged on their own. Frontmatter model: opus
-- .claude/agents/implementer.md: builds one task following this project's conventions, and runs its tests or build. Frontmatter model: sonnet
-- .claude/agents/reviewer.md: reviews a diff for bugs, missed edge cases and convention breaks. Frontmatter model: opus
-- .claude/skills/<name>/SKILL.md for recurring workflows this project clearly has (for example running tests, a release, a sync). Only ones that apply.
-- CLAUDE.md, if missing: stack, how to run, test and build, and conventions.
-
-Agent files start with frontmatter: name, description, model, and optionally tools. Tailor every file to this project; nothing generic.
-Finish with a short list of what you created.`;
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 const CLAUDE_EXT = 'anthropic.claude-code';
@@ -107,6 +94,7 @@ export function activate(context: vscode.ExtensionContext) {
   async function post() {
     const r = runner();
     if (!panel || !r) return panel?.webview.postMessage({ type: 'state', empty: true, roots: [] });
+    if (panel.visible && !checked.has(r.root)) { checked.add(r.root); void initialize(r, false).catch(e => vscode.window.showErrorMessage(e.message)); }
     const tasks = r.store.data.tasks.map(t => ({
       ...t, run: r.state.get(t.id), ask: r.asks.get(t.id), live: ptys.has(t.id), queued: r.queued().includes(t.id), busy: r.isBusy(t.id),
     }));
@@ -215,11 +203,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'remotePr': await r.remotePr(m.id); break;
       case 'openUrl': vscode.env.openExternal(vscode.Uri.parse(m.url)); break;
       case 'plan': return runPlan(r, m);
-      case 'setupClaude': {
-        const task = s.addTask({ title: 'Set up Claude for this project', description: SETUP_PROMPT, mode: 'acceptEdits', where: 'root' });
-        await r.run(task.id);
-        return open(task.id);
-      }
+      case 'setupClaude': return initialize(r, true);
       case 'settings':
         for (const [k, v] of Object.entries(m.values)) await cfg().update(k, v, vscode.ConfigurationTarget.Global);
         return push();
@@ -237,6 +221,21 @@ export function activate(context: vscode.ExtensionContext) {
       fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
       return file;
     });
+  }
+
+  // A project that isn't set up (no .claude agents, or nothing to put on the board) is initialized the first time
+  // its board is shown: /just-code-ai-sync creates the Claude setup and TASKS.md from docs/project.md, then syncs.
+  // It runs once per project (the task stays on the board); the button re-runs it on demand.
+  const checked = new Set<string>();
+  async function initialize(r: Runner, force: boolean) {
+    const s = r.store;
+    const done = s.data.tasks.some(t => t.init);
+    const needed = !hasSetup(r.root) || (!s.data.tasks.length && !findTasksFile(r.root));
+    if (!force && (done || !needed)) return;
+    const task = s.addTask({ title: '/just-code-ai-sync', description: 'Initialize this project for JustCode: Claude setup and TASKS.md if missing, then sync the board.',
+      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.claude/**)', 'Edit(.claude/**)', 'Bash(node:*)', 'Bash(ls:*)', 'Bash(mkdir:*)'] });
+    await r.run(task.id);
+    open(task.id);
   }
 
   const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
@@ -297,25 +296,45 @@ export function installSyncSkill(context: vscode.ExtensionContext) {
   const file = path.join(os.homedir(), '.claude', 'skills', 'just-code-ai-sync', 'SKILL.md');
   const text = `---
 name: just-code-ai-sync
-description: Sync this project's TASKS.md into its JustCode board (new tasks, sprints, status changes; removed items archived). Use when the user says "sync tasks", "sync TASKS.md to JustCode", "/just-code-ai-sync", or after editing TASKS.md.
+description: Initialize and sync this project's JustCode board. Creates the Claude setup (.claude agents, skills, CLAUDE.md) and TASKS.md when missing, from docs/project.md, then syncs TASKS.md into the board (new tasks, sprints, status changes; removed items archived). Use when the user says "sync tasks", "initialize JustCode", "/just-code-ai-sync", or after editing TASKS.md.
 ---
 
-# Sync TASKS.md to the JustCode board
+# Initialize and sync the JustCode board
 
-The board is this project's \`.justcode/board.json\`. Run everything from the project root.
+The board is this project's \`.justcode/board.json\`. Work from the project root. The user ran this to get the
+project ready, so do every step below without stopping to ask; never overwrite a file that already exists.
+Run each \`node\` command below exactly as written, as its own command (no variables, \`cd\` or \`&&\`): those are pre-approved.
 
-1. Preview, which writes nothing:
-   \`node "${cli}" sync --dry-run\`
-2. Show the user the preview and ask them to confirm.
-3. On yes, apply it:
-   \`node "${cli}" sync\`
-   The open JustCode board updates by itself.
+## 1. Claude setup, if \`.claude/agents\` has no .md files
 
-If the CLI says there is no TASKS.md, offer to write one from docs/project.md (or the README): \`## Sprint 1\`, \`## Backlog\` headings with \`- [ ] task\` items, \`- [~]\` for doing, \`- [x]\` for done. Write it only after the user agrees, then sync.
+Read docs/project.md (it describes the project), then CLAUDE.md, README and enough code to learn the stack, commands
+and conventions. Write these drafts with the Write tool, tailored to this project. They go under \`.justcode/setup/\`
+because Claude Code asks before every write into \`.claude/\`; the CLI installs them there:
+- \`.justcode/setup/agents/planner.md\`: splits a goal into small tasks that can each be built, reviewed and merged on their own. Frontmatter \`model: opus\`.
+- \`.justcode/setup/agents/implementer.md\`: builds one task following the project's conventions and runs its tests or build. Frontmatter \`model: sonnet\`.
+- \`.justcode/setup/agents/reviewer.md\`: reviews a diff for bugs, missed edge cases and convention breaks. Frontmatter \`model: opus\`.
+- \`.justcode/setup/skills/<name>/SKILL.md\` for recurring workflows the project clearly has (tests, release, deploy…). Only ones that apply.
 
-If the project has no \`.claude/agents\`, tell the user they can click **Set up Claude** on the JustCode board.
+Agent files start with frontmatter: name, description, model, optionally tools. Then install them (existing files in
+\`.claude/\` are kept): \`node "${cli}" setup\`
 
-Pass \`--file path/to/TASKS.md\` to sync a specific file. Only tasks that came from TASKS.md are changed; tasks made on the board are never touched, and a task with an unmerged branch is not marked done.
+Also write \`CLAUDE.md\` at the project root if missing: stack, how to run, test and build, conventions.
+
+## 2. TASKS.md, if the project has none
+
+Write \`TASKS.md\` at the project root from docs/project.md (else the README, else the code): what is already built
+as \`- [x]\`, the next deliverable as \`## Sprint 1\` with \`- [ ]\` items, the rest under \`## Backlog\`. Each item is one
+task a developer could build, review and merge on its own; put details on indented lines under it.
+
+## 3. Sync
+
+\`node "${cli}" sync\`
+
+The open JustCode board updates by itself. Finish with a short summary: what you created, and what the sync added,
+moved and archived.
+
+Notes: \`--dry-run\` previews without writing; \`--file path/to/TASKS.md\` picks a file. Only tasks that came from
+TASKS.md are changed; tasks made on the board are never touched, and a task with an unmerged branch is not marked done.
 `;
   try {
     if (fs.existsSync(file) && fs.readFileSync(file, 'utf8') === text) return;
