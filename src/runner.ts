@@ -19,11 +19,22 @@ export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number;
 export type RunState = 'running' | 'waiting' | 'idle';
 
 // What a waiting session asks for, shown on its card: the tool and its main argument.
-export interface Ask { message: string; tool?: string; detail?: string; always?: string }
+export interface Ask { message: string; tool?: string; detail?: string; always?: string; noAlways?: boolean }
 
 // Claude Code's permission menu: "1. Yes", "2. Yes, and always allow …", …, last "No". The prompt is on screen when
 // it asks "Do you want to proceed?" (or similar) and lists numbered choices.
 const isMenu = (screen: string) => /Esc\s*to\s*cancel/i.test(screen) && /^\s*[❯›>]?\s*1\.\s*\S/m.test(screen);
+// The menu's "always" choice: "Yes, and always allow …", "… don't ask again …", "allow all edits", "switch to accept edits".
+// Its number varies (2, 3, …), and many prompts have none at all: a compound `cd … && …` command offers only "1. Yes  2. No".
+// Pressing a fixed number there would press "No", which rejects the tool call and interrupts the turn.
+const ALWAYS = /always allow|don'?t ask again|do not ask again|allow all (edits|commands)|accept edits|never ask/i;
+export function alwaysOption(screen: string): { n: number; text: string } | undefined {
+  for (let n = 2; n <= 6; n++) {
+    const text = optionText(screen, n);
+    if (text && ALWAYS.test(text) && !/^\s*no\b/i.test(text)) return { n, text };
+  }
+}
+
 const optionText = (screen: string, n: number) => {
   const lines = screen.split('\n');
   const i = lines.findIndex(l => new RegExp(`^\\s*[❯›>]?\\s*${n}\\.\\s*\\S`).test(l));
@@ -275,8 +286,10 @@ export class Runner {
     await new Promise(r => setTimeout(r, 500)); // the menu is drawn a moment after the hook fires
     const a = this.asks.get(id);
     if (!a || this.state.get(id) !== 'waiting') return;
-    const text = optionText(await this.ptys.screen(id), 2);
-    if (text && /always|don't ask|do not ask|allow all/i.test(text)) { a.always = text.slice(0, 200); this.changed(); }
+    const opt = alwaysOption(await this.ptys.screen(id));
+    a.always = opt?.text.slice(0, 200);
+    a.noAlways = !opt;
+    this.changed();
   }
 
   // Answers the permission prompt. Only the menu's number keys and Enter are sent (1 = Yes, 2 = Yes and always,
@@ -285,7 +298,8 @@ export class Runner {
   async answer(id: string, choice: 'allow' | 'always' | 'deny') {
     if (this.state.get(id) !== 'waiting') return;
     const ask = this.asks.get(id);
-    if (!isMenu(await this.ptys.screen(id))) {
+    const screen = await this.ptys.screen(id);
+    if (!isMenu(screen)) {
       // The hook said "waiting" but Claude isn't asking (answered in the terminal, or already moved on): don't type into the input.
       this.asks.delete(id);
       this.state.set(id, 'running');
@@ -293,9 +307,18 @@ export class Runner {
       this.changed();
       return;
     }
+    let key = '1';
+    if (choice === 'always') {
+      const opt = alwaysOption(screen);
+      if (opt) key = String(opt.n);
+      else {
+        // No "always" choice in this menu (the second choice is "No"): accept this once, never press a fixed number.
+        this.notify('info', 'Claude offers no "always" choice for this prompt, so it was allowed this once.', id);
+      }
+    }
     if (choice === 'deny') this.ptys.write(id, '\x1b', 'card: Deny');
     else {
-      this.ptys.write(id, choice === 'always' ? '2' : '1', `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
+      this.ptys.write(id, key, `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
       await new Promise(r => setTimeout(r, 200));
       this.ptys.write(id, '\r', `card: ${choice === 'always' ? 'Always' : 'Allow'}`);
     }
