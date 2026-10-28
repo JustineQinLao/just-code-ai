@@ -28,17 +28,20 @@ const sprintName = id => S.board.sprints.find(s => s.id === id)?.name;
 
 const app = document.getElementById('app');
 app.innerHTML = `
+  <div id="limitbar" class="banner limit" hidden></div>
   <div id="offline" class="banner" hidden>The board lost its connection to JustCode (usually after an update). Close this tab and run <b>JustCode: Open Board</b>, or reload the window.</div>
-  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><button id="settings">⚙ Settings</button><button id="guide">? Guide</button></header>
+  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><span id="meter" class="meter" hidden></span><button id="settings">⚙ Settings</button><button id="guide">? Guide</button></header>
   <div class="row toolbar">
     <select id="view"></select>
     <button id="newSprint">+ Sprint</button>
     <button id="activate" hidden>Set active</button>
     <button id="closeSprint" hidden>Close sprint</button>
+    <span id="progress" class="muted small"></span>
     <span class="grow"></span>
     <label class="muted small"><input type="checkbox" id="archived"> archived</label>
     <button id="setupClaude" title="Create the Claude setup (agents, skills, CLAUDE.md) and TASKS.md if missing, from docs/project.md, then sync the board. Runs by itself the first time a project that isn't set up is opened.">✦ Initialize</button>
     <button id="plan">✦ Plan with Claude</button>
+    <button id="mergeReady" hidden title="Merge every task whose AI review passed, one at a time">✓ Merge ready</button>
     <button id="runAll" class="primary">▶ Run all</button>
   </div>
   <div class="addbar">
@@ -74,6 +77,7 @@ $('activate').onclick = () => send({ type: 'activateSprint', sprintId: ui.view }
 $('closeSprint').onclick = () => send({ type: 'closeSprint', sprintId: ui.view });
 $('plan').onclick = () => planDialog();
 $('setupClaude').onclick = () => send({ type: 'setupClaude' });
+$('mergeReady').onclick = () => send({ type: 'mergeReady', ids: ready().map(t => t.id) });
 $('runAll').onclick = () => {
   if (S.board.tasks.some(t => t.queued)) return send({ type: 'cancelQueue' });
   send({ type: 'runAll', ids: visible().filter(t => t.status === 'todo').map(t => t.id) });
@@ -115,6 +119,9 @@ $('title').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) add(); };
 
 /* ---------- render ---------- */
 
+// Reviewed and passed, nothing in the way, not flagged critical: safe to merge in one go.
+const ready = () => visible().filter(t => t.status === 'review' && t.branch && t.review?.state === 'pass' && t.review.risk !== 'critical' && !t.conflicts?.length && !t.live);
+
 function visible() {
   const v = ui.view;
   return S.board.tasks.filter(t => (ui.archived || !t.archived) && (v === 'all' || (v === 'backlog' ? !t.sprintId : t.sprintId === v)));
@@ -123,6 +130,7 @@ function visible() {
 function render() {
   if (!S) return;
   renderRoots();
+  renderLimit();
   document.querySelectorAll('.toolbar, .addbar').forEach(e => { e.hidden = !!S.empty; });
   if (S.empty) {
     $('name').textContent = 'No project';
@@ -153,10 +161,37 @@ function render() {
     $('desc').hidden = false; $('desc').value += `${$('desc').value ? '\n' : ''}/${b.dataset.skill} `; $('desc').focus();
   });
   const todo = visible().filter(t => t.status === 'todo').length, queued = S.board.tasks.filter(t => t.queued).length;
-  $('runAll').textContent = queued ? `■ Cancel queue (${queued})` : `▶ Run all (${todo})`;
+  $('runAll').textContent = queued ? `■ Cancel queue (${queued})` : `▶ Run ${inSprint ? 'sprint' : 'all'} (${todo})`;
+  const vis = visible().filter(t => !t.archived), nReady = ready().length;
+  $('progress').textContent = vis.length ? `${vis.filter(t => t.status === 'done').length}/${vis.length} done` : '';
+  $('mergeReady').hidden = !nReady;
+  $('mergeReady').textContent = `✓ Merge ready (${nReady})`;
   $('runAll').disabled = !queued && !todo;
   renderBoard();
 }
+
+const clock = ms => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+const inMins = ms => { const m = Math.max(0, Math.round((ms - Date.now()) / 60000)); return m >= 90 ? `${Math.round(m / 60)} h` : `${m} min`; };
+
+// Usage of the 5-hour and weekly windows, and a banner when a limit has stopped work.
+function renderLimit() {
+  const L = S.limit, bar = $('limitbar'), meter = $('meter');
+  const w = [['5h', L?.five], ['wk', L?.week]].filter(([, x]) => x);
+  meter.hidden = !w.length;
+  meter.innerHTML = w.map(([k, x]) => `<span class="m ${x.pct >= 90 ? 'hot' : x.pct >= 70 ? 'warm' : ''}" title="${esc(k === '5h' ? '5-hour' : 'Weekly')} limit${x.resetsAt ? ' · resets ' + clock(x.resetsAt) : ''}">${k} ${Math.round(x.pct)}%</span>`).join('');
+  if (L?.held) {
+    const at = L.reached.resetsAt;
+    bar.hidden = false;
+    bar.innerHTML = `⏳ <b>Claude usage limit reached</b>${at ? ` · resets ${clock(at)} (in ${inMins(at)})` : ''}. Queued tasks wait; stopped tasks continue by themselves after the reset. <button id="resumeNow">Try again now</button>`;
+    $('resumeNow').onclick = () => send({ type: 'resumeNow' });
+  } else if ((L?.five?.pct ?? 0) >= 85 || (L?.week?.pct ?? 0) >= 85) {
+    const x = (L.five?.pct ?? 0) >= (L.week?.pct ?? 0) ? ['5-hour', L.five] : ['weekly', L.week];
+    bar.hidden = false;
+    bar.innerHTML = `⚠ ${x[0]} limit <b>${Math.round(x[1].pct)}%</b> used${x[1].resetsAt ? ` · resets ${clock(x[1].resetsAt)}` : ''}. Running tasks may stop soon; they continue after the reset.`;
+  } else bar.hidden = true;
+}
+// The "in N min" text and the reset need a refresh even when nothing else changes.
+setInterval(() => { if (S && !S.empty && S.limit?.held) renderLimit(); }, 30000);
 
 function renderRoots() {
   $('roots').innerHTML = '';
@@ -189,6 +224,32 @@ function renderBoard() {
   renderTermHeader();
 }
 
+// One plain sentence on every card: what is happening, or what the user should do next. { text, tone: info | todo | warn }
+function nextStep(t) {
+  const set = S.settings ?? {}, max = set.maxReviews ?? 3, r = t.review;
+  const mins = t.limited && S.limit?.reached?.resetsAt ? ` at ${clock(S.limit.reached.resetsAt)}` : '';
+  if (t.status === 'done') return;
+  if (t.limited) return { text: `Paused by the Claude usage limit. It continues by itself after the reset${mins}.`, tone: 'warn' };
+  if (t.run === 'waiting') return { text: 'Claude is asking permission. Allow or Deny below.', tone: 'todo' };
+  if (t.conflicts?.length) return { text: `Merging into ${t.base} hit conflicts. Use “Resolve with Claude” below, then merge again.`, tone: 'todo' };
+  if (t.status === 'todo') return t.queued ? { text: 'Queued. It starts when a slot is free.', tone: 'info' } : { text: 'Ready. Press ▶ Run, or ▶ Run all for the whole list.', tone: 'info' };
+  if (t.run === 'running') return { text: r?.state === 'fail' ? `Claude is fixing the reviewer's issues (try ${r.attempts} of ${max}).` : 'Claude is working. Nothing to do yet.', tone: 'info' };
+  if (!t.branch) return t.status === 'review' ? { text: 'Claude finished. Check the result, then press ✓ Done. Type in the terminal (⌨) to ask for changes.', tone: 'todo' } : undefined;
+  if (t.status === 'doing' && r?.state === 'fail') return { text: `Reviewer found ${r.issues?.length ?? 0} issue(s). Sending them to Claude to fix (try ${r.attempts} of ${max}).`, tone: 'info' };
+  if (t.status !== 'review') return;
+  if (!r) return set.autoReview === false
+    ? { text: 'Look at the changes (⇄), then press ✓ Merge. Or run the AI review first (⚖).', tone: 'todo' }
+    : { text: 'The AI reviewer checks this next, by itself. Nothing to do yet.', tone: 'info' };
+  if (r.state === 'running') return { text: 'The AI reviewer is checking the changes (runs the tests too). Nothing to do yet.', tone: 'info' };
+  if (r.state === 'error') return { text: 'The reviewer could not run, so there is no verdict. Press Retry review, or check ⇄ and merge yourself.', tone: 'warn' };
+  if (r.state === 'pass') return set.autoMerge && r.risk !== 'critical'
+    ? { text: 'Reviewer passed. Merging by itself.', tone: 'info' }
+    : { text: r.risk === 'critical' ? 'Reviewer passed but marked it critical. Read the changes (⇄) carefully, then press ✓ Merge.' : 'Reviewer passed. Press ✓ Merge, or look at the changes (⇄) first.', tone: 'todo' };
+  if (r.state === 'fail') return r.attempts >= max
+    ? { text: `Still ${r.issues?.length ?? 0} issue(s) after ${max} tries. Press “Send to Claude to fix” again, fix it yourself in the terminal, or merge anyway.`, tone: 'warn' }
+    : { text: `Reviewer found ${r.issues?.length ?? 0} issue(s). Claude fixes them by itself (try ${r.attempts} of ${max}).`, tone: 'info' };
+}
+
 function card(t) {
   const conflict = t.conflicts?.length;
   const c = h(`<div class="card ${t.run === 'waiting' ? 'waiting' : ''} ${conflict ? 'conflict' : ''}" data-id="${t.id}">
@@ -203,6 +264,8 @@ function card(t) {
       t.queued && '<span class="chip">queued</span>',
       t.run === 'running' && '<span class="chip">working…</span>',
       t.run === 'idle' && !t.review && '<span class="chip ok">turn done</span>',
+      t.limited && '<span class="chip warn" title="Stopped by the usage limit; continues by itself after the reset">⏳ waiting for reset</span>',
+      t.review?.state === 'error' && '<span class="chip warn" title="The reviewer could not run, so there is no verdict">review couldn\'t run</span>',
       t.review?.state === 'running' && '<span class="chip">AI reviewing…</span>',
       t.review?.state === 'pass' && `<span class="chip ok">✓ review passed${t.review.risk === 'critical' ? ' · critical' : ''}</span>`,
       t.review?.state === 'fail' && `<span class="chip err">✗ review: ${t.review.issues?.length ?? 0} issue(s) · try ${t.review.attempts}</span>`,
@@ -210,6 +273,7 @@ function card(t) {
       t.branch && t.status !== 'done' && `<span class="chip" title="${esc(t.branch)} → ${esc(t.base)}">⎇ ${esc(t.base)}</span>`,
       t.pr && `<button class="chip btn" data-act="openUrl">PR ↗</button>`,
     ].filter(Boolean).join('')}</div>
+    ${(() => { const n = nextStep(t); return n ? `<div class="next ${n.tone}">→ ${esc(n.text)}</div>` : ''; })()}
     <div class="actions"></div></div>`);
   c.querySelector('.top').ondragstart = e => e.dataTransfer.setData('text/task', t.id);
   const act = c.querySelector('.actions');
@@ -256,6 +320,12 @@ function card(t) {
     const k = t.id + (t.review.head ?? ""); if (shots[k]) draw(shots[k]); else send({ type: "shots", id: t.id, head: t.review.head });
     c.append(p);
   }
+  if (t.review?.state === 'error') {
+    const p = h(`<div class="panel"><div class="small muted">The reviewer could not run${t.review.error ? ': ' + esc(t.review.error) : ''}. Nothing was sent to Claude.</div>
+      <div class="actions"><button data-a="again" class="primary">Retry review</button></div></div>`);
+    p.querySelector('[data-a="again"]').onclick = () => send({ type: 'review', id: t.id });
+    c.append(p);
+  }
   if (t.review?.state === 'fail' && t.review.issues?.length && !t.live || (t.review?.state === 'fail' && t.status === 'review')) {
     const p = h(`<div class="panel"><div class="small">Reviewer issues:</div><ol class="issues">${t.review.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ol>
       <div class="actions"><button class="primary" data-a="fix">Send to Claude to fix</button><button data-a="again">Review again</button></div></div>`);
@@ -263,7 +333,7 @@ function card(t) {
     p.querySelector('[data-a="again"]').onclick = () => send({ type: 'review', id: t.id });
     c.append(p);
   }
-  if (t.branch && t.status === 'review' && !t.review && !t.live) icon('⚖', 'Run the AI review', () => send({ type: 'review', id: t.id }));
+  if (t.branch && t.status === 'review' && t.review?.state !== 'running') icon('⚖', t.review ? 'Review again' : 'Run the AI review', () => send({ type: 'review', id: t.id }));
   if (conflict) {
     const p = h(`<div class="panel"><div class="small">Conflicts with <b>${esc(t.base)}</b> — fix them here, never in your checkout:</div><ul class="files"></ul>
       <div class="actions"><button data-a="resolve" class="primary">Resolve with Claude</button><button data-a="resolved">Mark resolved</button></div></div>`);

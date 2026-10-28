@@ -37,8 +37,9 @@ export class Ptys {
     try { fs.mkdirSync(this.dir!, { recursive: true }); fs.writeFileSync(f, screen); } catch { /* disk full or read-only: in-memory copy still works */ }
   }
 
-  onData(fn: (id: string, data: string) => void) { this.ev.on('data', fn); }
-  onExit(fn: (id: string, code: number) => void) { this.ev.on('exit', fn); }
+  // Both return an unsubscribe, so a removed project's runner stops listening.
+  onData(fn: (id: string, data: string) => void) { this.ev.on('data', fn); return () => { this.ev.off('data', fn); }; }
+  onExit(fn: (id: string, code: number) => void) { this.ev.on('exit', fn); return () => { this.ev.off('exit', fn); }; }
 
   has(id: string) { return this.live.has(id); }
   ids() { return [...this.live.keys()]; }

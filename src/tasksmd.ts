@@ -77,6 +77,8 @@ export function syncTasks(store: Store, file: string, dryRun: boolean): SyncResu
     if (seen.has(k)) continue;
     seen.add(k);
     const t = store.data.tasks.find(x => key(x.title) === k && !x.archived);
+    // Archived on the board (e.g. a finished task whose "- [x]" line is still in TASKS.md): not added again.
+    if (!t && store.data.tasks.some(x => key(x.title) === k && x.archived && x.src === 'TASKS.md')) continue;
     if (!t) {
       res.added.push(it.title);
       if (!dryRun) store.addTask({ title: it.title, description: it.description, sprintId: sprintId(it.sprint), mode: 'default', status: it.status, src: 'TASKS.md' });

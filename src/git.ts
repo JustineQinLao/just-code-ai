@@ -57,7 +57,21 @@ const MAX_FILE = 10 * 1024 * 1024;
 // Commits the main folder's uncommitted work on its current branch, so a task's worktree (cut from that branch)
 // has the same files. Secrets and deps stay out (see PROTECT), and files over 10 MB are never committed.
 // Returns the committed paths and the ones left out for size.
+// A merge, rebase or cherry-pick in progress, or unmerged paths: the folder is mid-operation and must not be committed.
+export async function midOperation(repo: string): Promise<string | undefined> {
+  for (const [ref, what] of [['MERGE_HEAD', 'merge'], ['CHERRY_PICK_HEAD', 'cherry-pick'], ['REVERT_HEAD', 'revert']]) {
+    if (await ok(repo, ['rev-parse', '-q', '--verify', ref])) return what;
+  }
+  for (const d of ['rebase-merge', 'rebase-apply']) {
+    const p = (await git(repo, ['rev-parse', '--git-path', d]).catch(() => '')).trim();
+    if (p && fs.existsSync(path.resolve(repo, p))) return 'rebase';
+  }
+  if ((await git(repo, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim()) return 'merge';
+}
+
 export async function snapshot(repo: string) {
+  const busy = await midOperation(repo);
+  if (busy) throw new Error(`Your project folder is in the middle of a ${busy}. Finish or abort it first; JustCode will not commit over it.`);
   await exclude(repo, false);
   if (!(await git(repo, ['status', '--porcelain'])).trim()) return { files: [] as string[], skipped: [] as string[] };
   await git(repo, ['add', '-A']);
@@ -74,7 +88,13 @@ export async function catchUp(dir: string, base: string) {
   if (!fs.existsSync(path.join(dir, '.git'))) return false;
   if ((await git(dir, ['status', '--porcelain'])).trim()) return false;
   if (await ok(dir, ['merge-base', '--is-ancestor', base, 'HEAD'])) return false; // already has it
-  await git(dir, ['merge', '--no-edit', '-q', base]);
+  try {
+    await git(dir, ['merge', '--no-edit', '-q', base]);
+  } catch (e) {
+    // Never leave a half-done merge (with conflict markers) in a task's worktree: Merge on the card handles conflicts.
+    await git(dir, ['merge', '--abort']).catch(() => {});
+    throw e;
+  }
   return true;
 }
 
@@ -98,6 +118,8 @@ export async function removeWorktree(repo: string, dir: string) {
 
 // Commits whatever the task's session changed. false = nothing to commit.
 export async function commitAll(dir: string, message: string) {
+  // Unresolved conflicts: committing now would put the markers on the branch.
+  if ((await git(dir, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim()) return false;
   await git(dir, ['add', '-A']);
   if (await ok(dir, ['diff', '--cached', '--quiet'])) return false;
   await git(dir, ['commit', '-q', '-m', message]);
@@ -119,7 +141,8 @@ export async function changes(dir: string, base: string): Promise<Change[]> {
 }
 
 export const mergeBase = (dir: string, base: string) => git(dir, ['merge-base', base, 'HEAD']);
-export const show = (dir: string, ref: string, file: string) => git(dir, ['show', `${ref}:${file}`]).catch(() => '');
+export const show = (dir: string, ref: string, file: string) =>
+  exec('git', ['show', `${ref}:${file}`], { cwd: dir, maxBuffer: 64 * 1024 * 1024 }).then(r => r.stdout, () => '');
 export const conflicted = async (dir: string) => (await git(dir, ['diff', '--name-only', '--diff-filter=U'])).split('\n').filter(Boolean);
 export const merging = (dir: string) => ok(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD']);
 
@@ -156,11 +179,36 @@ export async function mergeIntoBase(repo: string, base: string, branch: string, 
     await git(repo, ['merge', '--no-ff', '-m', message, branch]);
     return;
   }
+  // Moving a branch that another worktree has checked out would leave that worktree's files stale.
+  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
+  let where: string | undefined;
+  for (const block of (await git(repo, ['worktree', 'list', '--porcelain'])).split('\n\n')) {
+    const lines = block.split('\n');
+    if (lines.includes(`branch refs/heads/${base}`)) where = lines.find(l => l.startsWith('worktree '))?.slice(9);
+  }
+  if (where && real(where) !== real(repo)) throw new Error(`${base} is checked out in ${where}. Switch that folder to another branch, then merge again.`);
   const old = await git(repo, ['rev-parse', `refs/heads/${base}`]);
   if (!await ok(repo, ['merge-base', '--is-ancestor', old, branch])) throw new Error(`${base} moved; run Merge again`);
   const tree = await git(repo, ['rev-parse', `${branch}^{tree}`]);
   const commit = await git(repo, ['commit-tree', tree, '-p', old, '-p', branch, '-m', message]);
   await git(repo, ['update-ref', `refs/heads/${base}`, commit, old]);
+}
+
+// Gitignored env files a task needs to run tests (a worktree only has committed files). They stay out of git
+// (see PROTECT); existing files in the worktree are never overwritten. Returns what was copied.
+export function copyEnvFiles(repo: string, worktree: string, names: string[]) {
+  const copied: string[] = [];
+  for (const n of names) {
+    if (!n || n.includes('..') || path.isAbsolute(n)) continue;
+    const from = path.join(repo, n), to = path.join(worktree, n);
+    try {
+      if (!fs.statSync(from).isFile() || fs.existsSync(to)) continue;
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.copyFileSync(from, to);
+      copied.push(n);
+    } catch { /* not there */ }
+  }
+  return copied;
 }
 
 export const deleteBranch = (repo: string, branch: string) => git(repo, ['branch', '-D', branch]);

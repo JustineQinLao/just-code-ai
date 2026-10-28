@@ -33,10 +33,9 @@ Every action runs in the root of the project it was made in.
    Skills from `.claude/skills` and `.claude/commands` show under the box; click one to add `/skill` to the details.
 2. **Sprints** (optional): **+ Sprint**, then pick it in the view menu. **Set active** makes new tasks go there.
    **Close sprint** sends unfinished tasks back to the backlog.
-3. **Initialize** (automatic): the first time you open a project that isn't set up (no `.claude/agents`, or nothing for the board),
-   JustCode runs `/just-code-ai-sync` in the project root with no prompts. Claude reads `docs/project.md` (else README, else the code) and creates
-   a planner (Opus), implementer (Sonnet) and reviewer agent, fitting skills, `CLAUDE.md` and `TASKS.md`, then syncs the tasks into the backlog (no sprints).
-   Existing files are never overwritten. **✦ Initialize** runs it again on demand.
+3. **Initialize** (optional): nothing needs it. The board works as is, with the project's own agents and skills; sync or not, you add
+   tasks, add a sprint and press **▶ Run sprint**. **✦ Initialize** runs `/just-code-ai-sync` if you want Claude to draft agents, skills,
+   `CLAUDE.md` and `TASKS.md` from `docs/project.md`. Skills from other tools (LexCode's) are never offered as chips.
 4. **Plan with Claude**: describe a goal. Claude reads the code read-only and proposes tasks. You pick which to
    add, to the backlog, an existing sprint or a new one. A planner-like agent (planner, architect, lead) is preselected.
 4. **Run**: **▶ Run** on a card, or **▶ Run all** for every To do task in the current view. Run all keeps
@@ -74,6 +73,22 @@ Run it as a task (it runs in the project root). It previews, asks you, then appl
   and a task with an unmerged branch is not marked done.
 
 The open board updates by itself. The same sync from a terminal: `node <extension>/out/cli.js sync [--dry-run]`.
+
+## Usage limits
+
+The header shows how much of your **5-hour** and **weekly** Claude limits are used (`5h 51% · wk 19%`), read from Claude Code's own
+status data, so it is exact. From 85% a banner warns you. When a limit stops work:
+- queued tasks wait, tasks the limit cut short are marked **⏳ waiting for reset**, and a reviewer that could not run shows
+  **review couldn't run** (never sent to Claude as "issues to fix");
+- after the reset (the banner says when; **Try again now** skips the wait) the tasks are told to continue exactly where they stopped,
+  failed reviews are retried and the queue restarts.
+
+## Keeping cards moving
+
+Every card says what is happening or what to do next (“→ The AI reviewer checks this next…”, “→ Reviewer passed. Press ✓ Merge…”).
+Nothing waits for a click the board can do itself: a Review card that was never reviewed gets reviewed, a failed review whose session was
+closed sends its issues back to Claude, and **✓ Merge ready (N)** merges every reviewed, non-critical task one at a time.
+Gitignored files listed in `justCode.worktreeCopy` (default `.env`, `.env.local`) are copied into each task's worktree so tests can run.
 
 ## Terminal modal
 
