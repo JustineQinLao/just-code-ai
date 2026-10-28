@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -38,7 +38,7 @@
           "default": 1,
           "minimum": 1,
           "maximum": 6,
-          "description": "Tasks Run all keeps running at once. Each task has its own git worktree, so parallel runs never touch each other's files."
+          "description": "Tasks in progress at once. Each holds its slot until it is merged, so 1 (default) runs Run all strictly one at a time, in board order, each task building on the previous one's merged work. More runs several side by side in separate worktrees."
         },
         "justCode.defaultMode": {
           "type": "string",
@@ -103,6 +103,11 @@
             ".env.local"
           ],
           "description": "Gitignored files copied from the project folder into each task's worktree (never committed, never overwritten), so tests that need them run. A worktree only has committed files."
+        },
+        "justCode.freshSessionKB": {
+          "type": "number",
+          "default": 600,
+          "description": "Every task has its own fresh Claude session. Review fixes and the continue-after-limit step keep using it, unless its saved transcript is bigger than this many KB: then a new session starts with a short handoff instead, so long tasks don't drag their history into every round. 0 = always start fresh for those steps; -1 = never."
         }
       }
     }

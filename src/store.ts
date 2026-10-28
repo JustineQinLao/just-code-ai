@@ -17,6 +17,7 @@ export interface Task {
   agent?: string;             // .claude/agents name, run as `claude --agent <name>`
   mode: Mode;
   where?: 'branch' | 'root';  // branch (default): own worktree + PR; root: runs in the project folder, no merge
+  pastSessions?: string[];    // earlier sessions of this task (replaced by a fresh one when they grew big)
   sessionId?: string;         // Claude session, fixed up front with --session-id
   base?: string;              // branch the task forks from and merges back into
   branch?: string;            // jc/<slug>-<id>
@@ -119,6 +120,17 @@ export class Store {
     for (const k of Object.keys(patch) as (keyof Task)[]) if (patch[k] === undefined) delete t[k];
     this.save();
     return t;
+  }
+
+  // Board order is run order: moves `id` before `beforeId` (or to the end).
+  reorder(id: string, beforeId?: string) {
+    this.fresh();
+    const from = this.board.tasks.findIndex(t => t.id === id);
+    if (from < 0 || id === beforeId) return;
+    const [t] = this.board.tasks.splice(from, 1);
+    const to = beforeId ? this.board.tasks.findIndex(x => x.id === beforeId) : -1;
+    this.board.tasks.splice(to < 0 ? this.board.tasks.length : to, 0, t);
+    this.save();
   }
 
   deleteTask(id: string) {

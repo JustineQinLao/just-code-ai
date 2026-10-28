@@ -37,6 +37,7 @@ app.innerHTML = `
     <button id="activate" hidden>Set active</button>
     <button id="closeSprint" hidden>Close sprint</button>
     <span id="progress" class="muted small"></span>
+    <span id="queueinfo" class="small" hidden></span>
     <span class="grow"></span>
     <label class="muted small"><input type="checkbox" id="archived"> archived</label>
     <button id="setupClaude" title="Create the Claude setup (agents, skills, CLAUDE.md) and TASKS.md if missing, from docs/project.md, then sync the board. Runs by itself the first time a project that isn't set up is opened.">✦ Initialize</button>
@@ -162,6 +163,12 @@ function render() {
   });
   const todo = visible().filter(t => t.status === 'todo').length, queued = S.board.tasks.filter(t => t.queued).length;
   $('runAll').textContent = queued ? `■ Cancel queue (${queued})` : `▶ Run ${inSprint ? 'sprint' : 'all'} (${todo})`;
+  const Q = S.queue, qi = $('queueinfo');
+  qi.hidden = !Q?.queued?.length && !Q?.blocker;
+  qi.textContent = Q?.queued?.length
+    ? (Q.blocker ? `Queue: ${Q.queued.length} waiting · “${Q.blocker.title.slice(0, 40)}” must ${Q.blocker.why}` : `Queue: ${Q.queued.length} waiting`)
+    : '';
+  qi.className = 'small ' + (Q?.blocker && /merged|fixed|reviewed|approve/.test(Q.blocker.why) ? 'qwait' : 'muted');
   const vis = visible().filter(t => !t.archived), nReady = ready().length;
   $('progress').textContent = vis.length ? `${vis.filter(t => t.status === 'done').length}/${vis.length} done` : '';
   $('mergeReady').hidden = !nReady;
@@ -215,10 +222,10 @@ function renderBoard() {
     const col = h(`<div class="col" data-status="${st}"><h2><span>${label}</span><span class="row">${list.length ? '<button class="clear" title="Delete every task in this column">Clear</button>' : ''}<span>${list.length}</span></span></h2></div>`);
     col.querySelector('.clear')?.addEventListener('click', () => send({ type: 'clear', column: label, ids: list.map(t => t.id) }));
     if (!list.length) col.append(h('<div class="empty">Drop here</div>'));
-    for (const t of list) col.append(card(t));
+    list.forEach((t, i) => col.append(card(t, st === 'todo' ? i + 1 : undefined)));
     col.ondragover = e => { e.preventDefault(); col.classList.add('over'); };
     col.ondragleave = () => col.classList.remove('over');
-    col.ondrop = e => { e.preventDefault(); col.classList.remove('over'); const id = e.dataTransfer.getData('text/task'); if (id) send({ type: 'move', id, status: st }); };
+    col.ondrop = e => { e.preventDefault(); col.classList.remove('over'); const id = e.dataTransfer.getData('text/task') || dragId; if (id) send({ type: 'move', id, status: st }); };
     board.append(col);
   }
   renderTermHeader();
@@ -250,10 +257,12 @@ function nextStep(t) {
     : { text: `Reviewer found ${r.issues?.length ?? 0} issue(s). Claude fixes them by itself (try ${r.attempts} of ${max}).`, tone: 'info' };
 }
 
-function card(t) {
+let dragId = null;
+
+function card(t, order) {
   const conflict = t.conflicts?.length;
   const c = h(`<div class="card ${t.run === 'waiting' ? 'waiting' : ''} ${conflict ? 'conflict' : ''}" data-id="${t.id}">
-    <div class="top" draggable="true">${t.run ? `<span class="dot ${t.run}" title="${t.run}"></span>` : ''}<span class="title">${esc(t.title)}</span></div>
+    <div class="top" draggable="true">${order ? `<span class="order" title="Run all runs the list in this order. Drag a card to change it.">${order}</span>` : ''}${t.run ? `<span class="dot ${t.run}" title="${t.run}"></span>` : ''}<span class="title">${esc(t.title)}</span></div>
     ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ''}
     <div class="meta">${[
       ui.view === 'all' && t.sprintId && `<span class="chip">${esc(sprintName(t.sprintId))}</span>`,
@@ -275,7 +284,13 @@ function card(t) {
     ].filter(Boolean).join('')}</div>
     ${(() => { const n = nextStep(t); return n ? `<div class="next ${n.tone}">→ ${esc(n.text)}</div>` : ''; })()}
     <div class="actions"></div></div>`);
-  c.querySelector('.top').ondragstart = e => e.dataTransfer.setData('text/task', t.id);
+  c.querySelector('.top').ondragstart = e => { dragId = t.id; e.dataTransfer.setData('text/task', t.id); };
+  c.querySelector('.top').ondragend = () => { dragId = null; document.querySelectorAll('.dropbefore').forEach(x => x.classList.remove('dropbefore')); };
+  // Dropping a card on another card of the same column puts it before that card: board order is run order.
+  const sameColumn = () => { const d = S.board.tasks.find(x => x.id === dragId); return d && d.status === t.status && d.id !== t.id; };
+  c.ondragover = e => { if (dragId && sameColumn()) { e.preventDefault(); c.classList.add('dropbefore'); } };
+  c.ondragleave = () => c.classList.remove('dropbefore');
+  c.ondrop = e => { c.classList.remove('dropbefore'); if (dragId && sameColumn()) { e.preventDefault(); e.stopPropagation(); send({ type: 'reorder', id: dragId, before: t.id }); dragId = null; } };
   const act = c.querySelector('.actions');
   // Main actions have words; the rest are icons with tooltips.
   const btn = (label, fn, cls = '', title = '') => { const b = h(`<button class="${cls}" title="${esc(title)}">${label}</button>`); b.onclick = fn; b.disabled = t.busy; act.append(b); };

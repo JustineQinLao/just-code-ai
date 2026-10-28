@@ -141,6 +141,11 @@ export function sessionArgs(o: { task: Task; root: string; worktree: string; sta
 }
 
 // Claude Code stores sessions in ~/.claude/projects/<cwd with non-alphanumerics → '-'>/<id>.jsonl
+// Size of a session's saved transcript, as a measure of how much history a resumed session would carry.
+export const sessionSize = (cwd: string, id: string) => {
+  try { return fs.statSync(path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl')).size; } catch { return 0; }
+};
+
 export const sessionExists = (cwd: string, id: string) =>
   fs.existsSync(path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl'));
 

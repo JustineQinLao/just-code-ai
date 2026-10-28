@@ -150,3 +150,7 @@ dialog.termdlg .term { padding: 0; }
 .card .next { font-size: 12px; margin: 2px 0 6px; padding: 4px 8px; border-radius: 4px; border-left: 3px solid var(--line); background: color-mix(in srgb, var(--fg) 5%, transparent); }
 .card .next.todo { border-left-color: var(--accent); }
 .card .next.warn { border-left-color: var(--warn); }
+
+.card .order { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 9px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 11px; flex: none; margin-top: 1px; }
+.card.dropbefore { box-shadow: 0 -3px 0 0 var(--accent); }
+#queueinfo.qwait { color: var(--warn); }

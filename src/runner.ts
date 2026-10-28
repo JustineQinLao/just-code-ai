@@ -6,14 +6,14 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import { Ptys } from './pty';
 import * as g from './git';
-import { sessionArgs, sessionExists, reviewPrompt, runReview, discoverAgents, adb } from './claude';
+import { sessionArgs, sessionExists, sessionSize, reviewPrompt, runReview, discoverAgents, adb } from './claude';
 import { Limits, isLimitError } from './limits';
 
 // What counts as having tested, and diffs that change what a user sees.
 const TEST_CMD = /\b(test|pytest|jest|vitest|spec|build|gradlew|playwright|screenshot)\b/i;
 const UI_FILE = /^\+\+\+ b\/.*\.(html?|css|scss|tsx|jsx|vue|svelte|xml|kt|java|swift|dart|component\.ts)$/m;
 
-export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; commands?: string[] }
+export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; commands?: string[]; freshAfterKB?: number }
 
 // What a task's live session is doing, from its hooks: running, waiting for approval, or idle (turn finished).
 export type RunState = 'running' | 'waiting' | 'idle';
@@ -32,6 +32,7 @@ const toolDetail = (input: any) => {
 export class Runner {
   state = new Map<string, RunState>();
   private unsubExit?: () => void;
+  private launching = new Set<string>();   // runs between claim and process start (an old process's exit must not touch them)
   private reviewing = new Set<string>();   // reviews in flight (in memory: a persisted "running" would survive a crash)
   limits?: Limits;                 // shared usage-limit tracker (set by the extension)
   copyFiles: () => string[] = () => [];   // env files copied into each new worktree
@@ -64,6 +65,7 @@ export class Runner {
         if (t && (t.status === 'done' || t.archived)) this.stop(id);
       }
       this.sweepSoon();
+      if (this.queue.length) this.pump();
     });
     for (const t of store.data.tasks) if (t.review?.state === 'running') store.updateTask(t.id, { review: undefined });
     this.sweepSoon(3000);
@@ -82,7 +84,8 @@ export class Runner {
     const t = this.store.task(id);
     if (!t || this.ptys.has(id) || this.state.has(id)) return;
     this.state.set(id, 'running'); // claimed before the awaits, so Run all never double-starts a task
-    try { await this.launch(t, prompt, size); } catch (e) { this.state.delete(id); this.changed(); throw e; }
+    this.launching.add(id);
+    try { await this.launch(t, prompt, size); } catch (e) { this.state.delete(id); this.changed(); throw e; } finally { this.launching.delete(id); }
   }
 
   private async launch(t: Task, prompt?: string, size?: { cols: number; rows: number }) {
@@ -149,11 +152,38 @@ export class Runner {
 
   cancelQueue() { this.queue = []; this.changed(); }
 
+  // Tasks still on their way to Done: building, in review, being fixed, or waiting for you to merge. Each holds its slot
+  // until it is merged, so with maxParallel 1 the queue runs strictly one at a time and every task builds on the previous
+  // one's merged work. (A project-root task is finished when its turn ends: it has no branch to merge.)
+  private inFlight() {
+    return this.store.data.tasks.filter(t => {
+      if (t.archived || t.status === 'done' || t.init) return false;
+      const st = this.state.get(t.id);
+      if (st === 'running' || st === 'waiting') return true;
+      return t.where !== 'root' && !!(t.branch && t.worktree) && (t.status === 'doing' || t.status === 'review');
+    });
+  }
+
+  // What the queue is waiting for, for the toolbar.
+  queueInfo() {
+    const b = this.inFlight()[0], r = b?.review;
+    const why = !b ? '' : this.state.get(b.id) === 'waiting' ? 'approve a permission prompt'
+      : this.state.get(b.id) === 'running' ? 'finish'
+      : b.limited ? 'continue after the usage limit'
+      : r?.state === 'pass' ? 'be merged (✓ Merge)'
+      : r?.state === 'fail' ? (r.attempts >= this.reviewOpts().maxAttempts ? 'be fixed (the reviewer still finds issues)' : 'be fixed by Claude')
+      : r?.state === 'error' ? 'be reviewed (Retry review)'
+      : b.conflicts?.length ? 'have its conflicts resolved' : 'be reviewed';
+    return { queued: [...this.queue], blocker: b ? { id: b.id, title: b.title, why } : undefined };
+  }
+
   private pump() {
     if (this.limits?.held()) return; // out of quota: queued tasks wait for the reset (afterReset starts them)
-    const working = [...this.state.entries()].filter(([, s]) => s !== 'idle').length;
-    for (let n = working; n < this.maxParallel() && this.queue.length; n++) {
+    let slots = this.maxParallel() - this.inFlight().length;
+    while (slots > 0 && this.queue.length) {
       const id = this.queue.shift()!;
+      if (this.store.task(id)?.status !== 'todo') continue; // started by hand, moved or deleted meanwhile
+      slots--;
       this.run(id).catch(e => { this.notify('error', `${this.store.task(id)?.title}: ${e.message}`, id); this.pump(); });
     }
   }
@@ -266,6 +296,23 @@ export class Runner {
     if (cur?.status === 'review' && cur.branch && this.reviewOpts().auto) void this.review(id);
   }
 
+  // Sends text that continues the task's work (review issues, "continue after the limit"). Every task has its own session;
+  // within a task the session is continued, unless its history has grown big (freshAfterKB): then a new session starts with
+  // a short handoff, so a long task does not drag its whole history into every further round.
+  async continueTask(id: string, text: string) {
+    const t = this.store.task(id);
+    if (!t) return;
+    const limit = this.reviewOpts().freshAfterKB ?? 600;
+    const cwd = t.worktree ?? this.root;
+    if (!t.sessionId || limit < 0 || sessionSize(cwd, t.sessionId) <= limit * 1024 || this.state.get(id) === 'waiting') return this.say(id, text);
+    this.store.updateTask(id, { sessionId: undefined, pastSessions: [...(t.pastSessions ?? []), t.sessionId] });
+    this.stop(id);
+    this.state.delete(id);
+    this.notify('info', `"${t.title}": its session got long, so it continues in a fresh one (cheaper).`, id);
+    const where = t.base ? `see git log and git diff ${t.base}...HEAD; uncommitted work is in git status` : 'see git log and git status';
+    await this.run(id, `Continue this task: ${t.title}\n${t.description ?? ''}\n\nWork on it is already in this folder (${where}). ${text}`);
+  }
+
   /* ---------- keeping cards moving ---------- */
 
   private sweepTimer?: NodeJS.Timeout;
@@ -297,7 +344,7 @@ export class Runner {
           const working = [...this.state.values()].filter(s => s !== 'idle').length;
           if (working >= this.maxParallel()) continue;
           this.store.updateTask(t.id, { status: 'doing' });
-          await this.say(t.id, `The code reviewer found these issues (review ${t.review.attempts} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
+          await this.continueTask(t.id, `The code reviewer found these issues (review ${t.review.attempts} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
             t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
         }
       }
@@ -311,7 +358,7 @@ export class Runner {
       if (t.review?.state === 'error') this.store.updateTask(t.id, { review: undefined });
       if (!t.limited) continue;
       this.store.updateTask(t.id, { limited: undefined });
-      void this.say(t.id, 'Your Claude usage limit has reset. Continue exactly where you stopped.').catch(e => this.notify('error', e.message, t.id));
+      void this.continueTask(t.id, 'Your Claude usage limit has reset. Continue exactly where you stopped.').catch(e => this.notify('error', e.message, t.id));
     }
     this.pump();
     this.sweepSoon(500);
@@ -378,11 +425,12 @@ export class Runner {
     this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
     if (n >= o.maxAttempts) return this.notify('warn', `"${t.title}" failed AI review ${n} times. Check the issues on the card.`, id);
     this.store.updateTask(id, { status: 'doing' });
-    await this.say(id, `The code reviewer found these issues (review ${n} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
+    await this.continueTask(id, `The code reviewer found these issues (review ${n} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
       v.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
   }
 
   private async exited(id: string) {
+    if (this.ptys.has(id) || this.launching.has(id)) return; // a newer run of this task already took over
     this.state.delete(id);
     this.unwatch(id);
     const t = this.store.task(id);

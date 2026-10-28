@@ -42,7 +42,7 @@ export function activate(context: vscode.ExtensionContext) {
     };
     r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
       notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'),
-      () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false), commands: cfg().get<string[]>('reviewCommands', []) }));
+      () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false), commands: cfg().get<string[]>('reviewCommands', []), freshAfterKB: cfg().get('freshSessionKB', 600) }));
     r.limits = limits;
     r.copyFiles = () => cfg().get<string[]>('worktreeCopy', ['.env', '.env.local']);
     r.onChange(push);
@@ -115,6 +115,7 @@ export function activate(context: vscode.ExtensionContext) {
       board: { ...r.store.data, tasks },
       setup: hasSetup(r.root),
       limit: limits.view(),
+      queue: r.queueInfo(),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
       git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
@@ -184,6 +185,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'delete':
         if (await confirm(`Delete "${t?.title}"? Its branch and uncommitted work are removed too.`, 'Delete')) await r.remove(m.id);
         break;
+      case 'reorder': s.reorder(m.id, m.before); break;
       case 'archive': s.updateTask(m.id, { archived: true }); break;
       case 'clear': {
         const ids: string[] = m.ids.filter((id: string) => s.task(id));
