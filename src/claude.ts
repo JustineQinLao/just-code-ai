@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import { Task } from './store';
 
 export interface AgentDef { name: string; description: string; model?: string; tools?: string; file: string; scope: 'project' | 'user' }
@@ -179,12 +179,29 @@ export function sessionLog(cwd: string, sessionId: string): Step[] {
   return steps.slice(-600);
 }
 
-export interface Verdict { pass: boolean; issues: string[]; risk: 'minor' | 'critical' }
+export interface Verdict { pass: boolean; issues: string[]; risk: 'minor' | 'critical'; tested: string[] }
+
+// adb from PATH or the usual Android SDK spots, and the devices/emulators it sees right now.
+export function adb(): { bin: string; devices: string[] } | undefined {
+  const sdk = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT, path.join(os.homedir(), 'Library', 'Android', 'sdk'), path.join(os.homedir(), 'Android', 'Sdk')]
+    .filter(Boolean).map(d => path.join(d!, 'platform-tools', 'adb'));
+  const bin = [...(process.env.PATH ?? '').split(path.delimiter).map(d => path.join(d, 'adb')), ...sdk].find(f => fs.existsSync(f));
+  if (!bin) return;
+  try {
+    const out = execFileSync(bin, ['devices'], { encoding: 'utf8', timeout: 5000 });
+    return { bin, devices: out.split('\n').slice(1).map(l => l.split('\t')).filter(([, s]) => s?.trim() === 'device').map(([id]) => id) };
+  } catch { return { bin, devices: [] }; }
+}
+
+// Commands the reviewer may run: read git, run tests and builds, adb, screenshots. File edits stay blocked.
+export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status', 'ls', 'npm test', 'npm run', 'npx ng test', 'npx jest', 'npx vitest',
+  'npx playwright', 'pytest', 'python -m pytest', 'python manage.py test', 'python3 manage.py test', 'docker compose exec', 'docker compose run',
+  'go test', 'cargo test', './gradlew', 'adb', 'curl'];
 
 const MAX_DIFF = 150_000;
 
-// Read-only reviewer prompt (after LexCode's): the task, its diff, and a strict JSON verdict.
-export function reviewPrompt(t: Task, base: string, diff: string) {
+// Reviewer prompt (after LexCode's): the task, its diff, how to test it (tests, adb screenshots), a strict JSON verdict.
+export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string } = { shots: '' }) {
   const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
   return [
     `# Review task: ${t.title}`, t.description ?? '',
@@ -193,8 +210,19 @@ export function reviewPrompt(t: Task, base: string, diff: string) {
     'Tests for the changed behaviour. Security: validation, authorization, data isolation, injection, secrets. Fits the codebase\'s conventions.',
     'Fail only for real problems. Make every issue specific and actionable: file, line, what to change.',
     `## Diff\n\`\`\`diff\n${clipped}\n\`\`\``,
-    'You are running unattended in read-only mode: do not ask questions and do not write files. Read files if you need more context.',
-    'End your final message with exactly one ```json block:\n```json\n{"pass": true, "issues": [], "risk": "minor"}\n```\n' +
+    '## Required before your verdict: test it, do not only read it\n' +
+    '1. Run the project\'s tests that cover this change (its own commands: package.json scripts, CLAUDE.md, manage.py test, …) and its build if it has one. ' +
+    'A failing test or build is an issue. Reading the code is not a substitute.\n' +
+    (test.adb?.devices.length
+      ? `2. An Android device/emulator is connected (${test.adb.devices.join(', ')}). If the task or the diff touches anything a user sees, open the app ` +
+        `(or the changed page) on it with adb, then capture the screen with exactly: \`node ${test.cli} screenshot ${test.shots}/<name>.png\` ` +
+        '(shell redirects like `>` are not allowed here). Then Read each PNG and judge the UI from it.\n'
+      : '2. No Android device is connected, so no adb screenshots.\n') +
+    `3. For a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read the PNG.\n` +
+    `Save screenshots only in ${test.shots}; the user sees them next to your verdict. List every command you ran in "tested".\n` +
+    'Run each command on its own, as written: no `cd`, `&&`, `;` or variables (only single commands are pre-approved here).',
+    'You are running unattended: do not ask questions, do not edit or write project files. Read files if you need more context.',
+    'End your final message with exactly one ```json block:\n```json\n{"pass": true, "issues": [], "risk": "minor", "tested": ["npm test"]}\n```\n' +
     'A failing verdict must list issues. Use risk "critical" for security-sensitive code, migrations, public API or config changes, or anything you are unsure is safe to merge.',
   ].filter(Boolean).join('\n\n');
 }
@@ -206,13 +234,15 @@ export function parseVerdict(text: string): Verdict {
   if (typeof v.pass !== 'boolean') throw new Error('verdict has no "pass"');
   const issues = Array.isArray(v.issues) ? v.issues.map((i: any) => typeof i === 'string' ? i : JSON.stringify(i)) : [];
   if (!v.pass && !issues.length) throw new Error('failing verdict without issues');
-  return { pass: v.pass, issues, risk: v.risk === 'critical' ? 'critical' : 'minor' };
+  return { pass: v.pass, issues, risk: v.risk === 'critical' ? 'critical' : 'minor', tested: Array.isArray(v.tested) ? v.tested.map(String) : [] };
 }
 
 // Runs the reviewer headless (claude -p, plan mode, no edit tools) in the task's worktree.
-export function runReview(bin: string, cwd: string, prompt: string, model: string, agent: string | undefined, signal?: AbortSignal): Promise<Verdict> {
-  const args = ['-p', '--output-format', 'json', '--permission-mode', 'plan', '--disallowedTools', 'Write', 'Edit', 'NotebookEdit', 'ExitPlanMode',
-    ...(model ? ['--model', model] : []), ...(agent ? ['--agent', agent] : []), '--', prompt];
+// Runs headless: unlisted tools are denied, never asked. extra: more allowed command prefixes (settings).
+export function runReview(bin: string, cwd: string, prompt: string, model: string, agent: string | undefined, shots: string, extra: string[] = [], adbBin?: string, cli?: string, signal?: AbortSignal): Promise<Verdict> {
+  const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...extra, ...(adbBin ? [adbBin] : []), ...(cli ? [`node ${cli} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
+  const args = ['-p', '--output-format', 'json', '--permission-mode', 'default', '--disallowedTools', 'Write', 'Edit', 'NotebookEdit',
+    '--allowedTools', ...allow, '--add-dir', shots, ...(model ? ['--model', model] : []), ...(agent ? ['--agent', agent] : []), '--', prompt];
   return new Promise((resolve, reject) => {
     const p = spawn(bin, args, { cwd, env: ptyEnv(), signal, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '', err = '';

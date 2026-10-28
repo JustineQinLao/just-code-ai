@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext) {
     };
     r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
       notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'),
-      () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false) }));
+      () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false), commands: cfg().get<string[]>('reviewCommands', []) }));
     r.onChange(push);
     r.store.onChange(push);
     r.store.watch();
@@ -208,6 +208,10 @@ export function activate(context: vscode.ExtensionContext) {
         break;
       case 'resolve': await r.resolveWithClaude(m.id); break;
       case 'review': await r.review(m.id, true); break;
+      case 'shots': panel?.webview.postMessage({ type: 'shots', id: m.id, head: m.head, images: (t?.review?.screenshots ?? []).flatMap(f => {
+        try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
+      }) }); break;
+      case 'openShot': if (m.file) vscode.commands.executeCommand('vscode.open', vscode.Uri.file(m.file)); break;
       case 'sendIssues': if (t?.review?.issues?.length) { s.updateTask(m.id, { status: 'doing' }); await r.say(m.id, `Fix these review issues, then finish your turn:\n${t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n')}`); } break;
       case 'resolved': await r.markResolved(m.id); break;
       case 'discard':
@@ -325,7 +329,10 @@ and conventions. Write these drafts with the Write tool, tailored to this projec
 because Claude Code asks before every write into \`.claude/\`; the CLI installs them there:
 - \`.justcode/setup/agents/planner.md\`: splits a goal into small tasks that can each be built, reviewed and merged on their own. Frontmatter \`model: opus\`.
 - \`.justcode/setup/agents/implementer.md\`: builds one task following the project's conventions and runs its tests or build. Frontmatter \`model: sonnet\`.
-- \`.justcode/setup/agents/reviewer.md\`: reviews a diff for bugs, missed edge cases and convention breaks. Frontmatter \`model: opus\`.
+- \`.justcode/setup/agents/reviewer.md\`: reviews a diff for bugs, missed edge cases and convention breaks, and tests it: runs the
+  project's tests and build, and for UI changes captures screenshots and looks at them (\`node "${cli}" screenshot <file>.png\` when an
+  Android device is connected, else \`npx playwright screenshot <url> <file>.png\` for a web UI), then reads the PNG. When asked for a JSON
+  verdict it ends with it. Frontmatter \`model: opus\`, \`tools: Read, Grep, Glob, Bash\`.
 - \`.justcode/setup/skills/<name>/SKILL.md\` for recurring workflows the project clearly has (tests, release, deploy…). Only ones that apply.
 
 Agent files start with frontmatter: name, description, model, optionally tools. Then install them (existing files in

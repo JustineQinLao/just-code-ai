@@ -10,6 +10,7 @@ let view = 'term'; // modal shows the live terminal or the session log
 let logTimer = null;
 const openReview = new Set();
 const changes = {}; // task id → changed files
+const shots = {}; // task id → reviewer screenshots (data URLs)
 const terms = new Map(); // task id → { term, fit, el }
 let S = null;
 
@@ -245,6 +246,14 @@ function card(t) {
   }
   c.querySelectorAll('[data-act="openUrl"]').forEach(b => b.onclick = () => send({ type: 'openUrl', url: t.pr }));
 
+  if (t.review?.tested?.length && t.review.state !== 'running') c.append(h(`<div class="small muted tested">Reviewer ran: ${t.review.tested.map(x => `<code>${esc(x)}</code>`).join(' · ')}</div>`));
+  if (t.review?.screenshots?.length) {
+    const p = h(`<div class="panel"><div class="small muted">📷 ${t.review.screenshots.length} screenshot(s) from the reviewer</div><div class="thumbs shots"></div></div>`);
+    const box = p.querySelector('.shots');
+    const draw = imgs => imgs.forEach((img, i) => { const e = h(`<img src="${img.data}" title="${esc(img.name)}" alt="">`); e.onclick = () => send({ type: 'openShot', file: t.review.screenshots[i] }); box.append(e); });
+    const k = t.id + (t.review.head ?? ""); if (shots[k]) draw(shots[k]); else send({ type: "shots", id: t.id, head: t.review.head });
+    c.append(p);
+  }
   if (t.review?.state === 'fail' && t.review.issues?.length && !t.live || (t.review?.state === 'fail' && t.status === 'review')) {
     const p = h(`<div class="panel"><div class="small">Reviewer issues:</div><ol class="issues">${t.review.issues.map(i => `<li>${esc(i)}</li>`).join('')}</ol>
       <div class="actions"><button class="primary" data-a="fix">Send to Claude to fix</button><button data-a="again">Review again</button></div></div>`);
@@ -497,6 +506,7 @@ window.addEventListener('message', ({ data: m }) => {
     if (e) { e.el.style.visibility = 'hidden'; e.term.reset(); e.term.write(m.data, () => { e.el.style.visibility = ''; }); }
   }
   else if (m.type === 'log') { if (m.id === termId && view === 'log') renderLog(m.steps); }
+  else if (m.type === "shots") { shots[m.id + (m.head ?? "")] = m.images; if (!termdlg.open) renderBoard(); }
   else if (m.type === 'changes') { changes[m.id] = m.files; renderBoard(); }
   else if (m.type === 'focus') {
     const t = S?.board.tasks.find(x => x.id === m.id);
