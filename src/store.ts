@@ -23,6 +23,7 @@ export interface Task {
   worktree?: string;          // <project>/.justcode/worktrees/<id>
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
+  src?: 'TASKS.md';           // created by TASKS.md sync; only these are updated or archived by it
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
   archived?: boolean;
   created: number;
@@ -49,13 +50,29 @@ export class Store {
   }
 
   // tmp + rename: a crash mid-write never leaves a half-written board.
+  private written = '';
+
   private save() {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = `${this.file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.board, null, 2));
+    this.written = JSON.stringify(this.board, null, 2);
+    fs.writeFileSync(tmp, this.written);
     fs.renameSync(tmp, this.file);
     this.ev.emit('change');
   }
+
+  // Picks up writes from outside (the sync CLI, another window), so the board shows them and never overwrites them.
+  watch() {
+    fs.watchFile(this.file, { interval: 1000 }, () => {
+      let text: string;
+      try { text = fs.readFileSync(this.file, 'utf8'); } catch { return; }
+      if (text === this.written) return;
+      this.written = text;
+      this.board = this.read();
+      this.ev.emit('change');
+    });
+  }
+  dispose() { fs.unwatchFile(this.file); this.ev.removeAllListeners(); }
 
   onChange(fn: () => void) { this.ev.on('change', fn); return { dispose: () => { this.ev.off('change', fn); } }; }
 

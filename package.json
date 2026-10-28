@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -82,5 +82,8 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.4.0"
+  },
+  "bin": {
+    "just-code-ai": "out/cli.js"
   }
 }
