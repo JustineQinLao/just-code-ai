@@ -264,7 +264,8 @@ function card(t) {
 const termdlg = $('termdlg');
 // Esc belongs to Claude (interrupt, cancel), so the modal only closes with ✕.
 termdlg.addEventListener('cancel', e => e.preventDefault());
-$('tclose').onclick = () => { termdlg.close(); termId = null; clearInterval(logTimer); };
+let boardDirty = false;
+$('tclose').onclick = () => { termdlg.close(); termId = null; clearInterval(logTimer); if (boardDirty) { boardDirty = false; render(); } };
 $('vterm').onclick = () => setView('term');
 $('vlog').onclick = () => setView('log');
 
@@ -289,10 +290,14 @@ function renderLog(steps) {
   if (atEnd) el.scrollTop = el.scrollHeight;
 }
 
+// Opens the modal and measures the terminal first, so the session starts at the size it is shown at.
 function runTask(t) {
   terms.get(t.id)?.term.reset();
-  openTerm(t.id);
-  send({ type: 'run', id: t.id, size: termSize(t.id) });
+  openTerm(t.id, 'term');
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try { terms.get(t.id)?.fit.fit(); } catch { /* hidden */ }
+    send({ type: 'run', id: t.id, size: termSize(t.id) });
+  }));
 }
 
 // Live session: its terminal. Not running (ended, or the window reloaded): its saved log.
@@ -304,9 +309,13 @@ function openTerm(id, v) {
   setView(v ?? (t?.live || !t?.sessionId ? 'term' : 'log'));
 }
 
+let headerKey = '';
 function renderTermHeader() {
   const t = termId && S?.board.tasks.find(x => x.id === termId);
   if (!t || !termdlg.open) return;
+  const key = [t.id, t.title, t.run, t.live, t.sessionId].join('|');
+  if (key === headerKey) return; // unchanged: leave the DOM alone
+  headerKey = key;
   $('ttitle').textContent = t.title;
   $('tdot').className = `dot ${t.run ?? ''}`;
   $('tactions').innerHTML = '';
@@ -339,14 +348,27 @@ function mountTerm(id, slot) {
       }
     }, true);
     term.onData(data => send({ type: 'input', id, data }));
-    term.onResize(({ cols, rows }) => send({ type: 'resize', id, cols, rows }));
-    new ResizeObserver(() => { if (el.isConnected) try { fit.fit(); } catch { /* hidden */ } }).observe(el);
+    term.onResize(() => sendSize(id));
+    // Debounced: a burst of layout changes (modal opening, a scrollbar appearing) becomes one resize, not a redraw storm.
+    let t;
+    new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (el.isConnected && el.clientWidth) try { fit.fit(); } catch { /* hidden */ } }, 120); }).observe(el);
     e = { term, fit, el };
     terms.set(id, e);
     send({ type: 'attach', id });
   } else if (e.el.parentElement !== slot) slot.prepend(e.el);
-  // Always report the size: the pty may have started (at a guessed size) since the last fit.
-  requestAnimationFrame(() => { try { e.fit.fit(); send({ type: 'resize', id, cols: e.term.cols, rows: e.term.rows }); } catch { /* hidden */ } });
+  // Report the size once laid out: the pty may have started (at a guessed size) since the last fit.
+  requestAnimationFrame(() => { try { e.fit.fit(); } catch { /* hidden */ } sendSize(id, true); });
+}
+
+// Sends the terminal's size to its pty, only when it changed (each resize makes Claude redraw the whole screen).
+const sentSize = {};
+function sendSize(id, force) {
+  const e = terms.get(id);
+  if (!e || !e.term.cols || !e.term.rows) return;
+  const key = `${e.term.cols}x${e.term.rows}`;
+  if (!force && sentSize[id] === key) return;
+  sentSize[id] = key;
+  send({ type: 'resize', id, cols: e.term.cols, rows: e.term.rows });
 }
 
 // Size of the terminal a run will be shown in, so Claude's first frame already fits.
@@ -447,7 +469,9 @@ setTimeout(() => { if (!connected) $('offline').hidden = false; }, 4000);
 
 window.addEventListener('message', ({ data: m }) => {
   if (m.type === 'state') {
-    S = m; render();
+    S = m;
+    // With the modal open only its header updates; redrawing the board under it on every tool call made it flicker.
+    if (termdlg.open && !S.empty) { boardDirty = true; renderTermHeader(); } else render();
     if (!connected) { connected = true; $('offline').hidden = true; if (!ui.guided && !S.empty) guide(); }
   }
   else if (m.type === 'data') terms.get(m.id)?.term.write(m.data);

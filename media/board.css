@@ -121,3 +121,6 @@ dialog.termdlg .log { flex: 1; overflow: auto; font-family: var(--vscode-editor-
 .col h2 .row { gap: 6px; }
 .col h2 .clear { font-size: 10px; padding: 0 6px; letter-spacing: normal; text-transform: none; color: var(--muted); opacity: 0; transition: opacity .1s; }
 .col:hover h2 .clear, .col h2 .clear:focus { opacity: 1; }
+
+dialog.termdlg { overflow: hidden; }
+dialog.termdlg .term { overflow: hidden; min-height: 0; }

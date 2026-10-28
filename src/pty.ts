@@ -22,6 +22,9 @@ export class Ptys {
   private live = new Map<string, Live>();
   private ended = new Map<string, string>(); // last output of an exited run, still shown in its card
   private ev = new EventEmitter();
+  // Size of the board's terminal, so runs started in the background begin at the size they'll be shown at
+  // (a later resize makes Claude redraw everything, which stacks old frames in the scrollback).
+  size = { cols: 120, rows: 30 };
 
   onData(fn: (id: string, data: string) => void) { this.ev.on('data', fn); }
   onExit(fn: (id: string, code: number) => void) { this.ev.on('exit', fn); }
@@ -29,7 +32,7 @@ export class Ptys {
   has(id: string) { return this.live.has(id); }
   ids() { return [...this.live.keys()]; }
 
-  start(id: string, cwd: string, file: string, args: string[], cols = 120, rows = 30) {
+  start(id: string, cwd: string, file: string, args: string[], cols = this.size.cols, rows = this.size.rows) {
     this.kill(id);
     this.ended.delete(id);
     const p = pty.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: ptyEnv() });
@@ -53,7 +56,9 @@ export class Ptys {
   write(id: string, data: string) { this.live.get(id)?.p.write(data); }
 
   resize(id: string, cols: number, rows: number) {
-    if (cols > 0 && rows > 0) try { this.live.get(id)?.p.resize(cols, rows); } catch { /* exited meanwhile */ }
+    const p = this.live.get(id)?.p;
+    if (!p || cols <= 0 || rows <= 0 || (p.cols === cols && p.rows === rows)) return; // no-op resizes still make Claude redraw
+    try { p.resize(cols, rows); } catch { /* exited meanwhile */ }
   }
 
   kill(id: string) {
