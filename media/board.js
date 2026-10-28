@@ -41,7 +41,7 @@ app.innerHTML = `
       <select id="mode" title="Permissions">${opts(Object.entries(MODES))}</select>
       <button id="add" class="primary">Add</button>
     </div>
-    <textarea id="desc" placeholder="Details, acceptance criteria (optional). Skills below insert /skill." hidden></textarea>
+    <textarea id="desc" placeholder="Details, acceptance criteria (optional)" hidden></textarea>
     <div class="row small muted"><a href="#" id="toggleDesc">+ details</a><span class="skills" id="skills"></span></div>
   </div>
   <div class="board" id="board"></div>`;
@@ -59,9 +59,11 @@ $('runAll').onclick = () => {
   send({ type: 'runAll', ids: visible().filter(t => t.status === 'todo').map(t => t.id) });
 };
 const add = () => {
-  const title = $('title').value.trim();
+  // Only details filled (e.g. a skill): its first line becomes the title.
+  let title = $('title').value.trim(), description = $('desc').value.trim();
+  if (!title && description) [title, description] = [description.split('\n')[0], description.split('\n').slice(1).join('\n').trim()];
   if (!title) return $('title').focus();
-  send({ type: 'addTask', title, description: $('desc').value.trim(), sprintId: $('target').value, agent: $('agent').value, mode: $('mode').value });
+  send({ type: 'addTask', title, description, sprintId: $('target').value, agent: $('agent').value, mode: $('mode').value });
   $('title').value = ''; $('desc').value = ''; $('title').focus();
 };
 $('add').onclick = add;
@@ -95,7 +97,11 @@ function render() {
   keep($('agent'), [['', 'No agent'], ...S.agents.map(a => [a.name, a.name])]);
   if (!$('mode').dataset.touched) $('mode').value = S.defaultMode;
   $('skills').innerHTML = S.skills.length ? 'skills: ' + S.skills.map(s => `<button class="chip btn" data-skill="${esc(s)}">/${esc(s)}</button>`).join('') : '';
-  $('skills').querySelectorAll('[data-skill]').forEach(b => b.onclick = () => { $('desc').hidden = false; $('desc').value += `${$('desc').value ? '\n' : ''}/${b.dataset.skill} `; $('desc').focus(); });
+  // Empty title: the skill becomes the task (Enter adds it). Otherwise it's added to the details.
+  $('skills').querySelectorAll('[data-skill]').forEach(b => b.onclick = () => {
+    if (!$('title').value.trim()) { $('title').value = `/${b.dataset.skill} `; $('title').focus(); return; }
+    $('desc').hidden = false; $('desc').value += `${$('desc').value ? '\n' : ''}/${b.dataset.skill} `; $('desc').focus();
+  });
   const todo = visible().filter(t => t.status === 'todo').length, queued = S.board.tasks.filter(t => t.queued).length;
   $('runAll').textContent = queued ? `■ Cancel queue (${queued})` : `▶ Run all (${todo})`;
   $('runAll').disabled = !queued && !todo;
