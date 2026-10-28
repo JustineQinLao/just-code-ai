@@ -28,6 +28,14 @@ export class Ptys {
   // Size of the board's terminal, so runs started in the background begin at the size they'll be shown at
   // (a later resize makes Claude redraw everything, which stacks old frames in the scrollback).
   size = { cols: 120, rows: 30 };
+  // Where each session's last screen is kept, so a reload or restart doesn't leave its terminal blank.
+  dir?: string;
+  private file(id: string) { return this.dir ? path.join(this.dir, `${id}.screen`) : undefined; }
+  private persist(id: string, screen: string) {
+    const f = this.file(id);
+    if (!f || !screen) return;
+    try { fs.mkdirSync(this.dir!, { recursive: true }); fs.writeFileSync(f, screen); } catch { /* disk full or read-only: in-memory copy still works */ }
+  }
 
   onData(fn: (id: string, data: string) => void) { this.ev.on('data', fn); }
   onExit(fn: (id: string, code: number) => void) { this.ev.on('exit', fn); }
@@ -38,6 +46,8 @@ export class Ptys {
   start(id: string, cwd: string, file: string, args: string[], cols = this.size.cols, rows = this.size.rows) {
     this.kill(id);
     this.ended.delete(id);
+    const f = this.file(id);
+    if (f) fs.rmSync(f, { force: true });
     const p = pty.spawn(file, args, { name: 'xterm-256color', cols, rows, cwd, env: ptyEnv() });
     // Mirror: never answers terminal queries (the board's own terminal does), it only keeps the screen.
     const mirror = new Terminal({ cols, rows, scrollback: SCROLLBACK, allowProposedApi: true });
@@ -59,15 +69,34 @@ export class Ptys {
   // What a terminal opened now should show. Async: the mirror applies writes in batches.
   snapshot(id: string): Promise<string> {
     const l = this.live.get(id);
-    if (!l) return Promise.resolve(this.ended.get(id) ?? '');
+    if (!l) {
+      const f = this.file(id);
+      let saved = '';
+      try { saved = this.ended.get(id) ?? (f ? fs.readFileSync(f, 'utf8') : ''); } catch { /* none saved */ }
+      return Promise.resolve(saved);
+    }
     return new Promise(res => l.mirror.write('', () => res(l.snap.serialize({ scrollback: SCROLLBACK }))));
   }
 
   private end(id: string, l: Live) {
-    try { this.ended.set(id, l.snap.serialize({ scrollback: SCROLLBACK })); } catch { /* mirror gone */ }
+    try {
+      const screen = l.snap.serialize({ scrollback: SCROLLBACK });
+      this.ended.set(id, screen);
+      this.persist(id, screen);
+    } catch { /* mirror gone */ }
     l.mirror.dispose();
   }
-  forget(id: string) { this.ended.delete(id); }
+  forget(id: string) {
+    this.ended.delete(id);
+    const f = this.file(id);
+    if (f) fs.rmSync(f, { force: true });
+  }
+
+  // Saves a live session's current screen (called when its turn ends), in case the window closes without a clean exit.
+  save(id: string) {
+    const l = this.live.get(id);
+    if (l) try { this.persist(id, l.snap.serialize({ scrollback: SCROLLBACK })); } catch { /* mirror busy */ }
+  }
   write(id: string, data: string) { this.live.get(id)?.p.write(data); }
 
   resize(id: string, cols: number, rows: number) {
