@@ -74,3 +74,20 @@ kept at `.justcode/board.json`. With several workspace folders, switch between t
 - **Claude Code** button: the Claude Code extension looks for sessions of the folder it runs in. A task's session belongs
   to its worktree, so the extension may not find it. Then use **▸ Terminal** or **↻ Resume** on the card.
 - macOS and Linux. Windows is untested (the status hooks use `printf`).
+
+## Release
+
+Push a version tag; GitHub Actions builds both packages and attaches them to the release:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Install from the latest release (Linux, e.g. Devin):
+
+```sh
+curl -LO https://github.com/JustineQinLao/just-code-ai/releases/latest/download/just-code-linux-x64.vsix
+code --install-extension just-code-linux-x64.vsix
+```
+
+On a Mac, use `just-code-mac.vsix` instead.
