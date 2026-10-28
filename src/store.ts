@@ -40,7 +40,7 @@ export interface Task {
 }
 
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
-export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
+export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.

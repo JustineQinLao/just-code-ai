@@ -38,7 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
   const runnerSettings = (): RunnerSettings => ({
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
-    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false),
+    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
   });
 

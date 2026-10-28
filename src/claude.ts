@@ -195,7 +195,8 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
       : '2. No Android device is connected, so no adb screenshots.\n') +
     `3. For a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read the PNG.\n` +
     `Save screenshots only in ${test.shots}. List every command you ran in "tested".\n` +
-    'Run each command on its own, as written: no `cd`, `&&`, `;`, pipes or redirects (only single commands are approved here).',
+    'Run each command on its own, as written: no `cd`, `&&`, `;`, pipes or redirects (only single commands are approved here). ' +
+    'Every command must finish by itself within a few minutes: never start a dev server, a watch mode or anything interactive (use flags like --run, --watchAll=false, CI=1).',
     'You run unattended: do not ask questions, do not edit or write project files.',
     'End your final message with exactly one ```json block:\n```json\n{"pass": true, "issues": [], "risk": "minor", "tested": ["npm test"]}\n```\n' +
     'A failing verdict must list issues. Use risk "critical" for security-sensitive code, migrations, public API or config changes, or anything you are unsure is safe to merge.',
@@ -245,6 +246,8 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
 
 export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; adbBin?: string; cli?: string }): Promise<Verdict> {
   const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
+  // Test runners run once instead of watching (CI), and no single command can hold the review for long.
+  o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
   const text = await headless(prompt, o, {
     permissionMode: 'dontAsk', allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'], additionalDirectories: [o.shots],
   });

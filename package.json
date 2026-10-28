@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Task board that runs Claude Code on each task in its own branch: approvals on the card, AI review, one-click merge, agent map, continue on your phone",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "justine",
   "license": "UNLICENSED",
   "repository": {
@@ -107,6 +107,11 @@
           "type": "boolean",
           "default": false,
           "description": "Merge automatically when the AI review passes (never when it flags the change critical)."
+        },
+        "justCode.mergeIfReviewCannotRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "With automatic merging on: when the AI review cannot run (it times out or crashes, twice), merge anyway instead of waiting for you. A review that finds issues is never merged this way."
         },
         "justCode.maxReviews": {
           "type": "integer",

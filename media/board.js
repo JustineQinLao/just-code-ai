@@ -57,7 +57,7 @@
   // { text, tone, action: [label, fn] } — the one thing a card tells you, and the one button for it.
   function next(t) {
     const max = S.settings.review.maxAttempts, r = t.review;
-    if (t.status === 'done') return { text: t.where === 'root' ? 'Done' : 'Merged', tone: 'ok' };
+    if (t.status === 'done') return t.review?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn' } : { text: t.where === 'root' ? 'Done' : 'Merged', tone: 'ok' };
     if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : 'Claude needs your approval', tone: 'warn' };
     if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run' };
     if (t.run === 'running') return { text: `Working${lastTool(t)}`, tone: 'run', action: ['Open', () => openTask(t.id)] };
@@ -479,6 +479,7 @@
         field('maxReviews', 'Review rounds before it waits for you', sel(s.review.maxAttempts, [1, 2, 3, 4, 5].map(n => [n, String(n)]))),
         field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
         field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
+        field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
         field('idleMinutes', 'Close idle Claude processes after (minutes)', h('input', { type: 'number', min: 1, value: s.idleMinutes }))),
       h('label', { class: 'blk' }, h('span', {}, `Always allowed in ${S.roots.find(r => r.path === S.root)?.name ?? 'this project'}`),
         rules = h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (S.board.rules || []).join('\n')),
@@ -490,7 +491,7 @@
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         post('settings', { values: {
           defaultMode: f.defaultMode.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
-          plannerModel: f.plannerModel.value.trim(), maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true',
+          plannerModel: f.plannerModel.value.trim(), maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
           idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
         } });
         post('rules', { rules: lines(rules) });
