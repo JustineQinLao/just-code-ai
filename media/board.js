@@ -5,7 +5,9 @@ const send = m => vscode.postMessage({ root: S?.root, ...m });
 const ui = Object.assign({ view: null, archived: false, guided: false }, vscode.getState() || {});
 const images = []; // pasted into the add form: { name, data (data: URL) }
 const save = () => vscode.setState(ui);
-let termId = null; // task whose terminal is open in the modal
+let termId = null; // task open in the modal
+let view = 'term'; // modal shows the live terminal or the session log
+let logTimer = null;
 const openReview = new Set();
 const changes = {}; // task id → changed files
 const terms = new Map(); // task id → { term, fit, el }
@@ -53,8 +55,11 @@ app.innerHTML = `
   </div>
   <div class="board" id="board"></div>
   <dialog id="termdlg" class="termdlg">
-    <div class="row"><span class="dot" id="tdot"></span><b id="ttitle" class="grow"></b><span id="tactions" class="actions"></span><button id="tclose" title="Close (the session keeps running)">✕</button></div>
+    <div class="row"><span class="dot" id="tdot"></span><b id="ttitle" class="grow"></b>
+      <span class="seg"><button id="vterm">Terminal</button><button id="vlog">Log</button></span>
+      <span id="tactions" class="actions"></span><button id="tclose" title="Close (the session keeps running)">✕</button></div>
     <div class="term" id="tslot"></div>
+    <div class="log" id="tlog" hidden></div>
   </dialog>`;
 const $ = id => document.getElementById(id);
 
@@ -208,7 +213,8 @@ function card(t) {
   if (t.status === 'todo' && !t.live) btn('▶ Run', () => runTask(t), 'primary');
   if (t.branch && (t.status === 'review' || t.status === 'doing') && !conflict) btn('✓ Merge', () => send({ type: 'merge', id: t.id }), 'primary', `Approve and merge ${t.branch} into ${t.base}`);
   if (!t.branch && t.status === 'review') btn('✓ Done', () => send({ type: 'move', id: t.id, status: 'done' }), 'primary');
-  if (t.live || t.sessionId) icon('⌨', t.live ? 'Terminal' : 'Terminal (session not running)', () => openTerm(t.id), t.live ? 'on' : '');
+  if (t.live) icon('⌨', 'Terminal', () => openTerm(t.id, 'term'), 'on');
+  if (t.sessionId) icon('☰', 'Session log', () => openTerm(t.id, 'log'));
   if (!t.live && t.sessionId && t.status !== 'done') icon('↻', 'Resume the Claude session', () => runTask(t));
   if (t.live) icon('■', 'Stop', () => send({ type: 'stop', id: t.id }), 'danger');
   if (t.branch && (t.status === 'review' || t.status === 'doing')) {
@@ -257,7 +263,30 @@ function card(t) {
 const termdlg = $('termdlg');
 // Esc belongs to Claude (interrupt, cancel), so the modal only closes with ✕.
 termdlg.addEventListener('cancel', e => e.preventDefault());
-$('tclose').onclick = () => { termdlg.close(); termId = null; };
+$('tclose').onclick = () => { termdlg.close(); termId = null; clearInterval(logTimer); };
+$('vterm').onclick = () => setView('term');
+$('vlog').onclick = () => setView('log');
+
+function setView(v) {
+  view = v;
+  $('tslot').hidden = v !== 'term';
+  $('tlog').hidden = v !== 'log';
+  $('vterm').classList.toggle('on', v === 'term');
+  $('vlog').classList.toggle('on', v === 'log');
+  clearInterval(logTimer);
+  if (v === 'log') {
+    send({ type: 'log', id: termId });
+    logTimer = setInterval(() => { if (S?.board.tasks.find(x => x.id === termId)?.live) send({ type: 'log', id: termId }); }, 2000);
+  } else if (termId) { mountTerm(termId, $('tslot')); terms.get(termId)?.term.focus(); }
+}
+
+function renderLog(steps) {
+  const el = $('tlog'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  const icon = { user: '›', say: '●', tool: '⏺', result: '⎿', error: '✗' };
+  el.innerHTML = steps.length ? steps.map(s => `<div class="step ${s.kind}"><span class="ic">${icon[s.kind]}</span><span class="tx">${esc(s.text)}</span>${s.time ? `<span class="tm">${esc(new Date(s.time).toLocaleTimeString())}</span>` : ''}</div>`).join('')
+    : '<div class="empty">No log yet. It appears once the session has started.</div>';
+  if (atEnd) el.scrollTop = el.scrollHeight;
+}
 
 function runTask(t) {
   terms.get(t.id)?.term.reset();
@@ -265,12 +294,13 @@ function runTask(t) {
   send({ type: 'run', id: t.id, size: termSize(t.id) });
 }
 
-function openTerm(id) {
+// Live session: its terminal. Not running (ended, or the window reloaded): its saved log.
+function openTerm(id, v) {
   termId = id;
   if (!termdlg.open) termdlg.showModal();
   renderTermHeader();
-  mountTerm(id, $('tslot'));
-  terms.get(id)?.term.focus();
+  const t = S?.board.tasks.find(x => x.id === id);
+  setView(v ?? (t?.live || !t?.sessionId ? 'term' : 'log'));
 }
 
 function renderTermHeader() {
@@ -421,6 +451,7 @@ window.addEventListener('message', ({ data: m }) => {
   }
   else if (m.type === 'data') terms.get(m.id)?.term.write(m.data);
   else if (m.type === 'replay') { const e = terms.get(m.id); if (e) { e.term.reset(); e.term.write(m.data); } }
+  else if (m.type === 'log') { if (m.id === termId && view === 'log') renderLog(m.steps); }
   else if (m.type === 'changes') { changes[m.id] = m.files; renderBoard(); }
   else if (m.type === 'focus') {
     const t = S?.board.tasks.find(x => x.id === m.id);

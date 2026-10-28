@@ -7,7 +7,7 @@ import { Store, Task } from './store';
 import { Ptys } from './pty';
 import { Runner } from './runner';
 import * as g from './git';
-import { claudeBin, discoverAgents, discoverSkills, plan } from './claude';
+import { claudeBin, discoverAgents, discoverSkills, plan, sessionLog } from './claude';
 import { findTasksFile } from './tasksmd';
 
 // Project has its own Claude agents (.claude/agents/*.md).
@@ -187,6 +187,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'input': ptys.write(m.id, m.data); break;
       case 'resize': ptys.resize(m.id, m.cols, m.rows); break;
       case 'attach': panel?.webview.postMessage({ type: 'replay', id: m.id, data: ptys.buffer(m.id) }); break;
+      case 'log': if (t) panel?.webview.postMessage({ type: 'log', id: m.id, steps: t.sessionId ? sessionLog(t.worktree ?? r.root, t.sessionId) : [] }); break;
       case 'claudeCode': return openInClaudeCode(r, t);
       case 'openFolder': if (t?.worktree) vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); break;
       case 'changes': panel?.webview.postMessage({ type: 'changes', id: m.id, files: await r.changes(m.id) }); break;
