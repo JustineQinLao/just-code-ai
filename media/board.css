@@ -187,3 +187,4 @@ dialog::backdrop { background: #0007; }
 
 @media (max-width: 1100px) { .lanes { grid-template-columns: repeat(5, 230px); } }
 @media (max-width: 700px) { body.drawer-open { padding-right: 16px; } #drawer { width: 100vw; } .addrow { flex-wrap: wrap; } }
+.ask button { white-space: normal; text-align: left; max-width: 100%; word-break: break-word; }
