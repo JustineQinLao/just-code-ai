@@ -121,7 +121,8 @@ export class Session {
       pathToClaudeCodeExecutable: o.bin,
       env: o.env,
       permissionMode: o.mode as Sdk.PermissionMode,
-      allowDangerouslySkipPermissions: o.mode === 'bypassPermissions',
+      // Lets the user switch a running task to Allow everything; it does not turn that mode on by itself.
+      allowDangerouslySkipPermissions: true,
       settingSources: ['user', 'project', 'local'],
       ...(o.settingsFile ? { settings: o.settingsFile } : {}),
       ...(o.model ? { model: o.model } : {}),
@@ -266,6 +267,9 @@ export class Session {
   private async permission(tool: string, input: Record<string, unknown>, opt: { signal: AbortSignal; suggestions?: Suggestion[]; decisionReason?: string; blockedPath?: string; toolUseID?: string }): Promise<Sdk.PermissionResult> {
     // A rule approved on another card while this session runs.
     if (tool !== 'AskUserQuestion' && allowedBy(this.o.rules(), tool, input)) return { behavior: 'allow', updatedInput: input };
+    // The task's mode as the user set it. Claude Code may still ask in some cases (a protected path, a mode switch it
+    // refused); the user's choice wins.
+    if (tool !== 'AskUserQuestion' && autoApproves(this.mode, tool)) return { behavior: 'allow', updatedInput: input };
     const id = opt.toolUseID ?? randomUUID();
     const isQuestion = tool === 'AskUserQuestion';
     const always = isQuestion ? undefined : alwaysChoice(opt.suggestions);
@@ -322,10 +326,18 @@ export class Session {
     return true;
   }
 
+  // Switches the running session's mode. Requests already waiting on the card that the new mode would not ask
+  // about are approved at once (Allow everything: all of them; Auto-edit: file edits).
   async setMode(mode: string) {
-    if (!this.q || this.ended) return;
-    await this.q.setPermissionMode(mode as Sdk.PermissionMode).catch(() => undefined);
     this.mode = mode;
+    if (this.q && !this.ended) {
+      try { await this.q.setPermissionMode(mode as Sdk.PermissionMode); } catch (e: any) {
+        this.step({ kind: 'info', text: `Claude Code did not switch to ${mode} (${String(e?.message ?? e).slice(0, 200)}); JustCode approves on its behalf instead.` });
+      }
+    }
+    for (const a of [...this.asks.values()]) {
+      if (a.kind === 'permission' && autoApproves(mode, a.tool)) this.answer({ id: a.id, choice: 'allow' });
+    }
     this.changed();
   }
 
@@ -356,6 +368,9 @@ export class Session {
     this.idle.unref?.();
   }
 }
+
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
+const autoApproves = (mode: string, tool: string) => mode === 'bypassPermissions' || (mode === 'acceptEdits' && EDIT_TOOLS.has(tool));
 
 export interface Answer { id: string; choice: 'allow' | 'always' | 'deny'; message?: string; answers?: Record<string, string> }
 

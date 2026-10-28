@@ -26,6 +26,12 @@ test('rules: tools, prefixes, exact commands, compound commands', () => {
   assert.equal(matches('Bash(git status)', 'Bash', { command: 'git status -s' }), false);
   assert.equal(matches('WebFetch(domain:example.com)', 'WebFetch', { url: 'https://example.com/a' }), true);
   assert.equal(matches('WebFetch(domain:example.com)', 'WebFetch', { url: 'https://evil.com/example.com' }), false);
+  assert.equal(matches('Bash(git status *)', 'Bash', { command: 'git status --short' }), true);
+  assert.equal(matches('Bash(git status *)', 'Bash', { command: 'git statusx' }), false);
+  assert.equal(matches('Read(//Users/me/Library/**)', 'Read', { file_path: '/Users/me/Library/Android/sdk' }), true);
+  assert.equal(matches('Read(//Users/me/Library/**)', 'Read', { file_path: '/Users/me/Documents/a' }), false);
+  assert.equal(matches('Edit(src/**)', 'Edit', { file_path: '/repo/src/a/b.ts' }), true);
+  assert.equal(matches('Edit(src/*.ts)', 'Edit', { file_path: '/repo/src/a/b.ts' }), false);
   assert.deepEqual(parseRule('Bash(npm test:*)'), { tool: 'Bash', content: 'npm test:*' });
   assert.equal(parseRule('not a rule!'), undefined);
 });
@@ -171,5 +177,12 @@ test('session: permission requests wait for an answer; Always reports the rules'
   await new Promise(r => setImmediate(r));
   s.answer({ id: 'Write-1', choice: 'deny', message: 'use b instead' });
   assert.deepEqual(await d, { behavior: 'deny', message: 'use b instead', interrupt: false });
+  // Switching to Allow everything approves what waits, and nothing asks after.
+  const w = perm('Bash', { command: 'ls ~/x | head' });
+  await new Promise(r => setImmediate(r));
+  await s.setMode('bypassPermissions');
+  assert.equal((await w).behavior, 'allow');
+  assert.equal((await perm('Bash', { command: 'rm -rf build; make' })).behavior, 'allow');
+  assert.equal(s.asks.size, 0);
   s.kill();
 });

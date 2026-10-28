@@ -30,19 +30,33 @@ export function matches(rule: string, tool: string, input: Record<string, unknow
   if (tool === 'Bash') {
     const cmd = typeof input.command === 'string' ? input.command.trim() : '';
     if (!cmd || COMPOUND.test(cmd)) return false;
-    if (r.content.endsWith(':*')) {
-      const prefix = r.content.slice(0, -2).trim();
+    // "npm run:*" (legacy prefix) and "npm run *" (word wildcard) both match "npm run" and "npm run build".
+    const pat = r.content.replace(/:\*$/, ' *');
+    if (pat.endsWith(' *') && !pat.slice(0, -2).includes('*')) {
+      const prefix = pat.slice(0, -2).trim();
       return cmd === prefix || cmd.startsWith(prefix + ' ');
     }
-    return cmd === r.content;
+    return glob(pat, false).test(cmd);
   }
   if (r.content.startsWith('domain:')) {
     try { return new URL(String(input.url)).hostname === r.content.slice(7); } catch { return false; }
   }
-  const file = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : '';
+  const file = typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path
+    : typeof input.notebook_path === 'string' ? input.notebook_path : '';
   if (!file) return false;
-  if (r.content.endsWith('/**')) return file.includes(r.content.slice(0, -3).replace(/^\.?\/*/, ''));
-  return file.endsWith(r.content.replace(/^\.?\/*/, ''));
+  // "//abs/path/**" is absolute, "~/x" is under home, anything else is relative to the project (matched as a suffix).
+  const home = process.env.HOME ?? '';
+  let p = r.content;
+  if (p.startsWith('//')) p = p.slice(1);
+  else if (p.startsWith('~/') && home) p = home + p.slice(1);
+  else p = '**/' + p.replace(/^\.?\/+/, '');
+  return glob(p, true).test(file);
+}
+
+// Glob to regex: in paths, ** spans directories and * stays within one; in commands, * matches anything.
+function glob(p: string, path: boolean) {
+  const re = p.replace(/[.+^${}()|[\]\\?]/g, '\\$&').replace(/\*\*\/?|\*/g, m => m.startsWith('**') ? '(?:.*/)?' + (m === '**' ? '.*' : '') : path ? '[^/]*' : '.*');
+  return new RegExp(`^${re}$`);
 }
 
 export const allowedBy = (rules: string[], tool: string, input: Record<string, unknown>) => rules.find(r => matches(r, tool, input));
