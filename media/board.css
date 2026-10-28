@@ -136,3 +136,7 @@ dialog.termdlg .term { overflow: hidden; min-height: 0; }
 .term .term-host { position: absolute; inset: 6px 4px 6px 8px; }
 .term .term-host .xterm { height: 100%; }
 dialog.termdlg .term { padding: 0; }
+
+.msgbar { gap: 6px; flex: none; }
+.msgbar[hidden] { display: none; }
+.msgbar input { min-width: 0; }

@@ -61,6 +61,8 @@ app.innerHTML = `
       <span id="tactions" class="actions"></span><button id="tclose" title="Close (the session keeps running)">✕</button></div>
     <div class="term" id="tslot"></div>
     <div class="log" id="tlog" hidden></div>
+    <div class="msgbar row" id="msgbar"><input id="msg" class="grow" placeholder="Message Claude… (Enter to send)" autocomplete="off">
+      <button id="msgsend" class="primary">Send</button><button id="msgesc" title="Interrupt Claude (sends Esc)">Esc</button></div>
   </dialog>`;
 const $ = id => document.getElementById(id);
 
@@ -287,11 +289,25 @@ termdlg.addEventListener('cancel', e => e.preventDefault());
 let boardDirty = false;
 $('tclose').onclick = () => { termdlg.close(); termId = null; clearInterval(logTimer); if (boardDirty) { boardDirty = false; render(); } };
 $('vterm').onclick = () => setView('term');
+// A plain input under the terminal: always works, even if the terminal itself doesn't take focus.
+const sendMsg = () => {
+  const text = $('msg').value;
+  if (!termId || !text.trim()) return;
+  send({ type: 'say', id: termId, text });
+  $('msg').value = '';
+};
+$('msgsend').onclick = () => { sendMsg(); $('msg').focus(); };
+$('msg').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sendMsg(); } };
+$('msgesc').onclick = () => { if (termId) send({ type: 'input', id: termId, data: '\x1b' }); };
+// Clicking the terminal, or the window regaining focus, puts the cursor back in it.
+$('tslot').addEventListener('mousedown', () => { if (termId) setTimeout(() => terms.get(termId)?.term.focus(), 0); });
+window.addEventListener('focus', () => { if (termdlg.open && view === 'term' && document.activeElement !== $('msg')) terms.get(termId)?.term.focus(); });
 $('vlog').onclick = () => setView('log');
 
 function setView(v) {
   view = v;
   $('tslot').hidden = v !== 'term';
+  $('msgbar').hidden = v !== 'term';
   $('tlog').hidden = v !== 'log';
   $('vterm').classList.toggle('on', v === 'term');
   $('vlog').classList.toggle('on', v === 'log');
@@ -315,7 +331,7 @@ function runTask(t) {
   terms.get(t.id)?.term.reset();
   openTerm(t.id, 'term');
   requestAnimationFrame(() => requestAnimationFrame(() => {
-    try { terms.get(t.id)?.fit.fit(); } catch { /* hidden */ }
+    try { const e = terms.get(t.id); if (e) fitSafe(e); } catch { /* hidden */ }
     send({ type: 'run', id: t.id, size: termSize(t.id) });
   }));
 }
@@ -371,7 +387,7 @@ function mountTerm(id, slot) {
     term.onResize(() => sendSize(id));
     // Debounced: a burst of layout changes (modal opening, a scrollbar appearing) becomes one resize, not a redraw storm.
     let t;
-    new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (el.isConnected && el.clientWidth) try { fit.fit(); } catch { /* hidden */ } }, 120); }).observe(el);
+    new ResizeObserver(() => { clearTimeout(t); t = setTimeout(() => { if (el.isConnected && el.clientWidth) try { fitSafe(e); } catch { /* hidden */ } }, 120); }).observe(el);
     e = { term, fit, el };
     terms.set(id, e);
     // The editor font can finish loading after the first fit; rows measured with the fallback font overflow by a line.
@@ -379,14 +395,23 @@ function mountTerm(id, slot) {
     send({ type: 'attach', id });
   } else if (e.el.parentElement !== slot) slot.prepend(e.el);
   // Report the size once laid out: the pty may have started (at a guessed size) since the last fit.
-  requestAnimationFrame(() => { try { e.fit.fit(); } catch { /* hidden */ } sendSize(id, true); });
+  requestAnimationFrame(() => { try { fitSafe(e); } catch { /* hidden */ } sendSize(id, true); });
+}
+
+// Fits the terminal to its box, one row short of what fits: a rounding error in the measured cell height can
+// otherwise leave the bottom line (Claude's input row) clipped.
+function fitSafe(e) {
+  const d = e.fit.proposeDimensions?.();
+  if (!d) return e.fit.fit();
+  const cols = Math.max(20, d.cols), rows = Math.max(5, d.rows - 1);
+  if (e.term.cols !== cols || e.term.rows !== rows) e.term.resize(cols, rows);
 }
 
 // Fits the terminal to its box again and keeps the newest line in view.
 function refit(id) {
   const e = terms.get(id);
   if (!e || !e.el.isConnected || !e.el.clientHeight) return;
-  try { e.fit.fit(); } catch { /* hidden */ }
+  try { fitSafe(e); } catch { /* hidden */ }
   e.term.scrollToBottom?.();
   sendSize(id);
 }
@@ -514,7 +539,8 @@ window.addEventListener('message', ({ data: m }) => {
   // Snapshot of the current screen, drawn while hidden so opening a terminal never shows it being rebuilt.
   else if (m.type === 'replay') {
     const e = terms.get(m.id);
-    if (e) { e.el.style.visibility = 'hidden'; e.term.reset(); e.term.write(m.data, () => { e.el.style.visibility = ''; refit(m.id); }); }
+    // opacity, not visibility: a hidden element can't hold keyboard focus.
+    if (e) { e.el.style.opacity = '0'; e.term.reset(); e.term.write(m.data, () => { e.el.style.opacity = ''; refit(m.id); if (m.id === termId && view === 'term' && document.activeElement !== $('msg')) e.term.focus(); }); }
     const t = S?.board.tasks.find(x => x.id === m.id);
     if (!m.data && m.id === termId && view === 'term' && t && !t.live && t.sessionId) setView('log');
   }
