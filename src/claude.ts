@@ -134,6 +134,51 @@ export function sessionArgs(o: { task: Task; root: string; worktree: string; sta
 export const sessionExists = (cwd: string, id: string) =>
   fs.existsSync(path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl'));
 
+export interface Step { kind: 'user' | 'say' | 'tool' | 'result' | 'error'; text: string; time?: string }
+
+// The tool call's main argument, as Claude Code shows it: Bash(npm test), Read(src/a.ts).
+const toolArg = (input: any) => {
+  if (!input || typeof input !== 'object') return '';
+  const v = input.command ?? input.file_path ?? input.notebook_path ?? input.pattern ?? input.url ?? input.description ?? input.prompt
+    ?? Object.values(input).find(x => typeof x === 'string');
+  return typeof v === 'string' ? v.split('\n')[0].slice(0, 300) : '';
+};
+const resultText = (c: any) => {
+  const t = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n') : '';
+  const lines = t.split('\n').filter((l: string) => l.trim());
+  return lines.length > 1 ? `${lines[0].slice(0, 300)}  (+${lines.length - 1} lines)` : lines[0]?.slice(0, 300) ?? '(no output)';
+};
+
+// A session's saved transcript as readable steps (main thread only), so a card shows its log after the session
+// ended or the window reloaded. Reads the last 4 MB.
+export function sessionLog(cwd: string, sessionId: string): Step[] {
+  let text: string;
+  try {
+    const file = path.join(os.homedir(), '.claude', 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), sessionId + '.jsonl');
+    const fd = fs.openSync(file, 'r');
+    try {
+      const size = fs.fstatSync(fd).size, len = Math.min(size, 4 * 1024 * 1024), buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, size - len);
+      text = buf.toString('utf8');
+    } finally { fs.closeSync(fd); }
+  } catch { return []; }
+  const steps: Step[] = [];
+  for (const line of text.split('\n')) {
+    let r: any;
+    try { r = JSON.parse(line); } catch { continue; } // cut first line or partial last one
+    if (r.isSidechain || r.isMeta || (r.type !== 'assistant' && r.type !== 'user')) continue;
+    const time = typeof r.timestamp === 'string' ? r.timestamp : undefined;
+    const c = r.message?.content;
+    if (typeof c === 'string') { if (r.type === 'user' && !c.startsWith('<')) steps.push({ kind: 'user', text: c, time }); continue; }
+    for (const x of Array.isArray(c) ? c : []) {
+      if (x.type === 'text' && x.text?.trim() && !x.text.startsWith('<')) steps.push({ kind: r.type === 'user' ? 'user' : 'say', text: x.text.trim(), time });
+      else if (x.type === 'tool_use') steps.push({ kind: 'tool', text: `${x.name}(${toolArg(x.input)})`, time });
+      else if (x.type === 'tool_result') steps.push({ kind: x.is_error ? 'error' : 'result', text: resultText(x), time });
+    }
+  }
+  return steps.slice(-600);
+}
+
 export interface PlannedTask { title: string; description?: string }
 
 // Read-only planning run: Claude reads the code and answers with a JSON task list.

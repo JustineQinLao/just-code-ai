@@ -101,3 +101,19 @@ button.icon.on { border-color: var(--accent); }
 dialog.termdlg { width: min(1100px, 94vw); height: min(720px, 86vh); max-width: none; padding: 10px; }
 dialog.termdlg[open] { display: flex; flex-direction: column; gap: 8px; }
 dialog.termdlg .term { flex: 1; height: auto; margin: 0; }
+
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; }
+.seg button:first-child { border-radius: 4px 0 0 4px; }
+.seg button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+.seg button.on { background: var(--vscode-list-activeSelectionBackground); border-color: var(--accent); }
+dialog.termdlg .log { flex: 1; overflow: auto; font-family: var(--vscode-editor-font-family); font-size: 12px; background: var(--vscode-terminal-background, #000); border-radius: 4px; padding: 8px 10px; }
+.step { display: flex; gap: 8px; padding: 2px 0; white-space: pre-wrap; word-break: break-word; }
+.step .ic { width: 12px; flex: none; color: var(--muted); }
+.step .tx { flex: 1; }
+.step .tm { color: var(--muted); font-size: 10px; flex: none; }
+.step.user .tx { color: var(--vscode-textLink-foreground); }
+.step.tool .ic, .step.tool .tx { color: var(--ok); }
+.step.result .tx { color: var(--muted); }
+.step.error .tx, .step.error .ic { color: var(--err); }
+.step.say { margin-top: 4px; }

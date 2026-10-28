@@ -43,6 +43,13 @@ export class Runner {
     private maxParallel: () => number, private model: () => string) {
     fs.mkdirSync(runsDir, { recursive: true });
     ptys.onExit((id) => { if (this.store.task(id)) void this.exited(id); });
+    // Finished work has no running session, however it got there (Done, archive, drag, sync, merge).
+    store.onChange(() => {
+      for (const id of ptys.ids()) {
+        const t = this.store.task(id);
+        if (t && (t.status === 'done' || t.archived)) this.stop(id);
+      }
+    });
   }
 
   onChange(fn: () => void) { this.ev.on('change', fn); }
@@ -176,7 +183,9 @@ export class Runner {
     if (t?.worktree && !t.conflicts?.length) {
       try { await g.commitAll(t.worktree, t.title); } catch (e: any) { this.notify('error', `Commit failed: ${e.message}`, id); }
     }
-    if (t?.status === 'doing') this.store.updateTask(id, { status: 'review' });
+    // The init run is one-shot: done when its turn ends. Other tasks wait in Review.
+    if (t?.init && t.status !== 'done') this.store.updateTask(id, { status: 'done' });
+    else if (t?.status === 'doing') this.store.updateTask(id, { status: 'review' });
     this.changed();
     this.pump();
   }
