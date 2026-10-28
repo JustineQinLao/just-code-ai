@@ -106,7 +106,7 @@ export function activate(context: vscode.ExtensionContext) {
     const r = runner();
     if (!panel || !r) return panel?.webview.postMessage({ type: 'state', empty: true, roots: [] });
     const tasks = r.store.data.tasks.map(t => ({
-      ...t, run: r.state.get(t.id), live: ptys.has(t.id), queued: r.queued().includes(t.id), busy: r.isBusy(t.id),
+      ...t, run: r.state.get(t.id), ask: r.asks.get(t.id), live: ptys.has(t.id), queued: r.queued().includes(t.id), busy: r.isBusy(t.id),
     }));
     panel.webview.postMessage({
       type: 'state',
@@ -193,6 +193,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'runAll': r.runAll(m.ids); break;
       case 'cancelQueue': r.cancelQueue(); break;
       case 'stop': r.stop(m.id); break;
+      case 'answer': r.answer(m.id, m.choice); break;
       case 'input': ptys.write(m.id, m.data); break;
       case 'resize': ptys.resize(m.id, m.cols, m.rows); break;
       case 'attach': panel?.webview.postMessage({ type: 'replay', id: m.id, data: ptys.buffer(m.id) }); break;

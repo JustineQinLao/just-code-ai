@@ -13,8 +13,12 @@ export function claudeBin(setting: string) {
   return dirs.map(d => path.join(d, 'claude')).find(f => fs.existsSync(f)) ?? 'claude';
 }
 
+// Markers a parent Claude session leaves in the environment (e.g. VS Code started from Claude). Inherited, they make
+// a task's session a "child" that doesn't save its transcript, so Resume would find nothing.
+const INHERITED = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'];
+
 export const ptyEnv = (): Record<string, string> => ({
-  ...process.env as Record<string, string>,
+  ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.includes(k))) as Record<string, string>,
   PATH: [process.env.PATH, path.join(os.homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].filter(Boolean).join(path.delimiter),
   TERM: 'xterm-256color',
   COLORTERM: 'truecolor',
@@ -60,13 +64,17 @@ export function discoverSkills(root: string): string[] {
 
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-// Hooks report the session's state to JustCode by appending one word to `statusFile`:
-// stop = turn finished, wait = asking for permission, run = working again.
+// Hooks report the session's state to JustCode by appending a line to `statusFile`:
+// stop = turn finished, run = working again, tool<TAB>json = about to use a tool,
+// wait<TAB>json = asking for permission (for the tool reported just before).
 function hooks(statusFile: string) {
   const say = (w: string) => [{ hooks: [{ type: 'command', command: `printf '${w}\\n' >> ${sh(statusFile)}` }] }];
+  // The hook's JSON input, flattened to one line.
+  const sayJson = (w: string) => [{ hooks: [{ type: 'command', command: `{ printf '${w}\\t'; tr -d '\\n'; printf '\\n'; } >> ${sh(statusFile)}` }] }];
   return {
     Stop: say('stop'),
-    Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: say('wait')[0].hooks }],
+    Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: sayJson('wait')[0].hooks }],
+    PreToolUse: sayJson('tool'),
     UserPromptSubmit: say('run'),
     PostToolUse: say('run'),
   };

@@ -2,10 +2,10 @@
 const vscode = acquireVsCodeApi();
 // Each message carries the project it was made in.
 const send = m => vscode.postMessage({ root: S?.root, ...m });
-const ui = Object.assign({ view: null, archived: false, open: [], guided: false }, vscode.getState() || {});
+const ui = Object.assign({ view: null, archived: false, guided: false }, vscode.getState() || {});
 const images = []; // pasted into the add form: { name, data (data: URL) }
 const save = () => vscode.setState(ui);
-const openTerms = new Set(ui.open); // cards with their terminal shown
+let termId = null; // task whose terminal is open in the modal
 const openReview = new Set();
 const changes = {}; // task id → changed files
 const terms = new Map(); // task id → { term, fit, el }
@@ -51,7 +51,11 @@ app.innerHTML = `
     <div class="thumbs" id="thumbs"></div>
     <div class="row small muted"><a href="#" id="toggleDesc">+ details</a><span>· ⌘V / Ctrl+V pastes a screenshot</span><span class="skills" id="skills"></span></div>
   </div>
-  <div class="board" id="board"></div>`;
+  <div class="board" id="board"></div>
+  <dialog id="termdlg" class="termdlg">
+    <div class="row"><span class="dot" id="tdot"></span><b id="ttitle" class="grow"></b><span id="tactions" class="actions"></span><button id="tclose" title="Close (the session keeps running)">✕</button></div>
+    <div class="term" id="tslot"></div>
+  </dialog>`;
 const $ = id => document.getElementById(id);
 
 $('toggleDesc').onclick = e => { e.preventDefault(); $('desc').hidden = !$('desc').hidden; if (!$('desc').hidden) $('desc').focus(); };
@@ -166,7 +170,6 @@ function renderBoard() {
   for (const [st, label] of COLS) {
     const list = tasks.filter(t => t.status === st);
     const col = h(`<div class="col" data-status="${st}"><h2><span>${label}</span><span>${list.length}</span></h2></div>`);
-    if (list.some(t => openTerms.has(t.id))) col.classList.add('wide');
     if (!list.length) col.append(h('<div class="empty">Drop here</div>'));
     for (const t of list) col.append(card(t));
     col.ondragover = e => { e.preventDefault(); col.classList.add('over'); };
@@ -174,11 +177,7 @@ function renderBoard() {
     col.ondrop = e => { e.preventDefault(); col.classList.remove('over'); const id = e.dataTransfer.getData('text/task'); if (id) send({ type: 'move', id, status: st }); };
     board.append(col);
   }
-  // Re-home terminals into their new cards (xterm instances outlive re-renders).
-  for (const id of openTerms) {
-    const slot = board.querySelector(`.term[data-id="${id}"]`);
-    if (slot) mountTerm(id, slot);
-  }
+  renderTermHeader();
 }
 
 function card(t) {
@@ -193,7 +192,6 @@ function card(t) {
       t.mode !== 'default' && `<span class="chip">${MODES[t.mode]}</span>`,
       t.where === 'root' && '<span class="chip" title="Runs in the project folder, no branch">project root</span>',
       t.queued && '<span class="chip">queued</span>',
-      t.run === 'waiting' && '<span class="chip warn">needs approval</span>',
       t.run === 'running' && '<span class="chip">working…</span>',
       t.run === 'idle' && '<span class="chip ok">turn done</span>',
       conflict && `<span class="chip err">${conflict} conflict${conflict > 1 ? 's' : ''}</span>`,
@@ -203,36 +201,45 @@ function card(t) {
     <div class="actions"></div></div>`);
   c.querySelector('.top').ondragstart = e => e.dataTransfer.setData('text/task', t.id);
   const act = c.querySelector('.actions');
+  // Main actions have words; the rest are icons with tooltips.
   const btn = (label, fn, cls = '', title = '') => { const b = h(`<button class="${cls}" title="${esc(title)}">${label}</button>`); b.onclick = fn; b.disabled = t.busy; act.append(b); };
-  const toggleTerm = () => { openTerms.has(t.id) ? openTerms.delete(t.id) : openTerms.add(t.id); ui.open = [...openTerms]; save(); renderBoard(); };
-  const run = () => { terms.get(t.id)?.term.reset(); openTerms.add(t.id); ui.open = [...openTerms]; save(); renderBoard(); send({ type: 'run', id: t.id, size: termSize(t.id) }); };
+  const icon = (glyph, title, fn, cls = '') => btn(glyph, fn, `icon ${cls}`, title);
 
-  if (t.status === 'todo' && !t.live) btn('▶ Run', run, 'primary');
-  if (t.live) btn(openTerms.has(t.id) ? '▾ Hide terminal' : (t.run === 'waiting' ? '⚠ Approve…' : '▸ Terminal'), toggleTerm, t.run === 'waiting' ? 'primary' : '');
-  else if (t.sessionId && t.status !== 'done') btn('↻ Resume', run, '', 'Continue this task\'s Claude session in the card');
-  if (t.live) btn('■ Stop', () => send({ type: 'stop', id: t.id }), 'danger');
-  if (t.sessionId && S.claudeExt && t.status !== 'done') btn('Claude Code', () => send({ type: 'claudeCode', id: t.id }), '', 'Open this session in the Claude Code extension');
-
+  if (t.status === 'todo' && !t.live) btn('▶ Run', () => runTask(t), 'primary');
+  if (t.branch && (t.status === 'review' || t.status === 'doing') && !conflict) btn('✓ Merge', () => send({ type: 'merge', id: t.id }), 'primary', `Approve and merge ${t.branch} into ${t.base}`);
+  if (!t.branch && t.status === 'review') btn('✓ Done', () => send({ type: 'move', id: t.id, status: 'done' }), 'primary');
+  if (t.live || t.sessionId) icon('⌨', t.live ? 'Terminal' : 'Terminal (session not running)', () => openTerm(t.id), t.live ? 'on' : '');
+  if (!t.live && t.sessionId && t.status !== 'done') icon('↻', 'Resume the Claude session', () => runTask(t));
+  if (t.live) icon('■', 'Stop', () => send({ type: 'stop', id: t.id }), 'danger');
   if (t.branch && (t.status === 'review' || t.status === 'doing')) {
-    btn(openReview.has(t.id) ? '▾ Changes' : '▸ Changes', () => {
+    icon('⇄', 'Changes', () => {
       openReview.has(t.id) ? openReview.delete(t.id) : (openReview.add(t.id), send({ type: 'changes', id: t.id }));
       renderBoard();
-    });
-    if (!conflict) btn('✓ Merge', () => send({ type: 'merge', id: t.id }), 'primary', `Approve and merge ${t.branch} into ${t.base}`);
-    if (S.git.remote && !t.pr) btn('Push PR', () => send({ type: 'remotePr', id: t.id }), '', 'Push the branch and open a GitHub PR (gh)');
-    btn('Discard', () => send({ type: 'discard', id: t.id }), 'danger');
+    }, openReview.has(t.id) ? 'on' : '');
+    if (S.git.remote && !t.pr) icon('⇪', 'Push the branch and open a GitHub PR (gh)', () => send({ type: 'remotePr', id: t.id }));
   }
-  if (!t.branch && t.status === 'review') btn('✓ Done', () => send({ type: 'move', id: t.id, status: 'done' }), 'primary');
-  if (t.status === 'todo') btn('Edit', () => taskDialog(t));
-  if (t.status === 'done' && !t.archived) btn('Archive', () => send({ type: 'archive', id: t.id }));
-  btn('🗑', () => send({ type: 'delete', id: t.id }), 'danger', 'Delete task');
+  if (t.sessionId && S.claudeExt && t.status !== 'done') icon('✳', 'Open in the Claude Code extension', () => send({ type: 'claudeCode', id: t.id }));
+  if (t.status === 'todo') icon('✎', 'Edit', () => taskDialog(t));
+  if (t.status === 'done' && !t.archived) icon('▣', 'Archive', () => send({ type: 'archive', id: t.id }));
+  if (t.branch && t.status !== 'done') icon('↺', 'Discard this branch and its work', () => send({ type: 'discard', id: t.id }), 'danger');
+  icon('🗑', 'Delete task', () => send({ type: 'delete', id: t.id }), 'danger');
+
+  // Permission request, answered right on the card.
+  if (t.run === 'waiting') {
+    const a = t.ask ?? {};
+    const p = h(`<div class="ask"><div><b>⚠ ${a.tool ? `Claude wants to use ${esc(a.tool)}` : esc(a.message || 'Claude needs your approval')}</b></div>
+      ${a.detail ? `<code class="detail">${esc(a.detail)}</code>` : ''}
+      <div class="actions"><button class="primary" data-c="allow">Allow</button><button data-c="always" title="Allow and don't ask again for this in the session">Always</button><button class="danger" data-c="deny">Deny</button><button class="icon" data-c="term" title="Answer in the terminal">⌨</button></div></div>`);
+    p.querySelectorAll('[data-c]').forEach(b => b.onclick = () => b.dataset.c === 'term' ? openTerm(t.id) : send({ type: 'answer', id: t.id, choice: b.dataset.c }));
+    c.querySelector('.meta').after(p);
+  }
   c.querySelectorAll('[data-act="openUrl"]').forEach(b => b.onclick = () => send({ type: 'openUrl', url: t.pr }));
 
   if (conflict) {
     const p = h(`<div class="panel"><div class="small">Conflicts with <b>${esc(t.base)}</b> — fix them here, never in your checkout:</div><ul class="files"></ul>
       <div class="actions"><button data-a="resolve" class="primary">Resolve with Claude</button><button data-a="resolved">Mark resolved</button></div></div>`);
     for (const f of t.conflicts) { const li = h(`<li title="Open in editor"><span class="st D">!</span>${esc(f)}</li>`); li.onclick = () => send({ type: 'openFile', id: t.id, file: f }); p.querySelector('ul').append(li); }
-    p.querySelector('[data-a="resolve"]').onclick = () => { openTerms.add(t.id); send({ type: 'resolve', id: t.id }); renderBoard(); };
+    p.querySelector('[data-a="resolve"]').onclick = () => { send({ type: 'resolve', id: t.id }); openTerm(t.id); };
     p.querySelector('[data-a="resolved"]').onclick = () => send({ type: 'resolved', id: t.id });
     c.append(p);
   }
@@ -242,16 +249,39 @@ function card(t) {
     for (const f of files ?? []) { const li = h(`<li><span class="st ${esc(f.status)}">${esc(f.status)}</span>${esc(f.file)}</li>`); li.onclick = () => send({ type: 'diff', id: t.id, file: f.file }); p.querySelector('ul').append(li); }
     c.append(p);
   }
-  if (openTerms.has(t.id)) {
-    const slot = h(`<div class="term" data-id="${t.id}"></div>`);
-    if (!t.live) {
-      const end = h(`<div class="ended small muted">${t.sessionId ? 'Session not running' : 'Not started'} <button class="primary">${t.sessionId ? '↻ Resume' : '▶ Run'}</button></div>`);
-      end.querySelector('button').onclick = run;
-      slot.append(end);
-    }
-    c.append(slot);
-  }
   return c;
+}
+
+/* ---------- terminal modal ---------- */
+
+const termdlg = $('termdlg');
+// Esc belongs to Claude (interrupt, cancel), so the modal only closes with ✕.
+termdlg.addEventListener('cancel', e => e.preventDefault());
+$('tclose').onclick = () => { termdlg.close(); termId = null; };
+
+function runTask(t) {
+  terms.get(t.id)?.term.reset();
+  openTerm(t.id);
+  send({ type: 'run', id: t.id, size: termSize(t.id) });
+}
+
+function openTerm(id) {
+  termId = id;
+  if (!termdlg.open) termdlg.showModal();
+  renderTermHeader();
+  mountTerm(id, $('tslot'));
+  terms.get(id)?.term.focus();
+}
+
+function renderTermHeader() {
+  const t = termId && S?.board.tasks.find(x => x.id === termId);
+  if (!t || !termdlg.open) return;
+  $('ttitle').textContent = t.title;
+  $('tdot').className = `dot ${t.run ?? ''}`;
+  $('tactions').innerHTML = '';
+  const b = (label, title, fn, cls = '') => { const e = h(`<button class="${cls}" title="${esc(title)}">${label}</button>`); e.onclick = fn; $('tactions').append(e); };
+  if (t.live) b('■ Stop', 'Stop the session', () => send({ type: 'stop', id: t.id }), 'danger');
+  else b(t.sessionId ? '↻ Resume' : '▶ Run', t.sessionId ? 'Resume the Claude session' : 'Start the task', () => runTask(t), 'primary');
 }
 
 /* ---------- terminals ---------- */
@@ -393,12 +423,9 @@ window.addEventListener('message', ({ data: m }) => {
   else if (m.type === 'replay') { const e = terms.get(m.id); if (e) { e.term.reset(); e.term.write(m.data); } }
   else if (m.type === 'changes') { changes[m.id] = m.files; renderBoard(); }
   else if (m.type === 'focus') {
-    openTerms.add(m.id); ui.open = [...openTerms]; save();
     const t = S?.board.tasks.find(x => x.id === m.id);
-    if (t && !visible().includes(t)) ui.view = 'all';
-    render();
-    document.querySelector(`.card[data-id="${m.id}"]`)?.scrollIntoView({ block: 'center' });
-    terms.get(m.id)?.term.focus();
+    if (t && !visible().includes(t)) { ui.view = 'all'; render(); }
+    openTerm(m.id);
   }
 });
 send({ type: 'ready' });
