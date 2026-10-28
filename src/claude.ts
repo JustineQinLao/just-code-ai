@@ -101,6 +101,7 @@ function carryOver(root: string, worktree: string, statusFile: string): string[]
 
 export function taskPrompt(t: Task) {
   return [t.title, t.description,
+    t.images?.length && `Screenshots for this task (read them first):\n${t.images.map(f => `- ${f}`).join('\n')}`,
     'Work only inside the current directory (this task\'s git worktree). JustCode commits your changes when you finish; do not push.']
     .filter(Boolean).join('\n\n');
 }
@@ -113,6 +114,7 @@ export function sessionArgs(o: { task: Task; root: string; worktree: string; sta
     '--permission-mode', task.mode,
     ...(task.agent ? ['--agent', task.agent] : []),
     ...carryOver(o.root, o.worktree, o.statusFile),
+    ...(task.images?.length ? ['--add-dir', path.dirname(task.images[0])] : []), // attachments sit outside the worktree
     ...(o.resume ? ['--resume', task.sessionId!] : ['--session-id', task.sessionId!]),
     ...(prompt ? [prompt] : []),
   ];

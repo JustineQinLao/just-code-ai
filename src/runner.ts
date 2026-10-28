@@ -228,6 +228,7 @@ export class Runner {
     const t = this.store.task(id);
     if (!t) return;
     await this.serial(() => this.cleanup(t)).catch(e => this.notify('error', e.message));
+    fs.rmSync(path.join(this.root, '.justcode', 'attachments', id), { recursive: true, force: true });
     this.store.deleteTask(id);
   }
 

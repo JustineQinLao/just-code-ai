@@ -1,7 +1,8 @@
 // JustCode board webview. Host owns all state and processes; this file only renders and forwards clicks/keys.
 const vscode = acquireVsCodeApi();
 const send = m => vscode.postMessage(m);
-const ui = Object.assign({ view: null, archived: false, open: [] }, vscode.getState() || {});
+const ui = Object.assign({ view: null, archived: false, open: [], guided: false }, vscode.getState() || {});
+const images = []; // pasted into the add form: { name, data (data: URL) }
 const save = () => vscode.setState(ui);
 const openTerms = new Set(ui.open); // cards with their terminal shown
 const openReview = new Set();
@@ -22,7 +23,8 @@ const sprintName = id => S.board.sprints.find(s => s.id === id)?.name;
 
 const app = document.getElementById('app');
 app.innerHTML = `
-  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span></header>
+  <div id="offline" class="banner" hidden>The board lost its connection to JustCode (usually after an update). Close this tab and run <b>JustCode: Open Board</b>, or reload the window.</div>
+  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><button id="guide">? Guide</button></header>
   <div class="row toolbar">
     <select id="view"></select>
     <button id="newSprint">+ Sprint</button>
@@ -42,7 +44,8 @@ app.innerHTML = `
       <button id="add" class="primary">Add</button>
     </div>
     <textarea id="desc" placeholder="Details, acceptance criteria (optional)" hidden></textarea>
-    <div class="row small muted"><a href="#" id="toggleDesc">+ details</a><span class="skills" id="skills"></span></div>
+    <div class="thumbs" id="thumbs"></div>
+    <div class="row small muted"><a href="#" id="toggleDesc">+ details</a><span>· ⌘V / Ctrl+V pastes a screenshot</span><span class="skills" id="skills"></span></div>
   </div>
   <div class="board" id="board"></div>`;
 const $ = id => document.getElementById(id);
@@ -63,10 +66,31 @@ const add = () => {
   let title = $('title').value.trim(), description = $('desc').value.trim();
   if (!title && description) [title, description] = [description.split('\n')[0], description.split('\n').slice(1).join('\n').trim()];
   if (!title) return $('title').focus();
-  send({ type: 'addTask', title, description, sprintId: $('target').value, agent: $('agent').value, mode: $('mode').value });
-  $('title').value = ''; $('desc').value = ''; $('title').focus();
+  send({ type: 'addTask', title, description, images: images.splice(0),  sprintId: $('target').value, agent: $('agent').value, mode: $('mode').value });
+  $('title').value = ''; $('desc').value = ''; renderThumbs(); $('title').focus();
 };
 $('add').onclick = add;
+$('guide').onclick = () => guide();
+
+// Screenshots pasted anywhere in the add form are attached to the next task.
+function renderThumbs() {
+  $('thumbs').innerHTML = '';
+  images.forEach((img, i) => {
+    const t = h(`<span class="thumb"><img src="${img.data}" alt=""><button title="Remove">×</button></span>`);
+    t.querySelector('button').onclick = () => { images.splice(i, 1); renderThumbs(); };
+    $('thumbs').append(t);
+  });
+}
+document.querySelector('.addbar').addEventListener('paste', e => {
+  const files = [...(e.clipboardData?.items ?? [])].filter(i => i.type.startsWith('image/')).map(i => i.getAsFile()).filter(Boolean);
+  if (!files.length) return;
+  e.preventDefault();
+  for (const f of files) {
+    const r = new FileReader();
+    r.onload = () => { images.push({ name: f.name || 'screenshot.png', data: r.result }); renderThumbs(); };
+    r.readAsDataURL(f);
+  }
+});
 $('title').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) add(); };
 
 /* ---------- render ---------- */
@@ -138,6 +162,7 @@ function card(t) {
     <div class="meta">${[
       ui.view === 'all' && t.sprintId && `<span class="chip">${esc(sprintName(t.sprintId))}</span>`,
       t.agent && `<span class="chip">@${esc(t.agent)}</span>`,
+      t.images?.length && `<span class="chip">🖼 ${t.images.length}</span>`,
       t.mode !== 'default' && `<span class="chip">${MODES[t.mode]}</span>`,
       t.queued && '<span class="chip">queued</span>',
       t.run === 'waiting' && '<span class="chip warn">needs approval</span>',
@@ -217,6 +242,12 @@ function mountTerm(id, slot) {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(el);
+    // Claude Code reads images from the clipboard on Ctrl+V; a ⌘V of an image has no text for xterm to paste.
+    el.addEventListener('paste', e => {
+      if ([...(e.clipboardData?.items ?? [])].some(i => i.type.startsWith('image/')) && !e.clipboardData.getData('text')) {
+        e.preventDefault(); e.stopPropagation(); send({ type: 'input', id, data: '\x16' });
+      }
+    }, true);
     term.onData(data => send({ type: 'input', id, data }));
     term.onResize(({ cols, rows }) => send({ type: 'resize', id, cols, rows }));
     new ResizeObserver(() => { if (el.isConnected) try { fit.fit(); } catch { /* hidden */ } }).observe(el);
@@ -289,8 +320,31 @@ $('mode').onchange = () => { $('mode').dataset.touched = '1'; };
 
 /* ---------- host messages ---------- */
 
+function guide() {
+  dlg.innerHTML = `<h3>How JustCode works</h3>
+    <ol class="guide">
+      <li><b>Add a task.</b> Type what Claude should do and press Enter. Optional: a sprint, an agent from <code>.claude/agents</code>, permissions, details, a pasted screenshot (⌘V). Click a skill chip to make a task like <code>/sync-project</code>.</li>
+      <li><b>Sprints (optional).</b> <b>+ Sprint</b> creates one. Pick it in the view menu; new tasks go there. <b>Close sprint</b> sends unfinished tasks back to the backlog.</li>
+      <li><b>Plan with Claude.</b> Describe a goal. Claude reads the code (read-only) and proposes tasks. You pick which to add.</li>
+      <li><b>Run.</b> <b>▶ Run</b> on a card, or <b>▶ Run all</b> for every To do task in view. The card opens a terminal with the live Claude session. Type there and approve prompts there. A yellow card means Claude is waiting for you.</li>
+      <li><b>Review.</b> When Claude finishes, its changes are committed on the task's own branch and the card moves to Review. <b>▸ Changes</b> shows the diff. Keep chatting in the terminal to change things.</li>
+      <li><b>Merge.</b> <b>✓ Merge</b> asks you first, then merges into your branch. Conflicts stay on the card, never in your files: <b>Resolve with Claude</b> or fix them in the editor, then <b>Mark resolved</b> and merge again. <b>Discard</b> throws the work away.</li>
+    </ol>
+    <p class="small muted">Each task runs in <code>.justcode/worktrees/</code> on its own branch, so your checkout is never touched. No git yet? A local repo is created on the first run. Closing the board never stops a run; closing the window does, and <b>↻ Resume</b> continues it.</p>
+    <form method="dialog" class="row end"><button class="primary">Got it</button></form>`;
+  dlg.showModal();
+  ui.guided = true; save();
+}
+
+// No state shortly after loading = nothing on the other end of postMessage.
+let connected = false;
+setTimeout(() => { if (!connected) $('offline').hidden = false; }, 4000);
+
 window.addEventListener('message', ({ data: m }) => {
-  if (m.type === 'state') { S = m; render(); }
+  if (m.type === 'state') {
+    S = m; render();
+    if (!connected) { connected = true; $('offline').hidden = true; if (!ui.guided && !S.empty) guide(); }
+  }
   else if (m.type === 'data') terms.get(m.id)?.term.write(m.data);
   else if (m.type === 'replay') { const e = terms.get(m.id); if (e) { e.term.reset(); e.term.write(m.data); } }
   else if (m.type === 'changes') { changes[m.id] = m.files; renderBoard(); }

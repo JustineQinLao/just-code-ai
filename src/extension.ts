@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { Store, Task } from './store';
@@ -85,17 +86,21 @@ export function activate(context: vscode.ExtensionContext) {
     provideTextDocumentContent: uri => { const q = JSON.parse(uri.query); return g.show(q.dir, q.ref, q.file); },
   }));
 
-  const open = (focusTask?: string) => {
+  // restored: a board tab VS Code kept across a reload or extension update. It is rewired here;
+  // a tab nobody rewires stays on screen but its clicks go nowhere.
+  const open = (focusTask?: string, restored?: vscode.WebviewPanel) => {
+    if (panel && restored && restored !== panel) restored.dispose();
     if (panel) { panel.reveal(); }
     else {
       const media = vscode.Uri.joinPath(context.extensionUri, 'media');
       const xterm = vscode.Uri.joinPath(context.extensionUri, 'node_modules', '@xterm');
-      panel = vscode.window.createWebviewPanel('justCode.board', 'JustCode', vscode.ViewColumn.One,
-        { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [media, xterm] });
+      const options = { enableScripts: true, localResourceRoots: [media, xterm] };
+      panel = restored ?? vscode.window.createWebviewPanel('justCode.board', 'JustCode', vscode.ViewColumn.One, { ...options, retainContextWhenHidden: true });
+      panel.webview.options = options;
       const w = panel.webview, nonce = randomUUID().replace(/-/g, '');
       const u = (base: vscode.Uri, ...p: string[]) => w.asWebviewUri(vscode.Uri.joinPath(base, ...p));
       w.html = `<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${w.cspSource} 'unsafe-inline'; font-src ${w.cspSource}; script-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src ${w.cspSource} 'unsafe-inline'; font-src ${w.cspSource}; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${u(xterm, 'xterm', 'css', 'xterm.css')}"><link rel="stylesheet" href="${u(media, 'board.css')}"></head>
 <body><div id="app"></div><dialog id="dlg"></dialog>
 <script nonce="${nonce}" src="${u(xterm, 'xterm', 'lib', 'xterm.js')}"></script>
@@ -116,7 +121,11 @@ export function activate(context: vscode.ExtensionContext) {
     const s = r.store;
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
     switch (m.type) {
-      case 'addTask': s.addTask({ title: m.title, description: m.description || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined, mode: m.mode }); break;
+      case 'addTask': {
+        const task = s.addTask({ title: m.title, description: m.description || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined, mode: m.mode });
+        if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
+        break;
+      }
       case 'editTask': s.updateTask(m.id, m.patch); break;
       case 'move': s.updateTask(m.id, { status: m.status }); break;
       case 'delete':
@@ -152,6 +161,19 @@ export function activate(context: vscode.ExtensionContext) {
       case 'openUrl': vscode.env.openExternal(vscode.Uri.parse(m.url)); break;
       case 'plan': return runPlan(r, m);
     }
+  }
+
+  // Pasted images go to .justcode/attachments/<task>/ (outside git); the task's prompt points Claude at them.
+  function saveImages(root: string, taskId: string, images: { name: string; data: string }[]) {
+    const dir = path.join(root, '.justcode', 'attachments', taskId);
+    fs.mkdirSync(dir, { recursive: true });
+    return images.map((img, i) => {
+      const m = /^data:image\/(png|jpe?g|gif|webp);base64,(.+)$/.exec(img.data);
+      if (!m) throw new Error(`${img.name}: not an image`);
+      const file = path.join(dir, `image-${i + 1}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`);
+      fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
+      return file;
+    });
   }
 
   const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
@@ -196,8 +218,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('justCode.open', () => open()),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
     vscode.window.registerWebviewPanelSerializer('justCode.board', {
-      // Reload restores the tab empty; reopen it properly.
-      async deserializeWebviewPanel(p) { p.dispose(); open(); },
+      async deserializeWebviewPanel(p) { open(undefined, p); },
     }),
     { dispose: () => { for (const r of runners.values()) r.dispose(); ptys.dispose(); } },
   );

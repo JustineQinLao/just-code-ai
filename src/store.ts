@@ -22,6 +22,7 @@ export interface Task {
   worktree?: string;          // <project>/.justcode/worktrees/<id>
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
+  images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
   archived?: boolean;
   created: number;
 }
