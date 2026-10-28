@@ -204,7 +204,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'runAll': r.runAll(m.ids); break;
       case 'cancelQueue': r.cancelQueue(); break;
       case 'stop': r.stop(m.id); break;
-      case 'answer': r.answer(m.id, m.choice); break;
+      case 'answer': await r.answer(m.id, m.choice); break;
       case 'resumeNow': limits.clear(); break;
       case 'mergeReady': {
         const ids: string[] = m.ids.filter((id: string) => s.task(id)?.review?.state === 'pass' && s.task(id)?.review?.risk !== 'critical');

@@ -15,13 +15,19 @@ export function claudeBin(setting: string) {
 
 // Markers a parent Claude session leaves in the environment (e.g. VS Code started from Claude). Inherited, they make
 // a task's session a "child" that doesn't save its transcript, so Resume would find nothing.
-const INHERITED = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT'];
+const INHERITED = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT',
+  // Markers that make Claude Code think it runs in an editor terminal and link to it (see CLAUDE_CODE_AUTO_CONNECT_IDE below).
+  'ENABLE_IDE_INTEGRATION', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'VSCODE_INJECTION', 'CURSOR_TRACE_ID'];
 
 export const ptyEnv = (): Record<string, string> => ({
   ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.includes(k))) as Record<string, string>,
   PATH: [process.env.PATH, path.join(os.homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].filter(Boolean).join(path.delimiter),
   TERM: 'xterm-256color',
   COLORTERM: 'truecolor',
+  // Task sessions answer their permission prompts on the board's card. Linked to the editor, Claude Code opens a diff tab
+  // for every edit and waits there ("Save file to continue"), where the card's Allow / Always cannot reach it.
+  CLAUDE_CODE_AUTO_CONNECT_IDE: 'false',
+  CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '1',
 });
 
 // Flat `key: value` frontmatter; all Claude Code agent files use for these fields.

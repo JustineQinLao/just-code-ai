@@ -87,6 +87,14 @@ export class Ptys {
     } catch { /* mirror gone */ }
     l.mirror.dispose();
   }
+  // The session's current screen as plain text. The TUI draws gaps with cursor-forward codes instead of spaces,
+  // so those become spaces again (otherwise "Do you want to proceed?" reads "Doyouwanttoproceed?").
+  async screen(id: string, lines = 30): Promise<string> {
+    const raw = await this.snapshot(id);
+    return raw.replace(/\x1b\[(\d*)C/g, (_m, n) => ' '.repeat(+n || 1)).replace(/\x1b\[[0-9;?<>=]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+      .split('\n').map(l => l.replace(/\s+$/, '')).filter(l => l.trim()).slice(-lines).join('\n');
+  }
+
   forget(id: string) {
     this.ended.delete(id);
     const f = this.file(id);
