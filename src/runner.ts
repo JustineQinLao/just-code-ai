@@ -5,7 +5,9 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import { Ptys } from './pty';
 import * as g from './git';
-import { sessionArgs, sessionExists } from './claude';
+import { sessionArgs, sessionExists, reviewPrompt, runReview, discoverAgents } from './claude';
+
+export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean }
 
 // What a task's live session is doing, from its hooks: running, waiting for approval, or idle (turn finished).
 export type RunState = 'running' | 'waiting' | 'idle';
@@ -40,7 +42,8 @@ export class Runner {
 
   constructor(readonly store: Store, private ptys: Ptys, private runsDir: string, private bin: () => string,
     private notify: (level: 'info' | 'warn' | 'error', text: string, taskId?: string) => void,
-    private maxParallel: () => number, private model: () => string) {
+    private maxParallel: () => number, private model: () => string,
+    private reviewOpts: () => ReviewOpts = () => ({ auto: false, model: '', maxAttempts: 3, autoMerge: false })) {
     fs.mkdirSync(runsDir, { recursive: true });
     ptys.onExit((id) => { if (this.store.task(id)) void this.exited(id); });
     // Finished work has no running session, however it got there (Done, archive, drag, sync, merge).
@@ -108,7 +111,8 @@ export class Runner {
   // Sends a prompt to the task's session: typed into the live one, or a resumed one started with it.
   async say(id: string, prompt: string) {
     if (!this.ptys.has(id)) return this.run(id, prompt);
-    this.ptys.write(id, prompt);
+    // Bracketed paste keeps a multi-line prompt as one message instead of submitting at the first newline.
+    this.ptys.write(id, `\x1b[200~${prompt}\x1b[201~`);
     setTimeout(() => this.ptys.write(id, '\r'), 150); // separate Enter, so the TUI doesn't take it as part of a paste
   }
 
@@ -156,7 +160,15 @@ export class Runner {
     try { json = raw ? JSON.parse(raw) : {}; } catch { /* partial or odd input: state still applies */ }
     if (kind === 'tool') { this.lastTool.set(id, { tool: json.tool_name ?? '', detail: toolDetail(json.tool_input) }); return; }
     if (kind === 'stop') { this.asks.delete(id); void this.turnEnded(id); return; }
-    if (kind === 'run') { this.asks.delete(id); this.state.set(id, 'running'); this.changed(); return; }
+    if (kind === 'run') {
+      this.asks.delete(id);
+      this.state.set(id, 'running');
+      // Claude is working on it again (you typed, or it is fixing review issues): back to Doing.
+      const t = this.store.task(id);
+      if (t?.status === 'review' && !t.init) this.store.updateTask(id, { status: 'doing', review: t.review?.state === 'fail' ? t.review : undefined });
+      this.changed();
+      return;
+    }
     if (kind === 'wait') {
       const last = this.lastTool.get(id);
       this.asks.set(id, { message: json.message ?? 'Claude needs your approval', tool: last?.tool, detail: last?.detail });
@@ -198,6 +210,45 @@ export class Runner {
     else if (t?.status === 'doing') this.store.updateTask(id, { status: 'review' });
     this.changed();
     this.pump();
+    const cur = this.store.task(id);
+    if (cur?.status === 'review' && cur.branch && this.reviewOpts().auto) void this.review(id);
+  }
+
+  /* ---------- AI review ---------- */
+
+  // Reviews the branch's diff with a read-only reviewer. Fail → issues go back to the task's session (it fixes, its
+  // turn ends, the new commit is reviewed again), up to maxAttempts; then it waits for you. Pass → ready to merge,
+  // or merged right away with autoMerge (unless the reviewer marks it critical).
+  async review(id: string, force = false) {
+    const t = this.store.task(id), o = this.reviewOpts();
+    if (!t?.worktree || !t.base || !t.branch || t.conflicts?.length || t.review?.state === 'running') return;
+    const head = await g.git(t.worktree, ['rev-parse', 'HEAD']).catch(() => '');
+    if (!force && t.review?.head === head) return; // this commit was already reviewed
+    const diff = await g.git(t.worktree, ['diff', `${t.base}...HEAD`]).catch(() => '');
+    if (!diff.trim()) return; // nothing built yet (Claude asked a question): nothing to review
+    const attempts = (t.review?.state === 'fail' ? t.review.attempts : 0);
+    this.store.updateTask(id, { review: { state: 'running', attempts, head } });
+    const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
+    let v;
+    try { v = await runReview(this.bin(), t.worktree, reviewPrompt(t, t.base, diff), o.model, reviewer); } catch (e: any) {
+      this.store.updateTask(id, { review: { state: 'fail', attempts, head, issues: [`Reviewer failed: ${e.message}`] } });
+      this.notify('error', `AI review of "${t.title}" failed: ${e.message}`, id);
+      return;
+    }
+    const now = this.store.task(id);
+    if (!now || now.status === 'done') return;
+    if (v.pass) {
+      this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined } });
+      if (o.autoMerge && v.risk !== 'critical') return this.merge(id, true);
+      this.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id);
+      return;
+    }
+    const n = attempts + 1;
+    this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk } });
+    if (n >= o.maxAttempts) return this.notify('warn', `"${t.title}" failed AI review ${n} times. Check the issues on the card.`, id);
+    this.store.updateTask(id, { status: 'doing' });
+    await this.say(id, `The code reviewer found these issues (review ${n} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
+      v.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
   }
 
   private async exited(id: string) {
@@ -229,7 +280,7 @@ export class Runner {
   isBusy(id: string) { return this.busy.has(id); }
 
   // Approved by the user. Base is brought into the branch first, in the worktree; conflicts stop there.
-  merge(id: string) {
+  merge(id: string, auto = false) {
     return this.guarded(id, async t => {
       if (!t.worktree || !t.branch || !t.base) throw new Error('Nothing to merge yet');
       if (this.state.get(id) === 'running' || this.state.get(id) === 'waiting') throw new Error('Claude is still working on this task. Wait for it to finish or stop it.');
@@ -243,7 +294,7 @@ export class Runner {
       await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
       await this.cleanup(t);
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined });
-      this.notify('info', `Merged "${t.title}" into ${t.base}`);
+      this.notify('info', `${auto ? 'AI review passed: auto-merged' : 'Merged'} "${t.title}" into ${t.base}`);
     });
   }
 

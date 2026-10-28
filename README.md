@@ -46,7 +46,13 @@ Every action runs in the root of the project it was made in.
    - **Claude Code** continues the session in the Claude Code extension; the card's run stops first so two processes never share one session.
 5. **Review**: when Claude's turn ends, JustCode commits the changes on the task branch and moves the card to Review.
    **▸ Changes** lists the files; click one for a side-by-side diff. Keep talking to Claude in the terminal to change things; each turn is committed again.
-6. **Merge** (your approval): **✓ Merge** first merges the latest base into the task branch, inside the task's worktree.
+6. **AI review** (automatic, after LexCode's builder → reviewer loop): when a branch task's turn ends, a read-only reviewer
+   (your project's `reviewer` agent if it has one, on `justCode.reviewModel`, default Opus) checks the diff and returns a verdict.
+   - Issues: the card goes back to **Doing**, the issues are sent to the task's session, Claude fixes them, and the new commit is
+     reviewed again, up to `justCode.maxReviews` (3). Then the issues stay on the card: **Send to Claude to fix** or **Review again**.
+   - Pass: **✓ review passed**. With `justCode.autoMerge` it merges and moves to **Done** by itself (not when the reviewer marks it critical).
+   - Any time Claude works on a Review task again (you type, or it fixes), the card moves back to **Doing**.
+7. **Merge** (your approval): **✓ Merge** first merges the latest base into the task branch, inside the task's worktree.
    - No conflicts: the branch is merged into base (`--no-ff`), the worktree and branch are removed, and the task is Done.
    - Conflicts: they stay in the task's worktree, never in your checkout. The card lists the files. Use **Resolve with Claude**, or click a file to fix it in the editor, then **Mark resolved** and **✓ Merge** again.
    - **Discard** deletes the branch and its work; the task goes back to To do.

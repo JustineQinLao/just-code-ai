@@ -24,12 +24,16 @@ export interface Task {
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
   src?: 'TASKS.md';           // created by TASKS.md sync; only these are updated or archived by it
+  review?: Review;            // AI review of the task's branch
   init?: boolean;             // the project's initialization run
   allow?: string[];           // tools pre-approved for this task's session (--allowedTools)
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
   archived?: boolean;
   created: number;
 }
+
+// AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
+export interface Review { state: 'running' | 'pass' | 'fail'; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical' }
 
 export interface Board { sprints: Sprint[]; tasks: Task[] }
 
