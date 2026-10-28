@@ -322,8 +322,8 @@ function card(t, order) {
     const a = t.ask ?? {};
     const p = h(`<div class="ask"><div><b>⚠ ${a.tool ? `Claude wants to use ${esc(a.tool)}` : esc(a.message || 'Claude needs your approval')}</b></div>
       ${a.detail ? `<code class="detail">${esc(a.detail)}</code>` : ''}
-      ${a.always ? `<div class="small muted">Always = ${esc(a.always)}</div>` : ''}
-      <div class="actions"><button class="primary" data-c="allow">Allow</button><button data-c="always" title="${esc(a.always ? 'Always: ' + a.always : 'Allow and do not ask again (the second choice in Claude\'s menu)')}">Always</button><button class="danger" data-c="deny">Deny</button><button class="icon" data-c="term" title="Answer in the terminal">⌨</button></div></div>`);
+      ${a.always ? `<div class="small muted">Always = ${esc(a.always)}</div>` : a.noAlways ? '<div class="small muted">No “always” choice for this prompt: Always allows it once.</div>' : ''}
+      <div class="actions"><button class="primary" data-c="allow">Allow</button><button data-c="always" title="${esc(a.noAlways ? 'Claude offers no “always” choice for this prompt: this allows it once.' : a.always ? 'Always: ' + a.always : 'Allow and do not ask again (read from Claude\'s menu when you click)')}">Always</button><button class="danger" data-c="deny">Deny</button><button class="icon" data-c="term" title="Answer in the terminal">⌨</button></div></div>`);
     p.querySelectorAll('[data-c]').forEach(b => b.onclick = () => b.dataset.c === 'term' ? openTerm(t.id) : send({ type: 'answer', id: t.id, choice: b.dataset.c }));
     c.querySelector('.meta').after(p);
   }
