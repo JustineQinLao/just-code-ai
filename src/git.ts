@@ -9,11 +9,17 @@ import { promisify } from 'util';
 
 const exec = promisify(execFile);
 
+// Never waits on a prompt (credentials, GPG passphrase, editor): it fails instead, with git's message, after at most 2 minutes.
+const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_EDITOR: 'true', GIT_MERGE_AUTOEDIT: 'no' };
+
 export async function git(cwd: string, args: string[]) {
   try {
-    return (await exec('git', args, { cwd, maxBuffer: 64 * 1024 * 1024 })).stdout.trimEnd();
+    return (await exec('git', args, { cwd, maxBuffer: 64 * 1024 * 1024, timeout: 120_000, env: GIT_ENV })).stdout.trimEnd();
   } catch (e: any) {
-    throw new Error(`git ${args[0]}: ${String(e.stderr || e.message).trim()}`);
+    if (e.code === 'ENOENT') throw new Error('git is not installed. Install it from https://git-scm.com, then try again.');
+    const msg = String(e.stderr || e.message).trim();
+    if (/Please tell me who you are|empty ident/i.test(msg)) throw new Error('git needs your name and email before it can commit. Open JustCode: Check Setup to set them.');
+    throw new Error(`git ${args[0]}: ${msg}`);
   }
 }
 const ok = (cwd: string, args: string[]) => git(cwd, args).then(() => true, () => false);
@@ -26,15 +32,18 @@ export const currentBranch = (dir: string) => git(dir, ['rev-parse', '--abbrev-r
 // Keeps .justcode/ (board, worktrees) out of git without touching the tracked .gitignore.
 // fresh: a repo JustCode just created, which also gets the usual secrets/deps excluded before its first commit.
 // Never committed by JustCode, unless the project's .gitignore already decides about them.
-const PROTECT = ['node_modules/', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json'];
+const PROTECT = ['node_modules/', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json',
+  '*.pem', '*.key', '*.p12', '*.pfx', '*.keystore', '*.jks', 'id_rsa*', 'id_ed25519*', '.npmrc', '.pypirc', '.netrc',
+  'credentials*.json', 'service-account*.json', '*.tfstate', '*.tfstate.*', '.venv/', 'venv/', '__pycache__/', '.terraform/'];
 
-async function exclude(repo: string, _fresh: boolean) {
+// extra: more paths to keep out of git (the files copied into task copies, justCode.worktreeCopy).
+export async function exclude(repo: string, _fresh: boolean, extra: string[] = []) {
   const file = path.join(path.resolve(repo, await git(repo, ['rev-parse', '--git-common-dir'])), 'info', 'exclude');
   const cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   let ignore = '';
   try { ignore = fs.readFileSync(path.join(repo, '.gitignore'), 'utf8'); } catch { /* none */ }
   const mentioned = (p: string) => ignore.split('\n').some(l => l.trim().replace(/^!/, '').replace(/^\//, '') === p.replace(/^!/, ''));
-  const want = ['/.justcode/', ...PROTECT.filter(p => !mentioned(p))]
+  const want = ['/.justcode/', ...[...PROTECT, ...extra.filter(e => e && !e.includes('..'))].filter(p => !mentioned(p))]
     .filter(l => !cur.split('\n').includes(l));
   if (!want.length) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -106,6 +115,31 @@ export async function addWorktree(repo: string, dir: string, branch: string, bas
   if (fs.existsSync(path.join(dir, '.git'))) return;
   const exists = await ok(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
   await git(repo, exists ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, base]);
+}
+
+// Uncommitted files in the project folder (what a task's copy would not have). Ignored files don't count.
+export async function dirtyFiles(repo: string) {
+  await exclude(repo, false);
+  return (await git(repo, ['status', '--porcelain'])).split('\n').filter(Boolean).map(l => l.slice(3).split(' -> ').pop()!);
+}
+
+// Task copies under .justcode/worktrees whose task is gone (deleted from another window, a crash mid-delete,
+// board.json edited by hand). Clean ones are removed with their jc/ branch; one with uncommitted work is kept and reported.
+export async function pruneOrphans(repo: string, keep: Set<string>): Promise<{ removed: string[]; kept: string[] }> {
+  const dir = path.join(repo, '.justcode', 'worktrees');
+  let ids: string[];
+  try { ids = fs.readdirSync(dir).filter(d => !keep.has(d)); } catch { return { removed: [], kept: [] }; }
+  const removed: string[] = [], kept: string[] = [];
+  for (const id of ids) {
+    const wt = path.join(dir, id);
+    const dirty = fs.existsSync(path.join(wt, '.git')) && (await git(wt, ['status', '--porcelain']).catch(() => '')).trim();
+    if (dirty) { kept.push(id); continue; }
+    const branch = fs.existsSync(path.join(wt, '.git')) ? await git(wt, ['rev-parse', '--abbrev-ref', 'HEAD']).catch(() => '') : '';
+    await removeWorktree(repo, wt).catch(() => undefined);
+    if (branch.startsWith('jc/') && await ok(repo, ['merge-base', '--is-ancestor', branch, 'HEAD'])) await deleteBranch(repo, branch).catch(() => undefined);
+    removed.push(id);
+  }
+  return { removed, kept };
 }
 
 // Only this one worktree; never `git worktree prune` (would drop the user's own temporarily-missing worktrees).
