@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -92,6 +92,17 @@
           },
           "default": [],
           "description": "Extra command prefixes the AI reviewer may run (e.g. \"make test\", \"flutter test\"). Built in: git read commands, common test/build runners, docker compose exec/run, ./gradlew, adb, npx playwright, curl."
+        },
+        "justCode.worktreeCopy": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".env",
+            ".env.local"
+          ],
+          "description": "Gitignored files copied from the project folder into each task's worktree (never committed, never overwritten), so tests that need them run. A worktree only has committed files."
         }
       }
     }

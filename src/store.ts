@@ -25,6 +25,7 @@ export interface Task {
   pr?: string;                // remote PR URL, when pushed
   src?: 'TASKS.md';           // created by TASKS.md sync; only these are updated or archived by it
   review?: Review;            // AI review of the task's branch
+  limited?: boolean;          // a usage limit stopped this task; it continues by itself after the reset
   init?: boolean;             // the project's initialization run
   allow?: string[];           // tools pre-approved for this task's session (--allowedTools)
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
@@ -33,7 +34,7 @@ export interface Task {
 }
 
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
-export interface Review { state: 'running' | 'pass' | 'fail'; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
+export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 export interface Board { sprints: Sprint[]; tasks: Task[] }
 
@@ -50,11 +51,19 @@ export class Store {
   }
 
   private read(): Board {
+    let text: string;
+    try { text = fs.readFileSync(this.file, 'utf8'); } catch { return { sprints: [], tasks: [] }; } // no board yet
     try {
-      const b = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      const b = JSON.parse(text);
       return { sprints: b.sprints ?? [], tasks: b.tasks ?? [] };
-    } catch { return { sprints: [], tasks: [] }; }
+    } catch {
+      // Hand-edited or merge-conflicted: keep a copy before the next save replaces it, so nothing is lost.
+      const copy = `${this.file}.corrupt-${Date.now()}`;
+      if (this.lastCorrupt !== text) { try { fs.copyFileSync(this.file, copy); this.lastCorrupt = text; } catch { /* read-only */ } }
+      return { sprints: [], tasks: [] };
+    }
   }
+  private lastCorrupt = '';
 
   // tmp + rename: a crash mid-write never leaves a half-written board.
   private written = '';

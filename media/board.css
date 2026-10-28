@@ -140,3 +140,13 @@ dialog.termdlg .term { padding: 0; }
 .msgbar { gap: 6px; flex: none; }
 .msgbar[hidden] { display: none; }
 .msgbar input { min-width: 0; }
+
+.banner.limit { border-color: var(--warn); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.meter { display: inline-flex; gap: 6px; }
+.meter .m { font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+.meter .m.warm { color: var(--warn); border-color: var(--warn); }
+.meter .m.hot { background: var(--err); color: #fff; border-color: transparent; }
+
+.card .next { font-size: 12px; margin: 2px 0 6px; padding: 4px 8px; border-radius: 4px; border-left: 3px solid var(--line); background: color-mix(in srgb, var(--fg) 5%, transparent); }
+.card .next.todo { border-left-color: var(--accent); }
+.card .next.warn { border-left-color: var(--warn); }

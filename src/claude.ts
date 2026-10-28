@@ -59,7 +59,9 @@ export function discoverSkills(root: string): string[] {
         : d.isFile() && d.name.endsWith('.md') ? [d.name.slice(0, -3)] : []);
     } catch { return []; }
   };
-  return [...new Set([root, os.homedir()].flatMap(r => [...names(path.join(r, '.claude', 'skills'), true), ...names(path.join(r, '.claude', 'commands'), false)]))];
+  // LexCode's skills (lexcode-sync, lexcode-factory) belong to another tool and work on its own board: never offered here.
+  return [...new Set([root, os.homedir()].flatMap(r => [...names(path.join(r, '.claude', 'skills'), true), ...names(path.join(r, '.claude', 'commands'), false)]))]
+    .filter(n => !/^lex-?code/i.test(n));
 }
 
 const sh = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -73,6 +75,7 @@ function hooks(statusFile: string) {
   const sayJson = (w: string) => [{ hooks: [{ type: 'command', command: `{ printf '${w}\\t'; tr -d '\\n'; printf '\\n'; } >> ${sh(statusFile)}` }] }];
   return {
     Stop: say('stop'),
+    StopFailure: sayJson('fail'),             // a turn ended on an API error (rate_limit, overloaded, billing…)
     Notification: [{ matcher: 'permission_prompt|elicitation_dialog', hooks: sayJson('wait')[0].hooks }],
     PreToolUse: sayJson('tool'),
     UserPromptSubmit: say('run'),
@@ -103,7 +106,14 @@ function carryOver(root: string, worktree: string, statusFile: string): string[]
   const ours = hooks(statusFile);
   const merged: Record<string, any[]> = { ...(settings.hooks ?? {}) };
   for (const [k, v] of Object.entries(ours)) merged[k] = [...(merged[k] ?? []), ...v];
-  out.push('--settings', JSON.stringify({ ...settings, hooks: merged }));
+  // Claude Code feeds the status line command JSON with rate_limits (5-hour / weekly percent used and reset time);
+  // ours saves it for the board and then runs the user's own status line, if they have one.
+  let origLine: any = settings.statusLine;
+  if (!origLine) { try { origLine = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'settings.json'), 'utf8')).statusLine; } catch { /* none */ } }
+  const rateFile = statusFile.replace(/\.status$/, '.rate');
+  const statusLine = { ...(origLine?.type === 'command' ? origLine : {}), type: 'command',
+    command: `IN=$(cat); case "$IN" in *rate_limits*) printf '%s' "$IN" > ${sh(rateFile)};; esac; ${origLine?.command ? `printf '%s' "$IN" | (${origLine.command})` : 'true'}` };
+  out.push('--settings', JSON.stringify({ ...settings, hooks: merged, statusLine }));
   return out;
 }
 
@@ -126,7 +136,7 @@ export function sessionArgs(o: { task: Task; root: string; worktree: string; sta
     ...carryOver(o.root, o.worktree, o.statusFile),
     ...(task.images?.length ? ['--add-dir', path.dirname(task.images[0])] : []), // attachments sit outside the worktree
     ...(o.resume ? ['--resume', task.sessionId!] : ['--session-id', task.sessionId!]),
-    ...(prompt ? [prompt] : []),
+    ...(prompt ? ['--', prompt] : []),
   ];
 }
 
@@ -199,6 +209,8 @@ export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status',
   'go test', 'cargo test', './gradlew', 'adb', 'curl'];
 
 const MAX_DIFF = 150_000;
+// A path with spaces ("Side Hustle") must be quoted in the command Claude runs and in the permission rule that allows it.
+const q = (p: string) => /\s/.test(p) ? `"${p}"` : p;
 
 // Reviewer prompt (after LexCode's): the task, its diff, how to test it (tests, adb screenshots), a strict JSON verdict.
 export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string } = { shots: '' }) {
@@ -215,7 +227,7 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
     'A failing test or build is an issue. Reading the code is not a substitute.\n' +
     (test.adb?.devices.length
       ? `2. An Android device/emulator is connected (${test.adb.devices.join(', ')}). If the task or the diff touches anything a user sees, open the app ` +
-        `(or the changed page) on it with adb, then capture the screen with exactly: \`node ${test.cli} screenshot ${test.shots}/<name>.png\` ` +
+        `(or the changed page) on it with adb, then capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\` ` +
         '(shell redirects like `>` are not allowed here). Then Read each PNG and judge the UI from it.\n'
       : '2. No Android device is connected, so no adb screenshots.\n') +
     `3. For a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read the PNG.\n` +
@@ -240,7 +252,7 @@ export function parseVerdict(text: string): Verdict {
 // Runs the reviewer headless (claude -p, plan mode, no edit tools) in the task's worktree.
 // Runs headless: unlisted tools are denied, never asked. extra: more allowed command prefixes (settings).
 export function runReview(bin: string, cwd: string, prompt: string, model: string, agent: string | undefined, shots: string, extra: string[] = [], adbBin?: string, cli?: string, signal?: AbortSignal): Promise<Verdict> {
-  const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...extra, ...(adbBin ? [adbBin] : []), ...(cli ? [`node ${cli} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
+  const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...extra, ...(adbBin ? [adbBin] : []), ...(cli ? [`node ${q(cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
   const args = ['-p', '--output-format', 'json', '--permission-mode', 'default', '--disallowedTools', 'Write', 'Edit', 'NotebookEdit',
     '--allowedTools', ...allow, '--add-dir', shots, ...(model ? ['--model', model] : []), ...(agent ? ['--agent', agent] : []), '--', prompt];
   return new Promise((resolve, reject) => {

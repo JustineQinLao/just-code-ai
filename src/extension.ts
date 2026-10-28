@@ -9,6 +9,7 @@ import { Runner } from './runner';
 import * as g from './git';
 import { claudeBin, discoverAgents, discoverSkills, plan, sessionLog } from './claude';
 import { findTasksFile } from './tasksmd';
+import { Limits } from './limits';
 
 // Project has its own Claude agents (.claude/agents/*.md).
 const hasSetup = (root: string) => { try { return fs.readdirSync(path.join(root, '.claude', 'agents')).some(f => f.endsWith('.md')); } catch { return false; } };
@@ -24,6 +25,7 @@ let current: string | undefined; // root shown on the board
 
 export function activate(context: vscode.ExtensionContext) {
   ptys = new Ptys();
+  const limits = new Limits();
   ptys.dir = path.join(context.globalStorageUri.fsPath, 'screens');
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
   status.command = 'justCode.open';
@@ -41,6 +43,8 @@ export function activate(context: vscode.ExtensionContext) {
     r = new Runner(new Store(root), ptys, path.join(context.globalStorageUri.fsPath, 'runs'), () => claudeBin(cfg().get('claudePath', '')),
       notify, () => cfg().get('maxParallel', 1), () => cfg().get('taskModel', 'sonnet'),
       () => ({ auto: cfg().get('autoReview', true), model: cfg().get('reviewModel', 'opus'), maxAttempts: cfg().get('maxReviews', 3), autoMerge: cfg().get('autoMerge', false), commands: cfg().get<string[]>('reviewCommands', []) }));
+    r.limits = limits;
+    r.copyFiles = () => cfg().get<string[]>('worktreeCopy', ['.env', '.env.local']);
     r.onChange(push);
     r.store.onChange(push);
     r.store.watch();
@@ -81,9 +85,11 @@ export function activate(context: vscode.ExtensionContext) {
   function updateStatus() {
     let run = 0, wait = 0;
     for (const r of runners.values()) for (const s of r.state.values()) s === 'waiting' ? wait++ : s === 'running' && run++;
-    status.text = `$(checklist) JustCode${run ? ` $(sync~spin) ${run}` : ''}${wait ? ` $(warning) ${wait}` : ''}`;
-    status.tooltip = wait ? `${wait} task(s) waiting for your approval` : 'Open the JustCode board';
-    status.backgroundColor = wait ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+    const lv = limits.view();
+    const pct = Math.max(lv.five?.pct ?? 0, lv.week?.pct ?? 0);
+    status.text = `$(checklist) JustCode${run ? ` $(sync~spin) ${run}` : ''}${wait ? ` $(warning) ${wait}` : ''}${lv.held ? ' $(watch) limit' : pct >= 80 ? ` $(watch) ${Math.round(pct)}%` : ''}`;
+    status.tooltip = lv.held ? 'Claude usage limit reached: tasks continue after the reset' : wait ? `${wait} task(s) waiting for your approval` : 'Open the JustCode board';
+    status.backgroundColor = wait || lv.held ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
   }
 
   let pending: NodeJS.Timeout | undefined;
@@ -96,7 +102,6 @@ export function activate(context: vscode.ExtensionContext) {
   async function post() {
     const r = runner();
     if (!panel || !r) return panel?.webview.postMessage({ type: 'state', empty: true, roots: [] });
-    if (panel.visible && !checked.has(r.root)) { checked.add(r.root); void initialize(r, false).catch(e => vscode.window.showErrorMessage(e.message)); }
     const tasks = r.store.data.tasks.map(t => ({
       ...t, run: r.state.get(t.id), ask: r.asks.get(t.id), live: ptys.has(t.id), queued: r.queued().includes(t.id), busy: r.isBusy(t.id),
     }));
@@ -109,6 +114,7 @@ export function activate(context: vscode.ExtensionContext) {
       }), root: r.root,
       board: { ...r.store.data, tasks },
       setup: hasSetup(r.root),
+      limit: limits.view(),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
       git: { repo: await g.isRepo(r.root), remote: await g.hasRemote(r.root).catch(() => false), branch: await g.currentBranch(r.root).catch(() => '') },
@@ -119,7 +125,9 @@ export function activate(context: vscode.ExtensionContext) {
     });
   }
 
-  ptys.onData((id, data) => panel?.webview.postMessage({ type: 'data', id, data }));
+  ptys.onData((id, data) => { limits.feed(id, data); panel?.webview.postMessage({ type: 'data', id, data }); });
+  limits.onChange(push);
+  limits.onReset(() => { for (const r of runners.values()) r.afterReset(); });
   ptys.onExit(id => panel?.webview.postMessage({ type: 'exit', id }));
 
   // Left side of a review diff: the file at the merge base, read straight from git.
@@ -180,7 +188,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'clear': {
         const ids: string[] = m.ids.filter((id: string) => s.task(id));
         if (!ids.length) break;
-        const work = ids.filter(id => s.task(id)?.branch && s.task(id)?.status !== 'done').length;
+        const work = ids.filter(id => s.task(id)?.worktree).length; // a worktree still there = work not merged, whatever the column
         const msg = `Delete all ${ids.length} task(s) in ${m.column}?${work ? ` ${work} of them have a branch; their work is deleted too.` : ''}`;
         if (await confirm(msg, 'Delete all')) for (const id of ids) await r.remove(id);
         break;
@@ -195,6 +203,13 @@ export function activate(context: vscode.ExtensionContext) {
       case 'cancelQueue': r.cancelQueue(); break;
       case 'stop': r.stop(m.id); break;
       case 'answer': r.answer(m.id, m.choice); break;
+      case 'resumeNow': limits.clear(); break;
+      case 'mergeReady': {
+        const ids: string[] = m.ids.filter((id: string) => s.task(id)?.review?.state === 'pass' && s.task(id)?.review?.risk !== 'critical');
+        if (!ids.length || !await confirm(`Merge ${ids.length} reviewed task(s) into their base branch, one at a time? A task that conflicts stays on its card for you to resolve.`, 'Merge all')) break;
+        for (const id of ids) await r.merge(id, false);
+        break;
+      }
       case 'say': if (ptys.has(m.id) && typeof m.text === 'string' && m.text.trim()) await r.say(m.id, m.text); break;
       case 'input': ptys.write(m.id, m.data); break;
       case 'resize': ptys.resize(m.id, m.cols, m.rows); ptys.size = { cols: m.cols, rows: m.rows }; break;
@@ -242,15 +257,10 @@ export function activate(context: vscode.ExtensionContext) {
     });
   }
 
-  // A project that isn't set up (no .claude agents, or nothing to put on the board) is initialized the first time
-  // its board is shown: /just-code-ai-sync creates the Claude setup and TASKS.md from docs/project.md, then syncs.
-  // It runs once per project (the task stays on the board); the button re-runs it on demand.
-  const checked = new Set<string>();
-  async function initialize(r: Runner, force: boolean) {
+  // Optional: the Initialize button runs /just-code-ai-sync (Claude setup + TASKS.md from docs/project.md, then the board sync).
+  // Nothing needs it: the board works as is, with the project's own agents and skills.
+  async function initialize(r: Runner, _force: boolean) {
     const s = r.store;
-    const done = s.data.tasks.some(t => t.init);
-    const needed = !hasSetup(r.root) || (!s.data.tasks.length && !findTasksFile(r.root));
-    if (!force && (done || !needed)) return;
     const task = s.addTask({ title: '/just-code-ai-sync', description: 'Initialize this project for JustCode: Claude setup and TASKS.md if missing, then sync the board.',
       mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.claude/**)', 'Edit(.claude/**)', 'Bash(node:*)', 'Bash(ls:*)', 'Bash(mkdir:*)'] });
     await r.run(task.id);
@@ -314,7 +324,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewPanelSerializer('justCode.board', {
       async deserializeWebviewPanel(p) { open(undefined, p); },
     }),
-    { dispose: () => { for (const r of runners.values()) r.dispose(); ptys.dispose(); } },
+    { dispose: () => { for (const r of runners.values()) r.dispose(); ptys.dispose(); limits.dispose(); } },
   );
   updateStatus();
   installSyncSkill(context);
