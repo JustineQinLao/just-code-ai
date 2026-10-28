@@ -161,7 +161,36 @@ Claude's own servers. When a limit is reached:
 - after the reset, they continue exactly where they stopped;
 - **Try now** skips the wait.
 
-## 10. Reloads, crashes, cleanup
+## 10. Sources and artifacts
+
+**📎 Sources** (toolbar) holds the material tasks are based on: specs, designs, API docs, data files, folders and
+links. Each source has a one-line note that Claude reads first. When you add a task:
+
+- every source is listed in its brief by default (untick one under *More ▾ → Based on* to leave it out);
+- **📎 Attach files…** adds files that only this task needs.
+
+Every task keeps short notes. Open them under **Details → Artifacts**:
+
+| Artifact | Written by | Read by |
+|---|---|---|
+| Brief | JustCode: the task, its sources, where to write the handoff | the builder |
+| Plan | Claude, in *Plan only* mode. Approve it on the card with **Build it**, or **Revise…** | the builder, the reviewer |
+| Handoff | Claude at the end of each turn: what changed, the commands it ran and their results | the reviewer, fix rounds |
+| Review notes | JustCode: the reviewer's last verdict | fix rounds |
+| Project history | JustCode on each merge | later tasks |
+
+## 11. Tokens
+
+Every card shows the tokens it used. **Details** splits them into build and review, and into tokens written, new
+input and cached. Cached tokens are context re-sent at each step: they are cheap, but they add up.
+
+- **Your personal setup:** off by default. Tasks load only the project's Claude setup, which saves about 7k tokens per
+  step. Turn it on in ⚙ if tasks need your plugins or MCP servers.
+- **Review size:** reviews fit the change. Docs-only changes get no review; small, non-sensitive changes use the
+  lighter model.
+- **Fresh session for fixes:** a fix round in a long session restarts from the artifacts instead of the whole history.
+
+## 12. Reloads, crashes, cleanup
 
 - Closing or hiding the board never stops work. Processes run in VS Code's extension host.
 - A Claude process idle for 10 minutes closes to free memory. A later message resumes it with its full history.

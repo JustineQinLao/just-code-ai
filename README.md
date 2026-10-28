@@ -9,6 +9,11 @@ project. Claude asks for approval right on the card, and an AI reviewer tests th
 - **Hands-off lists:** **Run all** works through a list in order. Each task is built, reviewed, fixed and (optionally)
   merged before the next one starts.
 - **Agent map:** every Claude session, subagent and reviewer at work, with elapsed time and tokens.
+- **Sources and artifacts:** tasks rest on your specs, designs, docs and links (**📎 Sources**). Each task keeps a
+  brief, a plan, the builder's handoff and the review notes, so every step reads short notes instead of re-exploring
+  the code.
+- **Fewer tokens:** lean sessions, a shared cached system prompt, capped command output, reviews sized to the change.
+  Each card shows the tokens it used.
 - **Continue on your phone:** move any task to Claude Code Remote Control and steer it from the Claude app or
   claude.ai/code.
 
@@ -61,6 +66,22 @@ The full walkthrough is in [docs/GUIDE.md](docs/GUIDE.md), or press **?** on the
 | **Remote** | **📱 Continue on phone** closes the board's session and resumes it as `claude --resume <id> --remote-control` in a terminal. The task then shows in the Claude app and on claude.ai/code. Close the terminal to bring it back to the board, where it is committed and reviewed. This needs a Claude account login, not an API key. |
 | **Limits** | The header shows your 5-hour and weekly plan usage, read from Claude's own rate-limit events. At the limit, tasks pause and continue after the reset. |
 | **Lifecycle** | Closing the board never stops work. An idle Claude process closes after 10 minutes and resumes with its full history when needed. Closing VS Code ends every process; tasks that were mid-step continue when the window opens again. Task folders without a task are cleaned up at startup. |
+
+## Tokens and artifacts
+
+Measured on real tasks, the waste was a large fixed context sent with every step and long test logs, not Claude's
+answers. JustCode cuts both, without lowering the bar for review.
+
+| Measure | Effect |
+|---|---|
+| Lean sessions | Tasks load only the project's Claude setup (your personal allow rules still apply). About 7k fewer tokens on every request. `justCode.personalSetup` turns your plugins, skills, MCP and memory back on. |
+| Shared system prompt | `excludeDynamicSections` keeps the system prompt identical across task folders, so tasks reuse each other's prompt cache. |
+| Short command output | Output is capped at 20k characters per command. Claude is told to use quiet or failure-only test reporters and to never start servers or watch modes. |
+| Artifacts | Kept under `.justcode/` (outside git). Each task has `tasks/<id>/brief.md` (the task and its sources, by reference), `plan.md` (in plan mode), `handoff.md` (written by Claude: what changed and how it verified it) and `review.md`. The project has `sources.json` and `progress.md` (one entry per merged task). |
+| Reviewer | Reads the brief, plan and handoff, re-runs only the tests that cover the change, reports blocking issues only (max 8, no style), and returns a schema-checked verdict. Its follow-up continues its own cached session. |
+| Review triage | Docs-only diffs need no reviewer. Small changes outside sensitive code (auth, payments, migrations, config…) use `justCode.reviewLightModel`. Everything else gets the full reviewer. Set `justCode.reviewTriage` to off to always use the full reviewer. |
+| Fresh fix rounds | Once a session holds more than `justCode.freshSessionTokens` (120k) of context, the next review-fix round starts fresh from the artifacts. |
+| Visibility | Each card shows its tokens. Details splits build and review into written, new input and cached tokens. |
 
 ## Safety
 

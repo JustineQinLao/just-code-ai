@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Task board that runs Claude Code on each task in its own branch: approvals on the card, AI review, one-click merge, agent map, continue on your phone",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "publisher": "justine",
   "license": "UNLICENSED",
   "repository": {
@@ -86,6 +86,16 @@
           "default": "opus",
           "description": "Model for the AI reviewer."
         },
+        "justCode.reviewLightModel": {
+          "type": "string",
+          "default": "sonnet",
+          "description": "Model for reviewing small changes that touch no sensitive code (auth, payments, migrations, config\u2026), when review triage is on. Empty: always the reviewer model."
+        },
+        "justCode.reviewTriage": {
+          "type": "boolean",
+          "default": true,
+          "description": "Size each review to the change: documentation-only diffs pass without a reviewer, small changes outside sensitive code use the lighter model, everything else the full reviewer."
+        },
         "justCode.plannerModel": {
           "type": "string",
           "default": "opus",
@@ -157,6 +167,17 @@
           "default": 10,
           "minimum": 1,
           "description": "A task's Claude process that has been idle this long is closed to free memory. It resumes with its full history when needed."
+        },
+        "justCode.personalSetup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Load your personal Claude setup (plugins, skills, MCP servers, memory, ~/.claude/CLAUDE.md) in every task. Off: tasks load only the project's own setup (your personal allow rules still apply), which saves about 7k tokens on every request."
+        },
+        "justCode.freshSessionTokens": {
+          "type": "integer",
+          "default": 120000,
+          "minimum": 0,
+          "description": "When a task's session holds more context than this, its review-fix round starts a fresh session from the task's brief, handoff and review notes instead of carrying the whole history. 0: never."
         }
       }
     }

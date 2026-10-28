@@ -96,13 +96,41 @@ export function carryOver(root: string, worktree: string) {
   return out;
 }
 
-export function taskPrompt(t: Task) {
-  return [t.title, t.description?.trim() === t.title.trim() ? undefined : t.description,
-    t.images?.length && `Screenshots for this task (read them first):\n${t.images.map(f => `- ${f}`).join('\n')}`,
+// The task as the first message: its brief (see artifacts.ts) plus where it runs.
+export function taskPrompt(t: Task, brief: string) {
+  return [brief,
     t.where !== 'root' && 'You work in this task\'s own copy of the project (a git worktree on its own branch). Stay inside the current directory. ' +
-      'JustCode commits your changes when you finish; do not commit or push yourself. When you are done, say what you changed and how you verified it.']
+      'JustCode commits your changes when you finish; do not commit or push yourself.']
     .filter(Boolean).join('\n\n');
 }
+
+// Appended to Claude Code's own system prompt for every task. Identical for all tasks and projects, so it stays in
+// the cached prefix; anything task-specific goes in the first message.
+export const TASK_APPEND = `You are running as a JustCode task: one focused change, built, verified, then reviewed by another agent.
+Work efficiently: read only the files the task needs, prefer Grep/Glob over broad directory reads, and do not re-read files you already have.
+Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
+(e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands.
+When a turn ends, update the handoff file named in your brief with what changed and how you verified it.`;
+
+// Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
+// not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
+// allow rules are still applied (userAllowRules).
+export const settingSources = (personal: boolean) => (personal ? ['user', 'project', 'local'] : ['project', 'local']) as ('user' | 'project' | 'local')[];
+
+export function userAllowRules(): string[] {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'settings.json'), 'utf8'));
+    return Array.isArray(s?.permissions?.allow) ? s.permissions.allow.filter((r: unknown) => typeof r === 'string') : [];
+  } catch { return []; }
+}
+
+// Same system prompt in every task folder (per-session details move into the first message), so parallel and
+// consecutive tasks reuse each other's prompt cache.
+export const systemPrompt = (append?: string) => ({ type: 'preset' as const, preset: 'claude_code' as const, excludeDynamicSections: true, ...(append ? { append } : {}) });
+
+// Command output is capped (Claude Code's default is 30k characters per command); long test logs are the largest
+// avoidable input in a task.
+export const OUTPUT_CAPS = { BASH_MAX_OUTPUT_LENGTH: '20000' };
 
 // Claude Code stores sessions in ~/.claude/projects/<cwd with non-alphanumerics → '-'>/<id>.jsonl
 const transcript = (cwd: string, id: string) =>
@@ -176,48 +204,71 @@ export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status',
 const MAX_DIFF = 150_000;
 const q = (p: string) => /\s/.test(p) ? `"${p}"` : p;
 
-// Reviewer prompt: the task, its diff, how to test it (tests, adb screenshots), a strict JSON verdict.
-export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string } = { shots: '' }) {
+// The reviewer's standing instructions: identical for every review, so they stay in the cached system prompt.
+export const REVIEW_APPEND = `You are the code reviewer for a JustCode task: another agent built a change on this branch; you decide if it can merge.
+You do not change code: never edit or write project files. You run unattended: never ask questions.
+Judge correctness only: does the change do what the task asks, completely; bugs, unhandled errors, edge cases, regressions in callers;
+missing tests for new behaviour; security (validation, authorization, data isolation, injection, secrets). Do not report style or naming.
+Report only issues that should block the merge, at most 8, each specific and actionable (file, line, what to change). If the change is sound, pass it.
+Verify, do not only read: the builder's handoff lists what it ran. Re-run the tests that cover the changed files (and the build or type check if quick)
+to confirm; do not re-run the whole suite unless the change is broad, and do not explore unrelated code.
+Run each command on its own, as written: no cd, &&, ;, pipes or redirects. Every command must finish by itself within a few minutes:
+never a dev server, watch mode or anything interactive (use flags like --run, --watchAll=false).
+Risk "critical" only when merging without a human look could do real harm: authentication or authorization, secrets, payments,
+data migrations or deletion, deployment or infrastructure config, breaking a public API. Ordinary code, tests, scripts and build or package
+config changes are "minor".
+In "tested", list every command you ran (or why nothing could run).`;
+
+// The review's task-specific part: the task, the builder's handoff, how to test the UI, and the diff.
+export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; handoff?: string; brief?: string } = { shots: '' }) {
   const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
   return [
-    `# Review task: ${t.title}`, t.description ?? '',
-    `You review work another agent did on this branch (diff against ${base} below). You do not change code.`,
-    'Check: does it do what the task asks, completely? Bugs, unhandled errors, edge cases, regressions in callers. ' +
-    'Tests for the changed behaviour. Security: validation, authorization, data isolation, injection, secrets. Fits the codebase\'s conventions.',
-    'Fail only for real problems. Make every issue specific and actionable: file, line, what to change.',
-    `## Diff\n\`\`\`diff\n${clipped}\n\`\`\``,
-    '## Required before your verdict: test it, do not only read it\n' +
-    '1. Run the project\'s tests that cover this change (its own commands: package.json scripts, CLAUDE.md, Makefile, …) and its build or type check if it has one. ' +
-    'A failing test or build is an issue. If the project has no tests or build at all, say so in "tested".\n' +
-    (test.adb?.devices.length
-      ? `2. An Android device/emulator is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app on it with adb, ` +
-        `then capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`. Then Read each PNG and judge the UI from it.\n`
-      : '2. No Android device is connected, so no adb screenshots.\n') +
-    `3. For a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read the PNG.\n` +
-    `Save screenshots only in ${test.shots}. List every command you ran in "tested".\n` +
-    'Run each command on its own, as written: no `cd`, `&&`, `;`, pipes or redirects (only single commands are approved here). ' +
-    'Every command must finish by itself within a few minutes: never start a dev server, a watch mode or anything interactive (use flags like --run, --watchAll=false, CI=1).',
-    'You run unattended: do not ask questions, do not edit or write project files.',
-    'End your final message with exactly one ```json block:\n```json\n{"pass": true, "issues": [], "risk": "minor", "tested": ["npm test"]}\n```\n' +
-    'A failing verdict must list issues. Use risk "critical" for security-sensitive code, migrations, public API or config changes, or anything you are unsure is safe to merge.',
-  ].filter(Boolean).join('\n\n');
+    test.brief ? `# Task\n${test.brief}` : `# Task: ${t.title}\n${t.description ?? ''}`,
+    test.handoff ? `# Builder's handoff (its own account: verify it)\n${test.handoff}` : '# Builder\'s handoff\n(none written: find out how it was meant to be verified from the diff)',
+    test.adb?.devices.length
+      ? `# UI checks\nAn Android device is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app with adb, ` +
+        `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
+      : `# UI checks\nFor a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read it. Save screenshots only in ${test.shots}.`,
+    `# Diff against ${base}\n\`\`\`diff\n${clipped}\n\`\`\``,
+  ].join('\n\n');
 }
+
+// The verdict as structured output (schema-checked by Claude Code, no parsing guesswork).
+const VERDICT_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['pass', 'issues', 'risk', 'tested'],
+  properties: {
+    pass: { type: 'boolean' },
+    issues: { type: 'array', maxItems: 8, items: { type: 'string' } },
+    risk: { type: 'string', enum: ['minor', 'critical'] },
+    tested: { type: 'array', items: { type: 'string' } },
+  },
+};
 
 export function parseVerdict(text: string): Verdict {
   const raw = [...text.matchAll(/```json\s*([\s\S]*?)```/g)].pop()?.[1] ?? /\{[\s\S]*"pass"[\s\S]*\}/.exec(text)?.[0];
   if (!raw) throw new Error('no JSON verdict in the reviewer reply');
-  const v = JSON.parse(raw);
-  if (typeof v.pass !== 'boolean') throw new Error('verdict has no "pass"');
+  return toVerdict(JSON.parse(raw));
+}
+
+function toVerdict(v: any): Verdict {
+  if (typeof v?.pass !== 'boolean') throw new Error('verdict has no "pass"');
   const issues = Array.isArray(v.issues) ? v.issues.map((i: any) => typeof i === 'string' ? i : JSON.stringify(i)) : [];
   if (!v.pass && !issues.length) throw new Error('failing verdict without issues');
   return { pass: v.pass, issues, risk: v.risk === 'critical' ? 'critical' : 'minor', tested: Array.isArray(v.tested) ? v.tested.map(String) : [] };
 }
 
-export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; signal: AbortSignal; timeoutMs: number; onRate?: (info: any) => void }
+export interface Usage { input: number; output: number; cacheRead: number; cacheWrite: number }
+export const addUsage = (a: Usage | undefined, u: any): Usage => ({
+  input: (a?.input ?? 0) + (u?.input_tokens ?? 0), output: (a?.output ?? 0) + (u?.output_tokens ?? 0),
+  cacheRead: (a?.cacheRead ?? 0) + (u?.cache_read_input_tokens ?? 0), cacheWrite: (a?.cacheWrite ?? 0) + (u?.cache_creation_input_tokens ?? 0),
+});
+
+export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; onRate?: (info: any) => void }
+interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage }
 
 // One unattended turn through the SDK: never asks (dontAsk denies anything not allowed), stops at the timeout or
-// when `signal` aborts, and returns Claude's final reply.
-async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, unknown>): Promise<string> {
+// when `signal` aborts. `resume` continues an earlier headless session, whose context is still cached.
+async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, unknown>): Promise<HeadlessResult> {
   const { query } = await sdk();
   const ac = new AbortController();
   const stop = () => ac.abort();
@@ -226,8 +277,8 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   let result: any;
   try {
     for await (const m of query({ prompt, options: {
-      cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: o.env, abortController: ac, settingSources: ['user', 'project', 'local'],
-      persistSession: false, ...(o.model ? { model: o.model } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
+      cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal),
+      ...(o.model ? { model: o.model } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
       if (m.type === 'rate_limit_event') o.onRate?.((m as any).rate_limit_info);
       if (m.type === 'result') result = m;
@@ -241,17 +292,23 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   }
   if (!result) throw new Error('Claude ended without a reply');
   if (result.subtype !== 'success' || result.is_error) throw new Error(String(result.errors?.join('; ') || result.result || result.subtype));
-  return String(result.result ?? '');
+  return { text: String(result.result ?? ''), structured: result.structured_output, sessionId: result.session_id, usage: addUsage(undefined, result.usage) };
 }
 
-export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; adbBin?: string; cli?: string }): Promise<Verdict> {
+export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage }
+
+// resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
+export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
   const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
-  const text = await headless(prompt, o, {
+  const r = await headless(prompt, o, {
     permissionMode: 'dontAsk', allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'], additionalDirectories: [o.shots],
+    systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
+    ...(o.resume ? { resume: o.resume } : {}),
   });
-  return parseVerdict(text);
+  const verdict = r.structured !== undefined ? toVerdict(r.structured) : parseVerdict(r.text);
+  return { verdict, sessionId: r.sessionId, usage: r.usage };
 }
 
 export interface PlannedTask { title: string; description?: string }
@@ -261,7 +318,8 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
   const prompt = `Plan the work for this goal in the current codebase:\n\n${goal}\n\n` +
     'Read the code you need first. Split the work into small tasks that can each be built, reviewed and merged on their own, in build order, at most 12. ' +
     'Reply with ONLY a JSON array, no prose: [{"title": "...", "description": "what to change, where, and how to verify"}]';
-  const text = await headless(prompt, o, { permissionMode: 'dontAsk', allowedTools: ['Read', 'Grep', 'Glob', 'Bash(ls:*)', 'Bash(git log:*)'], disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'] });
+  const { text } = await headless(prompt, o, { permissionMode: 'dontAsk', allowedTools: ['Read', 'Grep', 'Glob', 'Bash(ls:*)', 'Bash(git log:*)'], disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
+    systemPrompt: systemPrompt(), persistSession: false });
   try {
     const arr = JSON.parse(/\[[\s\S]*\]/.exec(text)?.[0] ?? '[]');
     return arr.filter((t: any) => t && typeof t.title === 'string').map((t: any) => ({ title: t.title.trim(), description: typeof t.description === 'string' ? t.description.trim() : undefined }));

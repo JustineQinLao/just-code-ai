@@ -6,7 +6,8 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
-import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, taskPrompt, adb } from './claude';
+import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage } from './claude';
+import * as A from './artifacts';
 import { Limits, isLimitError } from './limits';
 
 // One Runner per project: starts each task's Claude session in the task's own copy of the project (a git worktree on
@@ -23,7 +24,9 @@ export interface RunnerSettings {
   allowedTools: string[];
   worktreeCopy: string[];
   idleMinutes: number;
-  review: { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; mergeIfCannotRun: boolean; commands: string[]; timeoutMinutes: number };
+  personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
+  freshAfterTokens: number; // a review-fix round starts a fresh session from the task's artifacts once the old one holds this much context
+  review: { auto: boolean; model: string; lightModel: string; triage: boolean; maxAttempts: number; autoMerge: boolean; mergeIfCannotRun: boolean; commands: string[]; timeoutMinutes: number };
 }
 
 export interface RunnerDeps {
@@ -181,19 +184,25 @@ export class Runner {
     const sessionId = t.sessionId ?? randomUUID();
     const resume = !!t.sessionId && sessionExists(cwd, sessionId);
     // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
-    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t), prompt].filter(Boolean).join('\n\n');
+    if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
+    const sources = A.loadSources(this.root);
+    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), prompt].filter(Boolean).join('\n\n');
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true })!;
     const set = this.d.settings();
     const carry = carryOver(this.root, cwd);
+    const personal = set.personalSetup ? [] : userAllowRules();
     const s = new Session({
       bin, cwd, sessionId, resume, mode: task.mode, model: set.taskModel || undefined, agent: task.agent,
-      agents: carry.agents, addDirs: [...carry.addDirs, ...(task.images?.length ? [path.dirname(task.images[0])] : [])], settingsFile: carry.settingsFile,
-      allowed: [...new Set([...set.allowedTools, ...this.store.rules, ...(task.allow ?? [])])],
+      agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
+      // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
+      addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
+      allowed: [...new Set([...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
       env: this.d.env(), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
     });
     this.sessions.set(id, s);
     s.on('change', () => this.changed());
+    s.on('ask', a => { if (a.kind === 'plan' && a.plan) try { A.writePlan(this.root, id, a.plan); } catch { /* the card still shows it */ } });
     s.on('ask', a => this.d.notify('warn', `"${task.title}" needs you: ${a.kind === 'question' ? 'Claude has a question' : `${a.tool} ${a.detail}`.slice(0, 120)}`, id));
     s.onRules(rules => { this.store.addRules(rules); this.d.notify('info', `Approved for every task in ${path.basename(this.root)}: ${rules.join(', ')}`); });
     s.on('rate', info => this.d.limits.update(info));
@@ -274,6 +283,7 @@ export class Runner {
     const t = this.store.task(id);
     if (!t) return;
     const cost = (t.costUsd ?? 0) + (turn.costUsd ?? 0);
+    if (turn.usage) this.store.updateTask(id, { usage: { ...t.usage, build: addUsage(t.usage?.build as Usage | undefined, { input_tokens: turn.usage.input, output_tokens: turn.usage.output, cache_read_input_tokens: turn.usage.cacheRead, cache_creation_input_tokens: turn.usage.cacheWrite }) } });
     if (turn.limit || (this.d.limits.held() && !turn.ok)) {
       this.d.limits.setReached('usage');
       this.store.updateTask(id, { limited: true, costUsd: cost });
@@ -413,10 +423,23 @@ export class Runner {
   async sendIssues(id: string) {
     const t = this.store.task(id);
     if (!t?.review?.issues?.length) return;
-    const max = this.d.settings().review.maxAttempts;
+    const set = this.d.settings(), max = set.review.maxAttempts;
     this.store.updateTask(id, { status: 'doing' });
-    await this.say(id, `The code reviewer found these issues (review ${t.review.attempts} of ${max}). Fix them, verify, then finish your turn:\n` +
-      t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n'));
+    const issues = `The code reviewer found these issues (review ${t.review.attempts} of ${max}). Fix them, verify, update your handoff, then finish your turn:\n` +
+      t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n');
+    // A long session re-sends its whole history on every step. Past the threshold, the fix round starts fresh from the
+    // task's artifacts (brief, handoff, review) instead: same knowledge, a fraction of the context.
+    const s = this.sessions.get(id);
+    const big = set.freshAfterTokens > 0 && (s?.open ? s.context > set.freshAfterTokens
+      : !!t.sessionId && sessionSize(t.worktree ?? this.root, t.sessionId) > set.freshAfterTokens * 6);
+    if (big && t.sessionId) {
+      this.stop(id);
+      this.store.updateTask(id, { sessionId: undefined, pastSessions: [...(t.pastSessions ?? []), t.sessionId], status: 'doing' });
+      await this.run(id, `This task was already built on this branch (see git diff ${t.base}...HEAD) and ${A.handoffFile(this.root, id)} ` +
+        `describes it. The review is in ${A.reviewFile(this.root, id)}.\n\n${issues}`);
+      return;
+    }
+    await this.say(id, issues);
   }
 
   // A read-only reviewer checks the branch. Fail: its issues go back to the task's Claude, and the new commit is
@@ -440,24 +463,53 @@ export class Runner {
       if (!diff.trim()) { this.emptyAt.add(id); return; }
       const attempts = t.review?.state === 'fail' ? t.review.attempts : 0;
       this.store.updateTask(id, { review: { state: 'running', attempts, head } });
+      // Triage: docs-only diffs need no reviewer; small changes outside sensitive code get the lighter model.
+      const tri = o.triage ? A.triage(diff) : { level: 'full' as const, why: '' };
+      if (tri.level === 'none' && !force) {
+        const v = { pass: true, issues: [], risk: 'minor' as const, tested: [] as string[] };
+        this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: 'minor', level: 'none', why: tri.why } });
+        A.writeReview(this.root, id, v, attempts + 1);
+        this.reviews.delete(id);
+        if (o.autoMerge) { await this.merge(id, true); return; }
+        this.d.notify('info', `"${t.title}" needs no AI review (${tri.why}). Ready to merge.`, id);
+        return;
+      }
+      const model = tri.level === 'light' && o.lightModel ? o.lightModel : o.model;
+      this.store.updateTask(id, { review: { state: 'running', attempts, head, level: tri.level === 'none' ? 'full' : tri.level, why: tri.why } });
       const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
       fs.rmSync(shots, { recursive: true, force: true });
       fs.mkdirSync(shots, { recursive: true });
       const device = adb();
       const screenshots = () => { try { return fs.readdirSync(shots).filter(f => /\.(png|jpe?g)$/i.test(f)).map(f => path.join(shots, f)); } catch { return []; } };
-      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli }) + (retry
+      let brief = ''; try { brief = fs.readFileSync(A.briefFile(this.root, id), 'utf8').replace(/\n## When you finish[\s\S]*$/, '').trim(); } catch { /* none yet */ }
+      try { brief += `\n\n## Approved plan\n${fs.readFileSync(A.planFile(this.root, id), 'utf8').slice(0, 6000)}`; } catch { /* no plan */ }
+      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli, handoff: A.readHandoff(this.root, id), brief }) + (retry
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
-      const exec = (p: string) => runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: o.model || undefined, agent: reviewer, signal: ac.signal,
-        timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli });
+      let usage = this.store.task(id)?.usage?.review as Usage | undefined;
+      const exec = async (p: string, resume?: string) => {
+        const r = await runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: model || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup,
+          timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli, resume });
+        if (r.usage) {
+          usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });
+          const cur = this.store.task(id);
+          if (cur) this.store.updateTask(id, { usage: { ...cur.usage, review: usage } });
+        }
+        return r;
+      };
       let v;
       try {
-        v = await exec(prompt);
+        const first = await exec(prompt);
+        v = first.verdict;
         // A review that only read the code (or skipped a screenshot it could take) is sent back once to actually test.
         const missing = [
           !v.tested.some(c => TEST_CMD.test(c)) && 'you did not run any tests, type check or build',
           device?.devices.length && UI_FILE.test(diff) && !screenshots().length && 'an Android device is connected and the diff changes UI files, but you took no screenshot',
         ].filter(Boolean);
-        if (missing.length && !ac.signal.aborted) v = await exec(`${prompt}\n\n## Your previous review was incomplete\n${missing.join('; ')}. Do it now (or say in "tested" why it is impossible), then give the verdict.`);
+        // The follow-up continues the reviewer's own session (its context is cached) instead of reviewing from scratch.
+        if (missing.length && !ac.signal.aborted) {
+          const follow = `Your review was incomplete: ${missing.join('; ')}. Do it now (or say in "tested" why it is impossible), then give the verdict again.`;
+          v = (await exec(first.sessionId ? follow : `${prompt}\n\n## ${follow}`, first.sessionId)).verdict;
+        }
       } catch (e: any) {
         // The reviewer could not run (cancelled, limit, timeout, bad output). Not a verdict: nothing goes to Claude to "fix".
         if (ac.signal.aborted && !this.store.task(id)) return;
@@ -472,15 +524,17 @@ export class Runner {
       }
       const now = this.store.task(id);
       if (!now || now.status === 'done' || now.worktree !== t.worktree) return; // discarded, deleted or merged meanwhile
+      A.writeReview(this.root, id, v, attempts + 1);
+      const lv = { level: tri.level === 'none' ? 'full' as const : tri.level, why: tri.why };
       if (v.pass) {
-        this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
+        this.store.updateTask(id, { review: { ...lv, state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
         this.reviews.delete(id);
         if (o.autoMerge && v.risk !== 'critical') { await this.merge(id, true); return; }
         this.d.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id);
         return;
       }
       const n = attempts + 1;
-      this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
+      this.store.updateTask(id, { review: { ...lv, state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
       this.reviews.delete(id);
       if (n >= o.maxAttempts) return this.d.notify('warn', `"${t.title}" failed AI review ${n} times. The issues are on the card.`, id);
       await this.sendIssues(id);
@@ -531,6 +585,7 @@ export class Runner {
         return;
       }
       await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
+      try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
       await this.cleanup(t);
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined });
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`);
@@ -559,7 +614,8 @@ export class Runner {
   discard(id: string) {
     return this.guarded(id, async t => {
       await this.cleanup(t);
-      this.store.updateTask(id, { status: 'todo', branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined,
+      A.removeTaskDir(this.root, id);
+      this.store.updateTask(id, { status: 'todo', usage: undefined, branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined,
         review: undefined, error: undefined, live: undefined, reply: undefined, remote: undefined, limited: undefined });
     });
   }
@@ -586,6 +642,7 @@ export class Runner {
     if (!t) return;
     await this.serial(() => this.cleanup(t)).catch(e => this.d.notify('error', e.message));
     fs.rmSync(path.join(this.root, '.justcode', 'attachments', id), { recursive: true, force: true });
+    A.removeTaskDir(this.root, id);
     this.store.deleteTask(id);
   }
 
