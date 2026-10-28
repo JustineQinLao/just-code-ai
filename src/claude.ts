@@ -131,14 +131,15 @@ export function taskPrompt(t: Task) {
 }
 
 // argv for the task's interactive session. resume: the session already exists (continue it, optionally with `prompt`).
-export function sessionArgs(o: { task: Task; root: string; worktree: string; statusFile: string; resume: boolean; prompt?: string; model?: string }) {
+export function sessionArgs(o: { task: Task; root: string; worktree: string; statusFile: string; resume: boolean; prompt?: string; model?: string; allowed?: string[] }) {
   const { task } = o;
   const prompt = o.prompt ?? (o.resume ? undefined : taskPrompt(task));
   return [
     '--permission-mode', task.mode,
     ...(o.model ? ['--model', o.model] : []),
     ...(task.agent ? ['--agent', task.agent] : []),
-    ...(task.allow?.length ? ['--allowedTools', ...task.allow] : []),
+    // Commands/tools pre-approved for every task (justCode.allowedTools) and for this task: no prompt for them.
+    ...([...new Set([...(o.allowed ?? []), ...(task.allow ?? [])])].length ? ['--allowedTools', ...new Set([...(o.allowed ?? []), ...(task.allow ?? [])])] : []),
     ...carryOver(o.root, o.worktree, o.statusFile),
     ...(task.images?.length ? ['--add-dir', path.dirname(task.images[0])] : []), // attachments sit outside the worktree
     ...(o.resume ? ['--resume', task.sessionId!] : ['--session-id', task.sessionId!]),

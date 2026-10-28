@@ -82,6 +82,13 @@ The open board updates by itself. The same sync from a terminal: `node <extensio
 
 ## Permission prompts
 
+**Don't want to click?** Per task and as the default in ⚙ Settings, *Permissions* can be **Ask me**, **Auto-edit** (file edits approved, commands
+asked), **Auto (Claude decides)** (its own classifier approves what it judges safe), **Allow everything ⚠** (no prompts at all; confirmed once
+per task, use only for work you trust) or **Plan only**. Narrower and safer: **Always allow these without asking** in ⚙ Settings
+(`justCode.allowedTools`), rules like `Bash(docker compose:*)`, `Bash(npm run:*)`, `Bash(cd:*)`, `Edit`, applied to every task; a compound
+command like `cd x && docker compose exec …` needs a rule for each part. Settings saved on the board are kept by JustCode itself (and also
+written to VS Code's settings when possible), so saving never fails on a settings registry that is out of date.
+
 A card that is waiting shows what Claude asks and **the buttons of Claude's own menu**: one per choice, labeled with its text
 (a `cd … && …` command offers only **Yes** and **No**; a file write may add “Yes, and switch to accept edits”; others add “Yes, and always
 allow …”). Each button sends its own number, checked against the live menu first, so the card never offers a choice that is not there.

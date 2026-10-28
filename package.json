@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -45,12 +45,16 @@
           "enum": [
             "default",
             "acceptEdits",
+            "auto",
+            "bypassPermissions",
             "plan"
           ],
           "default": "default",
           "enumDescriptions": [
-            "Ask before edits and commands (approve inside the card)",
+            "Ask before edits and commands (approve on the card)",
             "Auto-approve file edits, ask for commands",
+            "Claude decides what is safe (its own classifier); asks only when unsure",
+            "Allow everything: NO prompts at all. Use only for work you trust",
             "Read-only planning"
           ]
         },
@@ -108,6 +112,14 @@
           "type": "number",
           "default": 600,
           "description": "Every task has its own fresh Claude session. Review fixes and the continue-after-limit step keep using it, unless its saved transcript is bigger than this many KB: then a new session starts with a short handoff instead, so long tasks don't drag their history into every round. 0 = always start fresh for those steps; -1 = never."
+        },
+        "justCode.allowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Rules approved for every task without asking, e.g. \"Bash(docker compose:*)\", \"Bash(npm run:*)\", \"Bash(cd:*)\", \"Edit\". A compound command like `cd x && docker compose exec \u2026` needs a rule for each part. Narrower and safer than 'Allow everything'."
         }
       }
     }
