@@ -265,15 +265,27 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   // The Claude Code extension resumes sessions of the folder it runs in; a task's session lives in its worktree.
+  // Continues the task's session in Claude Code. The extension only finds sessions of the folder it runs in, so:
+  // project-root tasks open in the Claude Code panel; branch tasks open as a Claude Code tab in the editor, in the
+  // task's worktree (resuming there keeps it on the task's branch, never the main folder).
   async function openInClaudeCode(r: Runner, t: Task | undefined) {
     if (!t?.sessionId) return;
-    if (!vscode.extensions.getExtension(CLAUDE_EXT)) return vscode.window.showWarningMessage('Install the Claude Code extension to view sessions there.');
     if (ptys.has(t.id)) {
       // Two processes on one session would both write the transcript.
       if (!await confirm(`Stop the run in the card and continue "${t.title}" in Claude Code?`, 'Continue in Claude Code')) return;
       r.stop(t.id);
+      await new Promise(res => setTimeout(res, 500)); // let the session file settle
     }
-    await vscode.commands.executeCommand(CLAUDE_OPEN, t.sessionId);
+    const cwd = t.worktree && fs.existsSync(t.worktree) ? t.worktree : r.root;
+    const inWorkspace = (vscode.workspace.workspaceFolders ?? []).some(f => f.uri.fsPath === cwd);
+    if (inWorkspace && vscode.extensions.getExtension(CLAUDE_EXT)) {
+      await vscode.commands.executeCommand(CLAUDE_OPEN, t.sessionId);
+      return;
+    }
+    const term = vscode.window.createTerminal({ name: `Claude Code · ${t.title.slice(0, 40)}`, cwd, location: vscode.TerminalLocation.Editor });
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+    term.sendText([claudeBin(cfg().get('claudePath', '')), '--resume', t.sessionId, ...(t.mode ? ['--permission-mode', t.mode] : [])].map(q).join(' '));
+    term.show();
   }
 
   async function runPlan(r: Runner, m: any) {
