@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -19,6 +19,10 @@
         "command": "justCode.open",
         "title": "JustCode: Open Board",
         "icon": "$(project)"
+      },
+      {
+        "command": "justCode.addProject",
+        "title": "JustCode: Add Project"
       }
     ],
     "configuration": {

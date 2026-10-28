@@ -1,6 +1,7 @@
 // JustCode board webview. Host owns all state and processes; this file only renders and forwards clicks/keys.
 const vscode = acquireVsCodeApi();
-const send = m => vscode.postMessage(m);
+// Each message carries the project it was made in.
+const send = m => vscode.postMessage({ root: S?.root, ...m });
 const ui = Object.assign({ view: null, archived: false, open: [], guided: false }, vscode.getState() || {});
 const images = []; // pasted into the add form: { name, data (data: URL) }
 const save = () => vscode.setState(ui);
@@ -103,13 +104,18 @@ function visible() {
 
 function render() {
   if (!S) return;
-  if (S.empty) { app.innerHTML = '<p class="muted">Open a folder to start. JustCode keeps its board in that folder (.justcode/board.json).</p>'; return; }
+  renderRoots();
+  document.querySelectorAll('.toolbar, .addbar').forEach(e => { e.hidden = !!S.empty; });
+  if (S.empty) {
+    $('name').textContent = 'No project';
+    $('git').textContent = '';
+    $('board').innerHTML = '<div class="empty">Add a project folder to start. Its board is kept in that folder (.justcode/board.json).</div>';
+    return;
+  }
   const live = sprints();
   if (!ui.view || (ui.view !== 'all' && ui.view !== 'backlog' && !live.some(s => s.id === ui.view))) ui.view = live.find(s => s.active)?.id ?? 'all';
   const name = S.roots.find(r => r.path === S.root)?.name;
   $('name').textContent = name;
-  $('roots').innerHTML = S.roots.length > 1 ? S.roots.map(r => `<button data-root="${esc(r.path)}" class="${r.path === S.root ? 'on' : ''}">${esc(r.name)}</button>`).join('') : '';
-  $('roots').querySelectorAll('button').forEach(b => b.onclick = () => send({ type: 'root', root: b.dataset.root }));
   $('git').textContent = !S.git.repo ? 'no git yet — a local repo is created on first run' : `${S.git.branch} · ${S.git.remote ? 'remote linked' : 'local git'}`;
   $('view').innerHTML = opts([['all', 'All tasks'], ['backlog', 'Backlog'], ...live.map(s => [s.id, `Sprint: ${s.name}${s.active ? ' (active)' : ''}`])], ui.view);
   const inSprint = live.find(s => s.id === ui.view);
@@ -131,6 +137,19 @@ function render() {
   $('runAll').textContent = queued ? `■ Cancel queue (${queued})` : `▶ Run all (${todo})`;
   $('runAll').disabled = !queued && !todo;
   renderBoard();
+}
+
+function renderRoots() {
+  $('roots').innerHTML = '';
+  for (const r of S.roots) {
+    const b = h(`<span class="proj ${r.path === S.root ? 'on' : ''}" title="${esc(r.path)}"><button class="pick">${esc(r.name)}${r.running ? ` <span class="chip">${r.running}▶</span>` : ''}${r.waiting ? ` <span class="chip warn">${r.waiting}⚠</span>` : ''}</button>${r.removable ? '<button class="x" title="Remove project (files are kept)">×</button>' : ''}</span>`);
+    b.querySelector('.pick').onclick = () => { if (r.path !== S.root) { ui.view = null; send({ type: 'root', root: r.path }); } };
+    b.querySelector('.x')?.addEventListener('click', () => send({ type: 'removeProject', root: r.path }));
+    $('roots').append(b);
+  }
+  const add = h('<button title="Add a project folder">+ Project</button>');
+  add.onclick = () => send({ type: 'addProject' });
+  $('roots').append(add);
 }
 
 function renderBoard() {
