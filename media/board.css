@@ -127,3 +127,5 @@ dialog.termdlg .term { overflow: hidden; min-height: 0; }
 
 .issues { margin: 4px 0; padding-left: 18px; font-size: 12px; }
 .issues li { margin-bottom: 3px; white-space: pre-wrap; }
+
+.shots img { height: 90px; cursor: zoom-in; }

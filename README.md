@@ -50,6 +50,11 @@ Every action runs in the root of the project it was made in.
    (your project's `reviewer` agent if it has one, on `justCode.reviewModel`, default Opus) checks the diff and returns a verdict.
    - Issues: the card goes back to **Doing**, the issues are sent to the task's session, Claude fixes them, and the new commit is
      reviewed again, up to `justCode.maxReviews` (3). Then the issues stay on the card: **Send to Claude to fix** or **Review again**.
+   - The reviewer tests, not only reads: it runs the project's tests and build, and for UI changes with an Android device connected
+     (`adb devices`) opens the app on it and captures screenshots (`cli.js screenshot`, no shell redirect), then looks at them.
+     Screenshots show on the card. A review that ran no tests, or skipped a screenshot it could take, is sent back once.
+     It may run git read commands, common test/build runners, `docker compose exec/run`, `./gradlew`, `adb`, `npx playwright` and `curl`,
+     plus `justCode.reviewCommands`; it can never edit files.
    - Pass: **✓ review passed**. With `justCode.autoMerge` it merges and moves to **Done** by itself (not when the reviewer marks it critical).
    - Any time Claude works on a Review task again (you type, or it fixes), the card moves back to **Doing**.
 7. **Merge** (your approval): **✓ Merge** first merges the latest base into the task branch, inside the task's worktree.

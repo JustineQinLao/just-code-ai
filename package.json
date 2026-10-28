@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Simple task + sprint board that runs Claude Code per task, with in-card terminals and local PR review/merge",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "publisher": "justine",
   "license": "UNLICENSED",
   "engines": {
@@ -84,6 +84,14 @@
           "type": "boolean",
           "default": false,
           "description": "Merge into the base branch automatically when the AI review passes (not when it flags the change critical)."
+        },
+        "justCode.reviewCommands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra command prefixes the AI reviewer may run (e.g. \"make test\", \"flutter test\"). Built in: git read commands, common test/build runners, docker compose exec/run, ./gradlew, adb, npx playwright, curl."
         }
       }
     }

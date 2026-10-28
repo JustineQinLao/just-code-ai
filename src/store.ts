@@ -33,7 +33,7 @@ export interface Task {
 }
 
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
-export interface Review { state: 'running' | 'pass' | 'fail'; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical' }
+export interface Review { state: 'running' | 'pass' | 'fail'; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 export interface Board { sprints: Sprint[]; tasks: Task[] }
 

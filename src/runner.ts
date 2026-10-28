@@ -5,9 +5,13 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import { Ptys } from './pty';
 import * as g from './git';
-import { sessionArgs, sessionExists, reviewPrompt, runReview, discoverAgents } from './claude';
+import { sessionArgs, sessionExists, reviewPrompt, runReview, discoverAgents, adb } from './claude';
 
-export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean }
+// What counts as having tested, and diffs that change what a user sees.
+const TEST_CMD = /\b(test|pytest|jest|vitest|spec|build|gradlew|playwright|screenshot)\b/i;
+const UI_FILE = /^\+\+\+ b\/.*\.(html?|css|scss|tsx|jsx|vue|svelte|xml|kt|java|swift|dart|component\.ts)$/m;
+
+export interface ReviewOpts { auto: boolean; model: string; maxAttempts: number; autoMerge: boolean; commands?: string[] }
 
 // What a task's live session is doing, from its hooks: running, waiting for approval, or idle (turn finished).
 export type RunState = 'running' | 'waiting' | 'idle';
@@ -229,22 +233,39 @@ export class Runner {
     const attempts = (t.review?.state === 'fail' ? t.review.attempts : 0);
     this.store.updateTask(id, { review: { state: 'running', attempts, head } });
     const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
+    // Screenshots go outside the worktree, so they are never committed. Fresh per review.
+    const shots = path.join(this.root, '.justcode', 'reviews', id);
+    fs.rmSync(shots, { recursive: true, force: true });
+    fs.mkdirSync(shots, { recursive: true });
+    const device = adb();
+    const screenshots = () => { try { return fs.readdirSync(shots).filter(f => /\.(png|jpe?g)$/i.test(f)).map(f => path.join(shots, f)); } catch { return []; } };
     let v;
-    try { v = await runReview(this.bin(), t.worktree, reviewPrompt(t, t.base, diff), o.model, reviewer); } catch (e: any) {
-      this.store.updateTask(id, { review: { state: 'fail', attempts, head, issues: [`Reviewer failed: ${e.message}`] } });
+    const cli = path.join(__dirname, 'cli.js');
+    const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli });
+    const run = (p: string) => runReview(this.bin(), t.worktree!, p, o.model, reviewer, shots, o.commands, device?.bin, cli);
+    try {
+      v = await run(prompt);
+      // A review that only read the code (or skipped the screenshot it could take) is sent back once to actually test.
+      const missing = [
+        !v.tested.some(c => TEST_CMD.test(c)) && 'you did not run any tests or build',
+        device?.devices.length && UI_FILE.test(diff) && !screenshots().length && 'an Android device is connected and the diff changes UI files, but you took no screenshot',
+      ].filter(Boolean);
+      if (missing.length) v = await run(`${prompt}\n\n## Your previous review was incomplete\n${missing.join('; ')}. Do it now, then give the verdict.`);
+    } catch (e: any) {
+      this.store.updateTask(id, { review: { state: 'fail', attempts, head, issues: [`Reviewer failed: ${e.message}`], screenshots: screenshots() } });
       this.notify('error', `AI review of "${t.title}" failed: ${e.message}`, id);
       return;
     }
     const now = this.store.task(id);
     if (!now || now.status === 'done') return;
     if (v.pass) {
-      this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined } });
+      this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
       if (o.autoMerge && v.risk !== 'critical') return this.merge(id, true);
       this.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id);
       return;
     }
     const n = attempts + 1;
-    this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk } });
+    this.store.updateTask(id, { review: { state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
     if (n >= o.maxAttempts) return this.notify('warn', `"${t.title}" failed AI review ${n} times. Check the issues on the card.`, id);
     this.store.updateTask(id, { status: 'doing' });
     await this.say(id, `The code reviewer found these issues (review ${n} of ${o.maxAttempts}). Fix them, then finish your turn:\n` +
@@ -285,6 +306,12 @@ export class Runner {
       if (!t.worktree || !t.branch || !t.base) throw new Error('Nothing to merge yet');
       if (this.state.get(id) === 'running' || this.state.get(id) === 'waiting') throw new Error('Claude is still working on this task. Wait for it to finish or stop it.');
       await g.commitAll(t.worktree, t.title);
+      // Uncommitted files in the project folder would block the merge ("untracked working tree files would be
+      // overwritten"). Commit them on base first; then bringing base into the branch settles any differences in the worktree.
+      if (await g.currentBranch(this.root) === t.base) {
+        const snap = await g.snapshot(this.root);
+        if (snap.files.length) this.notify('info', `Committed ${snap.files.length} uncommitted file(s) on ${t.base} before merging.`);
+      }
       const conflicts = await g.syncWithBase(t.worktree, t.base);
       if (conflicts.length) {
         this.store.updateTask(id, { conflicts, status: 'review' });
