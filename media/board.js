@@ -30,7 +30,7 @@ const app = document.getElementById('app');
 app.innerHTML = `
   <div id="limitbar" class="banner limit" hidden></div>
   <div id="offline" class="banner" hidden>The board lost its connection to JustCode (usually after an update). Close this tab and run <b>JustCode: Open Board</b>, or reload the window.</div>
-  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><span id="meter" class="meter" hidden></span><button id="settings">⚙ Settings</button><button id="guide">? Guide</button></header>
+  <header><h1 id="name"></h1><span class="tabs row" id="roots"></span><span class="muted small" id="git"></span><span class="grow"></span><span id="meter" class="meter" hidden></span><span id="ver" class="muted small" title="JustCode version"></span><button id="settings">⚙ Settings</button><button id="guide">? Guide</button></header>
   <div class="row toolbar">
     <select id="view"></select>
     <button id="newSprint">+ Sprint</button>
@@ -132,6 +132,7 @@ function render() {
   if (!S) return;
   renderRoots();
   renderLimit();
+  $('ver').textContent = S.version ? 'v' + S.version : '';
   document.querySelectorAll('.toolbar, .addbar').forEach(e => { e.hidden = !!S.empty; });
   if (S.empty) {
     $('name').textContent = 'No project';
@@ -384,7 +385,7 @@ const sendMsg = () => {
 };
 $('msgsend').onclick = () => { sendMsg(); $('msg').focus(); };
 $('msg').onkeydown = e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sendMsg(); } };
-$('msgesc').onclick = () => { if (termId) send({ type: 'input', id: termId, data: '\x1b' }); };
+$('msgesc').onclick = () => { if (termId) send({ type: 'input', id: termId, data: '\x1b', src: 'Esc button' }); };
 // Clicking the terminal, or the window regaining focus, puts the cursor back in it.
 $('tslot').addEventListener('mousedown', () => { if (termId) setTimeout(() => terms.get(termId)?.term.focus(), 0); });
 window.addEventListener('focus', () => { if (termdlg.open && view === 'term' && document.activeElement !== $('msg')) terms.get(termId)?.term.focus(); });
