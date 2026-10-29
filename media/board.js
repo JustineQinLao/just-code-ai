@@ -520,10 +520,20 @@
     const field = (key, label, input, help) => h('label', { class: 'blk' }, h('span', {}, label), f[key] = input, help ? h('span', { class: 'muted small' }, help) : '');
     const sel = (v, opts) => h('select', {}, opts.map(([k, l]) => h('option', { value: k, selected: String(v) === String(k) }, l)));
     const effort = v => sel(v, [['low', 'Low (fewest tokens)'], ['medium', 'Medium'], ['high', 'High'], ['', 'Model default']]);
-    const models = v => h('input', { value: v, placeholder: 'opus, sonnet, haiku or a model id', list: 'models' });
+    // Every model in one dropdown (aliases follow the newest version); "Other…" takes any model id. Reads like an input: .value.
+    const MODEL_LIST = [['', 'Your Claude default'], ['opus', 'Opus (latest)'], ['sonnet', 'Sonnet (latest)'], ['haiku', 'Haiku (latest)'],
+      ['claude-fable-5-1', 'Fable 5.1'], ['claude-opus-5-5', 'Opus 5.5'], ['claude-sonnet-5-5', 'Sonnet 5.5'], ['claude-haiku-5-5', 'Haiku 5.5']];
+    const models = v => {
+      const known = MODEL_LIST.some(m => m[0] === v);
+      const sel = h('select', { onchange: () => { other.hidden = sel.value !== '__other'; if (!other.hidden) other.focus(); } },
+        MODEL_LIST.map(([k, l]) => h('option', { value: k, selected: known && k === v }, l)), h('option', { value: '__other', selected: !known }, 'Other model id…'));
+      const other = h('input', { value: known ? '' : v, placeholder: 'e.g. claude-opus-4-8', hidden: known });
+      const box = h('div', { class: 'modelpick' }, sel, other);
+      Object.defineProperty(box, 'value', { get: () => sel.value === '__other' ? other.value.trim() : sel.value });
+      return box;
+    };
     let rules;
     dialog('Settings',
-      h('datalist', { id: 'models' }, ['opus', 'sonnet', 'haiku'].map(m => h('option', { value: m }))),
       h('div', { class: 'grid' },
         field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
         field('maxParallel', 'Tasks at once (Run all)', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),

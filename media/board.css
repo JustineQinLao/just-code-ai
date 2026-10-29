@@ -204,3 +204,4 @@ table.rep { width: 100%; border-collapse: collapse; font-size: 12px; }
 .rep th, .rep td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .rep tr:not(:first-child) { cursor: pointer; }
 .rep tr:not(:first-child):hover { background: var(--vscode-list-hoverBackground); }
+.modelpick { display: grid; gap: 4px; }
