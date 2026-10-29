@@ -40,12 +40,13 @@ Type what you want in the box at the top:
 - **Skill chips** (`/deploy`, `/test`…) come from `.claude/skills` and `.claude/commands`. Click one to add it to the
   task.
 
-**Edit with AI.** Rework tasks already on the board:
-- One task: open it, **Details → ✦ Edit with AI**. Claude can also split it into several.
-- All To do tasks: **✦ Edit To do** in the toolbar.
-Give an instruction (or pick a preset: add acceptance criteria, split big tasks, merge duplicates, order by
-dependency). Claude reads the code read-only and proposes a new list; you see each change tagged NEW, EDIT or REMOVE
-with a checkbox, and only the ticked ones apply.
+**Plan with Claude / Edit with AI.** Both open a **planning chat** in the drawer that you can keep talking to:
+- **✦ Plan with Claude** (toolbar): describe a goal; Claude reads the code and proposes new tasks.
+- **✦ Edit To do** (toolbar): rework every To do task. **Details → ✦ Edit with AI** does one task (it may split it).
+
+The chat shows Claude's activity and a message box. Keep refining ("split the second one", "add a task for X"). Claude
+keeps a **proposed task list** at the bottom, each item tagged NEW, EDIT, keep or REMOVE with a checkbox; press **Apply
+the ticked tasks** when you are happy. The chat is read-only (it never changes code) and stays open while you work.
 
 **Plan with Claude.** Describe a goal. Claude reads the code without changing anything and proposes small tasks in
 build order. You pick which to add.

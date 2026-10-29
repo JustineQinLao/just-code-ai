@@ -356,13 +356,14 @@
   const msg = h('textarea', { id: 'msg', rows: 2, placeholder: 'Message Claude…  Enter sends · Shift+Enter new line', onkeydown: e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg(); }
   } });
-  function sendMsg() { const text = msg.value.trim(); if (!text || !open) return; post('say', { id: open, text }); msg.value = ''; }
+  function sendMsg() { const text = msg.value.trim(); if (!text || !open) return; post(open === '__planner' ? 'plannerSay' : 'say', open === '__planner' ? { text } : { id: open, text }); msg.value = ''; }
   const body = h('div', { class: 'dbody' });
   const head = h('div', { class: 'dhead' });
-  drawer.append(head, body, h('div', { class: 'dfoot' }, msg, h('div', { class: 'col' }, btn('Send', sendMsg, 'primary'), btn('Stop step', () => post('interrupt', { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg) post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !$('#dlg').open) closeTask(); });
+  drawer.append(head, body, h('div', { class: 'dfoot' }, msg, h('div', { class: 'col' }, btn('Send', sendMsg, 'primary'), btn('Stop step', () => post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !$('#dlg').open) closeTask(); });
 
   function renderDrawer() {
+    if (open === '__planner') return renderPlanner();
     const t = open && S.board.tasks.find(x => x.id === open);
     drawer.classList.toggle('on', !!t);
     document.body.classList.toggle('drawer-open', !!t);
@@ -448,11 +449,64 @@
     }
     const list = steps[t.id] || [];
     if (!list.length) return [h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
+    return [logEl(list)];
+  }
+
+  function logEl(list) {
     const el = h('div', { class: 'log' }, list.map(s => h('div', { class: `step ${s.kind}` },
       h('span', { class: 'k' }, { user: 'you', say: 'claude', tool: s.agent ? `↳ ${s.agent}` : 'tool', result: '', error: 'error', info: 'note' }[s.kind]),
       s.kind === 'say' || s.kind === 'user' ? h('div', { class: 'txt' }, s.text) : h('code', {}, s.text))));
     requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
-    return [el];
+    return el;
+  }
+
+  /* ---------- planner / editor chat ---------- */
+  const pKeep = {}; // which proposals the user has unticked
+  function renderPlanner() {
+    const p = S.planner;
+    drawer.classList.add('on');
+    document.body.classList.add('drawer-open');
+    if (!p) {
+      head.replaceChildren(h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Planning'), btn('×', closeTask, 'ghost icon')));
+      body.replaceChildren(h('p', { class: 'muted' }, 'Starting the planning chat…'));
+      return;
+    }
+    const running = p.run && p.run !== 'idle';
+    head.replaceChildren(
+      h('div', { class: 'row' }, h('h3', { class: 'grow' }, p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
+        btn('×', closeTask, 'ghost icon', 'Close (the chat keeps running)')),
+      h('div', { class: `next ${running ? 'run' : 'muted'}` }, running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
+        p.context ? h('span', { class: 'muted small' }, ` · ${tok(p.context)}`) : ''));
+    const prop = p.proposals;
+    const panel = [];
+    if (prop) {
+      const cur = id => S.board.tasks.find(t => t.id === id);
+      const targets = (p.targets || []).map(cur).filter(Boolean);
+      const refs = new Set(prop.map(x => x.ref).filter(Boolean));
+      const changes = prop.map((c, i) => {
+        const was = c.ref ? cur(c.ref) : undefined;
+        const same = was && was.title === c.title && (was.description || '') === (c.description || '');
+        return { ...c, kind: !was ? 'add' : same ? 'same' : 'edit', key: `c${i}`, before: was?.title };
+      });
+      const removes = targets.filter(t => !refs.has(t.id)).map((t, i) => ({ id: t.id, title: t.title, description: t.description, kind: 'remove', key: `r${i}` }));
+      const all = [...changes, ...removes];
+      all.forEach(c => { if (!(c.key in pKeep)) pKeep[c.key] = c.kind !== 'same'; });
+      const nChange = all.filter(c => c.kind !== 'same').length;
+      panel.push(h('div', { class: 'proppanel' },
+        h('div', { class: 'row' }, h('h4', { class: 'grow' }, `Proposed tasks (${prop.length})`), nChange ? h('span', { class: 'muted small' }, `${nChange} change${nChange === 1 ? '' : 's'}`) : ''),
+        h('div', { class: 'reflist' }, all.map(c => h('label', { class: `refrow ${c.kind}` },
+          c.kind === 'same' ? h('span', { class: 'rspace' }) : h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; } }),
+          h('div', { class: 'rbody' }, h('div', {}, h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE' }[c.kind]), ' ', h('b', {}, c.title)),
+            c.before && c.before !== c.title ? h('div', { class: 'small muted strike' }, c.before) : '',
+            c.description ? h('div', { class: 'small muted' }, c.description) : '')))),
+        h('div', { class: 'acts' },
+          nChange ? btn('Apply the ticked tasks', () => {
+            post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
+            for (const k in pKeep) delete pKeep[k];
+          }, 'primary') : h('span', { class: 'muted small' }, 'No changes to apply yet.'))));
+    }
+    body.replaceChildren(logEl(p.steps || []), ...panel);
+    msg.placeholder = 'Message Claude to refine the tasks…  Enter sends';
   }
 
   /* ---------- agent map ---------- */
@@ -501,19 +555,18 @@
     name.select();
   }
 
+  function openPlanner() { open = '__planner'; remember(); render(); }
+
   function planDialog() {
-    let goal, sprint, mode;
+    let goal;
     dialog('Plan with Claude',
-      h('p', { class: 'muted' }, 'Describe a goal. Claude reads the code (read-only) and proposes small tasks; you pick which to add.'),
+      h('p', { class: 'muted' }, 'Describe a goal. Claude reads the code (read-only) and proposes small tasks. It opens as a chat: keep talking to refine, then apply the tasks you want.'),
       goal = h('textarea', { rows: 5, placeholder: 'e.g. Add password reset by email, with tests' }),
-      h('div', { class: 'row' },
-        h('label', {}, 'Add to ', sprint = h('select', {}, h('option', { value: '' }, 'Backlog'), ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id }, s.name)), h('option', { value: '__new' }, 'New sprint…'))),
-        h('label', {}, 'Permissions ', mode = h('select', {}, MODES.map(([v, l]) => h('option', { value: v, selected: v === S.settings.defaultMode }, l))))),
-      h('div', { class: 'acts' }, btn('Plan', () => {
+      h('div', { class: 'acts' }, btn('Start planning', () => {
         if (!goal.value.trim()) return goal.focus();
-        const ns = sprint.value === '__new' ? `Sprint ${S.board.sprints.length + 1}` : undefined;
-        post('plan', { goal: goal.value.trim(), sprintId: ns ? undefined : sprint.value, newSprint: ns, mode: mode.value });
+        post('planner', { instruction: goal.value.trim(), ids: [] });
         $('#dlg').close();
+        openPlanner();
       }, 'primary')));
     goal.focus();
   }
@@ -617,43 +670,16 @@
       ? ['Add clear acceptance criteria', 'Split this into smaller tasks', 'Add the files and steps to change', 'Make it more specific to this codebase']
       : ['Add acceptance criteria to each', 'Split any task that is too big', 'Merge duplicates and overlaps', 'Order by build dependency', 'Make each specific to this codebase'];
     dialog(one ? `Edit “${one.title.slice(0, 50)}” with AI` : `Edit ${ids.length} To do tasks with AI`,
-      h('p', { class: 'muted' }, one ? 'Claude reads the code and reworks this task. It may split it into several. You review every change before it applies.'
-        : 'Claude reads the code and reworks these tasks: reword, split, merge, add, reorder. You review every change before it applies.'),
+      h('p', { class: 'muted' }, 'Opens as a chat. Claude reads the code (read-only) and proposes a reworked list; keep talking to refine, then apply the tasks you want.'),
       inst = h('textarea', { rows: 3, placeholder: 'What should change? e.g. "add acceptance criteria and split anything too big"' }),
       h('div', { class: 'chips' }, presets.map(p => h('span', { class: 'chip', onclick: () => { inst.value = inst.value ? `${inst.value}; ${p}` : p; } }, p))),
-      h('div', { class: 'acts' }, btn('✦ Rework', () => {
+      h('div', { class: 'acts' }, btn('✦ Start editing', () => {
         if (!inst.value.trim()) return inst.focus();
-        post('refine', { ids, instruction: inst.value.trim() });
+        post('planner', { ids, instruction: inst.value.trim() });
         $('#dlg').close();
+        openPlanner();
       }, 'primary')));
     inst.focus();
-  }
-
-  // Review Claude's proposed task changes: each add/edit/remove has a checkbox; only the ticked ones apply.
-  function refinedDialog(m) {
-    const keep = {};
-    m.changes.forEach((c, i) => { keep[`c${i}`] = c.kind !== 'same'; });
-    m.removes.forEach((r, i) => { keep[`r${i}`] = true; });
-    const cur = id => S.board.tasks.find(t => t.id === id);
-    const changed = m.changes.filter(c => c.kind !== 'same').length + m.removes.length;
-    const row = (cls, tag, title, desc, key, before) => h('label', { class: `refrow ${cls}` },
-      key ? h('input', { type: 'checkbox', checked: keep[key], onchange: e => { keep[key] = e.target.checked; } }) : h('span', { class: 'rspace' }),
-      h('div', { class: 'rbody' }, h('div', {}, h('span', { class: `rtag ${cls}` }, tag), ' ', h('b', {}, title)),
-        before && before !== title ? h('div', { class: 'small muted strike' }, before) : '',
-        desc ? h('div', { class: 'small muted' }, desc) : ''));
-    dialog('Proposed changes',
-      h('p', { class: 'muted' }, changed ? `Claude proposes ${changed} change${changed === 1 ? '' : 's'}. Untick any you don't want, then apply.` : 'Claude kept the tasks as they are.'),
-      h('div', { class: 'reflist' },
-        m.changes.map((c, i) => row(c.kind, { add: 'NEW', edit: 'EDIT', same: 'unchanged' }[c.kind], c.title, c.description, c.kind === 'same' ? '' : `c${i}`, c.ref ? cur(c.ref)?.title : '')),
-        m.removes.map((r, i) => row('remove', 'REMOVE', r.title, r.description, `r${i}`))),
-      h('div', { class: 'acts' },
-        changed ? btn('Apply the ticked changes', () => {
-          post('applyRefine', { ids: m.order, instruction: m.instruction,
-            changes: m.changes.map((c, i) => ({ ...c, apply: c.kind !== 'same' && keep[`c${i}`] })),
-            removes: m.removes.map((r, i) => ({ ...r, apply: keep[`r${i}`] })) });
-          $('#dlg').close();
-        }, 'primary') : '',
-        btn('Cancel', () => $('#dlg').close(), 'ghost')));
   }
 
   function sourcesDialog() {
@@ -693,7 +719,8 @@
   /* ---------- messages from the extension ---------- */
   window.addEventListener('message', ({ data: m }) => {
     if (m.type === 'state') {
-      S = m; if (open && !S.board?.tasks.some(t => t.id === open)) open = undefined; render();
+      S = m; if (open && open !== '__planner' && !S.board?.tasks.some(t => t.id === open)) open = undefined;
+      render();
       if ($('#dlg').open && $('#dlg h3')?.textContent === 'Sources') sourcesDialog();
     }
     else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') renderDrawer(); }
@@ -701,11 +728,10 @@
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
     else if (m.type === 'focus') openTask(m.id);
     else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); if (!more) $('#more').hidden = !(more = true); drawFiles(); }
-    else if (m.type === 'refined') refinedDialog(m);
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.
   setInterval(() => { if (S && !S.empty && S.board.tasks.some(t => t.run === 'running' || t.reviewing)) { renderLanes(); if (open && tab === 'agents') renderDrawer(); } }, 5000);
   post('ready');
-  if (open) post('watch', { id: open });
+  if (open && open !== '__planner') post('watch', { id: open });
 })();
