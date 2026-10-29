@@ -88,6 +88,7 @@ answers. JustCode cuts both, without lowering the bar for review.
 | Fresh fix rounds | Once a session holds more than `justCode.freshSessionTokens` (120k) of context, the next review-fix round starts fresh from the artifacts. |
 | Checks first | After each turn JustCode runs the project's checks itself (`justCode.checks`: tests and type check detected for npm/pnpm/yarn/bun, pytest, Django, go, cargo, make). Failures go back to Claude with the end of the log; the reviewer is told these already pass and does not re-run them. A check that fails on the base branch too is not the task's fault and is ignored. |
 | Ready folders | Before Claude starts, `node_modules` is linked from the project folder when the lockfile matches (otherwise installed), the project's `.venv` is used, and each task gets its own `PORT` (`justCode.folderSetup`). Claude no longer spends turns installing. |
+| Effort and subagents | Tasks think at *low*, the reviewer at *medium* (small reviews at low), the planner at *low*. Subagents are off in tasks: each one re-sends its own large prompt. |
 | Visibility | Each card shows its tokens. Details splits build and review into written, new input and cached tokens. |
 
 ## Safety
@@ -113,7 +114,9 @@ The everyday settings are on the board (⚙). All of them are also in VS Code Se
 |---|---|---|
 | `justCode.defaultMode` | `auto` | Permissions for new tasks |
 | `justCode.maxParallel` | 1 | Tasks **Run all** keeps in progress at once |
-| `justCode.taskModel` / `reviewModel` / `plannerModel` | `sonnet` / `opus` / `opus` | Models |
+| `justCode.taskModel` / `reviewModel` / `plannerModel` | `sonnet` / `sonnet` / `opus` | Models |
+| `justCode.taskEffort` / `reviewEffort` / `plannerEffort` | `low` / `medium` / `low` | How much Claude thinks (thinking is billed as output) |
+| `justCode.allowSubagents` | false | Let Claude start subagents in a task. Each re-sends its own ~30k prompt per step; when on they run on Haiku |
 | `justCode.checks` | `auto` | Checks run after each turn: `auto`, empty (off), or commands one per line |
 | `justCode.maxCheckRounds` | 3 | Failing-check rounds sent back to Claude before it waits for you |
 | `justCode.folderSetup` | `auto` | Task folder setup: `auto`, empty (off), or a command |

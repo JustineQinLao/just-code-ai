@@ -42,9 +42,12 @@
   const tok = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k tokens` : `${n} tokens`;
   const tokShort = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M tok` : `${Math.round(n / 1000)}k tok`;
   // Tokens processed per stage. Cache reads are re-sent context: cheap, but they count most toward plan limits.
-  const sum = u => u ? u.input + u.output + u.cacheRead + u.cacheWrite : 0;
-  const usageTotal = t => sum(t.usage?.build) + sum(t.usage?.review);
-  const usageTitle = t => ['build', 'review'].filter(k => t.usage?.[k]).map(k => { const u = t.usage[k]; return `${k}: ${tokShort(sum(u))} (written ${u.output}, new input ${u.input + u.cacheWrite}, cached ${u.cacheRead})`; }).join('\n');
+  // "New" = what Claude wrote plus input not already cached. Cached = context re-sent each step (about a tenth of the cost).
+  const fresh = u => u ? u.input + u.output + u.cacheWrite : 0;
+  const sum = u => u ? fresh(u) + u.cacheRead : 0;
+  const usageTotal = t => fresh(t.usage?.build) + fresh(t.usage?.review);
+  const cachedTotal = t => (t.usage?.build?.cacheRead || 0) + (t.usage?.review?.cacheRead || 0);
+  const usageTitle = t => ['build', 'review'].filter(k => t.usage?.[k]).map(k => { const u = t.usage[k]; return `${k}: ${tokShort(fresh(u))} new (written ${u.output}, new input ${u.input + u.cacheWrite}) + ${tokShort(u.cacheRead)} cached re-reads`; }).join('\n');
   const srcLabel = s => s.kind === 'url' ? s.ref.replace(/^https?:\/\//, '').slice(0, 40) : (s.ref.split(/[\\/]/).filter(Boolean).pop() || s.ref) + (s.kind === 'folder' ? '/' : '');
   const MODES = [['auto', 'Auto', 'Claude approves what is safe, asks when unsure'], ['acceptEdits', 'Auto-edit', 'Edits approved, commands ask'],
     ['default', 'Ask me', 'Every edit and command asks'], ['plan', 'Plan only', 'Read-only'], ['bypassPermissions', 'Allow everything ⚠', 'No approvals at all']];
@@ -272,7 +275,7 @@
         t.where === 'root' ? h('span', { class: 'tag' }, 'project folder') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
-        usageTotal(t) ? h('span', { class: 'tag', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
+        usageTotal(t) ? h('span', { class: 'tag', title: usageTitle(t) + '\n(cached context is re-sent at every step and costs about a tenth)' }, `${tokShort(usageTotal(t))} new · ${tokShort(cachedTotal(t))} cached`) : ''),
       h('div', { class: `next ${nx.tone}` }, nx.text),
       ...(t.asks || []).map(a => askBox(t, a)),
       nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary')) : '');
@@ -516,6 +519,7 @@
     const f = {};
     const field = (key, label, input, help) => h('label', { class: 'blk' }, h('span', {}, label), f[key] = input, help ? h('span', { class: 'muted small' }, help) : '');
     const sel = (v, opts) => h('select', {}, opts.map(([k, l]) => h('option', { value: k, selected: String(v) === String(k) }, l)));
+    const effort = v => sel(v, [['low', 'Low (fewest tokens)'], ['medium', 'Medium'], ['high', 'High'], ['', 'Model default']]);
     const models = v => h('input', { value: v, placeholder: 'opus, sonnet, haiku or a model id', list: 'models' });
     let rules;
     dialog('Settings',
@@ -524,8 +528,12 @@
         field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
         field('maxParallel', 'Tasks at once (Run all)', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
         field('taskModel', 'Task model', models(s.taskModel)),
+        field('taskEffort', 'Task thinking', effort(s.taskEffort)),
         field('reviewModel', 'Reviewer model', models(s.review.model)),
+        field('reviewEffort', 'Reviewer thinking', effort(s.review.effort)),
         field('plannerModel', 'Planner model', models(s.plannerModel)),
+        field('plannerEffort', 'Planner thinking', effort(s.plannerEffort)),
+        field('allowSubagents', 'Subagents in tasks', sel(s.subagents, [[false, 'Off (saves the most tokens)'], [true, 'On (they run on Haiku)']])),
         field('maxReviews', 'Review rounds before it waits for you', sel(s.review.maxAttempts, [1, 2, 3, 4, 5].map(n => [n, String(n)]))),
         field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
         field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
@@ -550,7 +558,7 @@
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         post('settings', { values: {
           defaultMode: f.defaultMode.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
-          plannerModel: f.plannerModel.value.trim(), maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
+          plannerModel: f.plannerModel.value.trim(), taskEffort: f.taskEffort.value, reviewEffort: f.reviewEffort.value, plannerEffort: f.plannerEffort.value, allowSubagents: f.allowSubagents.value === 'true', maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
           idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
           checks: f.checks.value === 'auto' ? 'auto' : f.checks.value === 'off' ? '' : f.checksCustom.value.trim(),
           folderSetup: f.folderSetup.value === 'auto' ? 'auto' : f.folderSetup.value === 'off' ? '' : f.setupCustom.value.trim(),
@@ -567,23 +575,23 @@
   function report() {
     const tasks = visible().filter(t => t.startedAt || usageTotal(t));
     const mins = t => t.startedAt ? Math.round(((t.doneAt || Date.now()) - t.startedAt) / 60000) : 0;
-    const rows = tasks.map(t => ({ t, build: sum(t.usage?.build), review: sum(t.usage?.review), checks: t.checks?.rounds || 0,
+    const rows = tasks.map(t => ({ t, build: fresh(t.usage?.build), review: fresh(t.usage?.review), cached: cachedTotal(t), checks: t.checks?.rounds || 0,
       reviews: t.review ? (t.review.state === 'pass' ? t.review.attempts + 1 : t.review.attempts) : 0, first: t.review?.state === 'pass' && !t.review.attempts && !(t.checks?.rounds), mins: mins(t) }));
     const tot = k => rows.reduce((a, r) => a + r[k], 0);
     const reviewed = rows.filter(r => r.t.review?.state === 'pass');
     const viewName = view === 'all' ? 'All tasks' : view === 'backlog' ? 'Backlog' : S.board.sprints.find(s => s.id === view)?.name;
-    const md = [`# JustCode report · ${viewName}`, '', `Tasks: ${rows.length} · tokens: ${tokShort(tot('build') + tot('review'))} (build ${tokShort(tot('build'))}, review ${tokShort(tot('review'))}) · ` +
+    const md = [`# JustCode report · ${viewName}`, '', `Tasks: ${rows.length} · new tokens: ${tokShort(tot('build') + tot('review'))} (build ${tokShort(tot('build'))}, review ${tokShort(tot('review'))}) + ${tokShort(tot('cached'))} cached · ` +
       `first-try passes: ${reviewed.filter(r => r.first).length}/${reviewed.length} · time: ${tot('mins')} min`, '',
       '| Task | Status | Build | Review | Check rounds | Review rounds | Minutes |', '|---|---|---|---|---|---|---|',
       ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${tokShort(r.build)} | ${tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
     dialog('Report',
-      h('div', { class: 'kpis' }, [['Tasks', rows.length], ['Tokens', tokShort(tot('build') + tot('review'))], ['Build / review', `${tokShort(tot('build'))} / ${tokShort(tot('review'))}`],
+      h('div', { class: 'kpis' }, [['Tasks', rows.length], ['New tokens', tokShort(tot('build') + tot('review'))], ['Cached re-reads', tokShort(tot('cached'))], ['Build / review', `${tokShort(tot('build'))} / ${tokShort(tot('review'))}`],
         ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')]]
         .map(([k, v]) => h('div', { class: 'kpi' }, h('b', {}, v), h('span', { class: 'muted small' }, k)))),
       rows.length ? h('table', { class: 'rep' }, h('tr', {}, ['Task', 'Status', 'Build', 'Review', 'Checks', 'Reviews', 'Min'].map(x => h('th', {}, x))),
         rows.sort((a, b) => (b.build + b.review) - (a.build + a.review)).map(r => h('tr', { onclick: () => { $('#dlg').close(); openTask(r.t.id, 'details'); } },
           h('td', {}, r.t.title), h('td', {}, r.t.status), h('td', {}, tokShort(r.build)), h('td', {}, tokShort(r.review)), h('td', {}, r.checks), h('td', {}, r.reviews), h('td', {}, r.mins)))) : h('p', { class: 'muted' }, 'No task has run in this view yet.'),
-      h('p', { class: 'muted small' }, 'Tokens include cached context re-sent at each step. First-try pass: passed checks and review without a fix round.'),
+      h('p', { class: 'muted small' }, 'New tokens = written plus input not already cached. Cached re-reads are context re-sent at each step (about a tenth of the cost). First-try pass: passed checks and review without a fix round.'),
       h('div', { class: 'acts' }, btn('Copy as Markdown', () => post('copy', { text: md }))));
   }
 

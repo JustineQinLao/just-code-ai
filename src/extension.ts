@@ -40,9 +40,10 @@ export function activate(context: vscode.ExtensionContext) {
   const runnerSettings = (): RunnerSettings => ({
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
+    taskEffort: setting('taskEffort', 'low'), plannerEffort: setting('plannerEffort', 'low'), subagents: setting('allowSubagents', false),
     personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
     checks: setting('checks', 'auto'), setup: setting('folderSetup', 'auto'), maxCheckRounds: setting('maxCheckRounds', 3), checkTimeoutMinutes: setting('checkTimeoutMinutes', 10),
-    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
+    review: { auto: setting('autoReview', true), model: setting('reviewModel', 'sonnet'), effort: setting('reviewEffort', 'medium'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
   });
 
@@ -462,7 +463,7 @@ export function activate(context: vscode.ExtensionContext) {
       (_p, token) => {
         const ac = new AbortController();
         token.onCancellationRequested(() => ac.abort());
-        return plan(m.goal, { bin: b, cwd: r.root, env: env(), model: setting('plannerModel', 'opus') || undefined, agent: m.agent || undefined, signal: ac.signal, timeoutMs: 15 * 60_000, onRate: i => limits.update(i) });
+        return plan(m.goal, { bin: b, cwd: r.root, env: env(), model: setting('plannerModel', 'opus') || undefined, effort: setting('plannerEffort', 'low') || undefined, agent: m.agent || undefined, signal: ac.signal, timeoutMs: 15 * 60_000, onRate: i => limits.update(i) });
       });
     if (!tasks.length) return vscode.window.showWarningMessage('Claude returned no tasks.');
     const picked = await vscode.window.showQuickPick(tasks.map(t => ({ label: t.title, detail: t.description, picked: true, t })),

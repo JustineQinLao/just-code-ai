@@ -44,6 +44,8 @@ export interface SessionOptions {
   resume: boolean;
   mode: string;
   model?: string;
+  effort?: string;            // low | medium | high | xhigh | max (empty: the model's default)
+  subagents?: boolean;        // let Claude start subagents (each carries its own large prompt); off by default
   agent?: string;
   agents?: Record<string, { description: string; prompt: string; tools?: string[]; model?: string }>;
   allowed: string[];          // rules approved without asking (project + settings + task)
@@ -122,7 +124,7 @@ export class Session {
     const options: Sdk.Options = {
       cwd: o.cwd,
       pathToClaudeCodeExecutable: o.bin,
-      env: { ...o.env, ...OUTPUT_CAPS },
+      env: { ...o.env, ...OUTPUT_CAPS, ...(o.subagents ? { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' } : {}) },
       systemPrompt: systemPrompt(TASK_APPEND),
       permissionMode: o.mode as Sdk.PermissionMode,
       // Lets the user switch a running task to Allow everything; it does not turn that mode on by itself.
@@ -130,6 +132,8 @@ export class Session {
       settingSources: settingSources(!!o.personal),
       ...(o.settingsFile ? { settings: o.settingsFile } : {}),
       ...(o.model ? { model: o.model } : {}),
+      ...(o.effort ? { effort: o.effort as Sdk.Options['effort'] } : {}),
+      ...(o.subagents ? {} : { disallowedTools: ['Agent', 'Task'] }),
       ...(o.agent ? { agent: o.agent } : {}),
       ...(o.agents && Object.keys(o.agents).length ? { agents: o.agents as any } : {}),
       ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
