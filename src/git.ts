@@ -32,7 +32,7 @@ export const currentBranch = (dir: string) => git(dir, ['rev-parse', '--abbrev-r
 // Keeps .justcode/ (board, worktrees) out of git without touching the tracked .gitignore.
 // fresh: a repo JustCode just created, which also gets the usual secrets/deps excluded before its first commit.
 // Never committed by JustCode, unless the project's .gitignore already decides about them.
-const PROTECT = ['node_modules/', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json',
+const PROTECT = ['node_modules/', 'node_modules', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json',
   '*.pem', '*.key', '*.p12', '*.pfx', '*.keystore', '*.jks', 'id_rsa*', 'id_ed25519*', '.npmrc', '.pypirc', '.netrc',
   'credentials*.json', 'service-account*.json', '*.tfstate', '*.tfstate.*', '.venv/', 'venv/', '__pycache__/', '.terraform/'];
 

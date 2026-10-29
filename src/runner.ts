@@ -8,12 +8,16 @@ import * as g from './git';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage } from './claude';
 import * as A from './artifacts';
+import * as C from './checks';
 import { Limits, isLimitError } from './limits';
 
 // One Runner per project: starts each task's Claude session in the task's own copy of the project (a git worktree on
 // its own branch), moves cards as the work progresses (To do → Doing → Review → Done), runs the AI reviewer, merges,
 // and keeps Run all's queue. Everything it starts it also stops: sessions close when idle, reviews time out, and every
 // task copy is removed when its task is merged, discarded or deleted (orphans are pruned at startup).
+
+// The folder where checks run on the base branch, to tell failures a task caused from ones it found.
+const BASELINE = '_base';
 
 const TEST_CMD = /\b(test|pytest|jest|vitest|spec|build|tsc|check|gradlew|playwright|screenshot|lint)\b/i;
 const UI_FILE = /^\+\+\+ b\/.*\.(html?|css|scss|tsx|jsx|vue|svelte|xml|kt|java|swift|dart|component\.ts)$/m;
@@ -25,7 +29,11 @@ export interface RunnerSettings {
   worktreeCopy: string[];
   idleMinutes: number;
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
-  freshAfterTokens: number; // a review-fix round starts a fresh session from the task's artifacts once the old one holds this much context
+  freshAfterTokens: number;
+  checks: string;           // 'auto', '' (off) or commands, one per line
+  setup: string;            // task folder setup: 'auto', '' (off) or a command
+  maxCheckRounds: number;   // failing-check rounds sent back to Claude before it waits for you
+  checkTimeoutMinutes: number; // a review-fix round starts a fresh session from the task's artifacts once the old one holds this much context
   review: { auto: boolean; model: string; lightModel: string; triage: boolean; maxAttempts: number; autoMerge: boolean; mergeIfCannotRun: boolean; commands: string[]; timeoutMinutes: number };
 }
 
@@ -41,7 +49,7 @@ export interface RunnerDeps {
 }
 
 // What a card shows about its live work, beyond what board.json keeps.
-export interface Live { run?: RunState; asks: Ask[]; agents: AgentNode[]; context: number; output: number; modeNote?: string; mode?: string; reviewing?: number; busy: boolean; queued: boolean }
+export interface Live { phase?: string; run?: RunState; asks: Ask[]; agents: AgentNode[]; context: number; output: number; modeNote?: string; mode?: string; reviewing?: number; busy: boolean; queued: boolean }
 
 export class Runner {
   private sessions = new Map<string, Session>();
@@ -49,7 +57,9 @@ export class Runner {
   private reviews = new Map<string, { ac: AbortController; started: number }>();
   private busy = new Set<string>();
   private errorSwept = new Set<string>(); // errored reviews the sweep already retried this window
-  private emptyAt = new Set<string>(); // tasks whose branch had nothing to review at their last turn end
+  private emptyAt = new Set<string>();
+  private phase = new Map<string, string>(); // what JustCode itself is doing for a task: setting up, running checks
+  private setPhase(id: string, text?: string) { if (text) this.phase.set(id, text); else this.phase.delete(id); this.changed(); } // tasks whose branch had nothing to review at their last turn end
   private ev = new EventEmitter();
   private lock: Promise<unknown> = Promise.resolve();
   private sweepTimer?: NodeJS.Timeout;
@@ -85,6 +95,7 @@ export class Runner {
   live(id: string): Live {
     const s = this.sessions.get(id), r = this.reviews.get(id);
     return {
+      phase: this.phase.get(id),
       run: this.starting.has(id) ? 'starting' : s?.open ? s.state : undefined,
       asks: s ? [...s.asks.values()] : [], agents: s ? [...s.agents.values()] : [],
       context: s?.context ?? 0, output: s?.output ?? 0, modeNote: s?.modeNote, mode: s?.mode,
@@ -103,7 +114,7 @@ export class Runner {
 
   private async startup() {
     // Task copies whose task no longer exists.
-    const keep = new Set(this.store.data.tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)));
+    const keep = new Set([...this.store.data.tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)), BASELINE]);
     if (await g.isRepo(this.root)) {
       const { removed, kept } = await this.serial(() => g.pruneOrphans(this.root, keep)).catch(() => ({ removed: [], kept: [] as string[] }));
       if (removed.length) this.d.notify('info', `Cleaned up ${removed.length} leftover task folder(s) in .justcode/worktrees.`);
@@ -133,6 +144,7 @@ export class Runner {
       if (t.where === 'root') return await this.start(t, bin, this.root, {}, prompt);
       const prep = await this.prepare(t);
       if (!prep) return; // the user cancelled
+      if (prep.fresh) await this.setupFolder(id, prep.worktree);
       const note = prep.refreshed && t.sessionId && !prompt
         ? `JustCode brought the latest ${prep.base} into this task's folder. Re-check the files you rely on and continue the task.` : prompt;
       await this.start(t, bin, prep.worktree, { base: prep.base, branch: prep.branch, worktree: prep.worktree }, note);
@@ -172,10 +184,11 @@ export class Runner {
       const worktree = t.worktree ?? g.worktreeDir(this.root, t.id);
       const copy = this.d.settings().worktreeCopy;
       await g.exclude(this.root, false, copy);
+      const fresh = !fs.existsSync(path.join(worktree, '.git'));
       await g.addWorktree(this.root, worktree, branch, base);
       g.copyEnvFiles(this.root, worktree, copy);
       const refreshed = await g.catchUp(worktree, base).catch(() => false);
-      return { base, branch, worktree, refreshed };
+      return { base, branch, worktree, refreshed, fresh };
     });
   }
 
@@ -187,7 +200,7 @@ export class Runner {
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
     const sources = A.loadSources(this.root);
     const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), prompt].filter(Boolean).join('\n\n');
-    const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true })!;
+    const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
@@ -198,7 +211,7 @@ export class Runner {
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
       allowed: [...new Set([...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
-      env: this.d.env(), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
+      env: this.folderEnv(id, cwd), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
     });
     this.sessions.set(id, s);
     s.on('change', () => this.changed());
@@ -310,7 +323,105 @@ export class Runner {
     this.changed();
     this.pump();
     const cur = this.store.task(id);
-    if (cur?.status === 'review' && cur.branch && this.d.settings().review.auto && !this.emptyAt.has(id)) await this.review(id);
+    if (cur?.status !== 'review' || !cur.branch || this.emptyAt.has(id)) return;
+    if (await this.check(id) === 'fail') return;
+    if (this.d.settings().review.auto) await this.review(id);
+  }
+
+  /* ---------- task folder setup and checks (no tokens) ---------- */
+
+  // The task folder's environment: the project's virtualenv and the task's own ports.
+  private folderEnv(id: string, cwd: string) { return cwd === this.root ? this.d.env() : C.folderEnv(this.root, id, this.d.env()); }
+
+  private async setupFolder(id: string, wt: string, quiet = false) {
+    const set = this.d.settings();
+    if (!set.setup.trim()) return;
+    if (!quiet) this.setPhase(id, 'Setting up the task folder (dependencies)…');
+    const log: string[] = [];
+    try {
+      const ok = await C.setupFolder(this.root, wt, set.setup, this.folderEnv(id, wt), s => log.push(s));
+      if (!quiet) fs.mkdirSync(A.taskDir(this.root, id), { recursive: true });
+      if (!quiet) fs.writeFileSync(path.join(A.taskDir(this.root, id), 'setup.log'), log.join('\n\n'));
+      if (!ok && !quiet) this.d.notify('warn', `Setting up "${this.store.task(id)?.title}" failed; Claude starts anyway. See its setup.log under Details.`, id);
+    } finally { if (!quiet) this.setPhase(id); }
+  }
+
+  // Runs the project's checks in the task's folder. Failures that the base branch has too are not the task's: they
+  // are noted and ignored. A real failure goes back to Claude (up to maxCheckRounds), so the reviewer only sees
+  // work that passes.
+  private async check(id: string): Promise<'pass' | 'fail' | 'none'> {
+    const t = this.store.task(id), set = this.d.settings();
+    if (!t?.worktree || !t.base) return 'none';
+    const checks = C.checksFor(t.worktree, set.checks);
+    if (!checks.length) return 'none';
+    const head = await g.git(t.worktree, ['rev-parse', 'HEAD']).catch(() => '');
+    if (t.checks?.head === head && t.checks.state === 'pass') return 'pass';
+    this.setPhase(id, `Running checks: ${checks.map(c => c.name).join(', ')}…`);
+    let results: C.CheckResult[], log: string;
+    try {
+      ({ results, log } = await C.runChecks(checks, t.worktree, this.folderEnv(id, t.worktree), set.checkTimeoutMinutes * 60_000));
+      const failing = results.filter(r => !r.ok);
+      if (failing.length) {
+        const base = await this.baseline(t.base, failing.map(f => f.cmd));
+        for (const r of failing) if (base.get(r.cmd) === false) r.preexisting = true;
+      }
+    } finally { this.setPhase(id); }
+    try { fs.mkdirSync(A.taskDir(this.root, id), { recursive: true }); fs.writeFileSync(A.checksLog(this.root, id), log); } catch { /* the card still shows it */ }
+    const real = results.filter(r => !r.ok && !r.preexisting);
+    const now = this.store.task(id);
+    if (!now) return 'none';
+    const rounds = real.length ? (now.checks?.state === 'fail' ? now.checks.rounds : 0) + 1 : 0;
+    this.store.updateTask(id, { checks: { state: real.length ? 'fail' : 'pass', rounds, head,
+      results: results.map(r => ({ name: r.name, cmd: r.cmd, ok: r.ok, ms: r.ms, tail: r.tail || undefined, preexisting: r.preexisting, timedOut: r.timedOut })) } });
+    if (!real.length) return 'pass';
+    if (rounds > set.maxCheckRounds) {
+      this.d.notify('warn', `"${t.title}": checks still fail after ${rounds - 1} fix rounds. Details are on the card.`, id);
+      return 'fail';
+    }
+    await this.sendChecks(id);
+    return 'fail';
+  }
+
+  async sendChecks(id: string) {
+    const t = this.store.task(id);
+    const failing = t?.checks?.results?.filter(r => !r.ok && !r.preexisting) ?? [];
+    if (!t || !failing.length) return;
+    this.store.updateTask(id, { status: 'doing' });
+    await this.say(id, `JustCode ran the project's checks after your turn. These fail:\n\n` +
+      failing.map(r => `$ ${r.cmd}  (${r.timedOut ? 'timed out' : 'failed'})\n\`\`\`\n${r.tail ?? ''}\n\`\`\``).join('\n\n') +
+      `\n\nFull log: ${A.checksLog(this.root, id)}. Fix the cause (change a test only if the test itself is wrong), re-run the failing check, update your handoff, then finish your turn.`);
+  }
+
+  // Which of `cmds` pass on the base branch, cached per base commit. Runs in .justcode/worktrees/_base.
+  private baselineRuns = new Map<string, Promise<Map<string, boolean>>>();
+  private async baseline(base: string, cmds: string[]): Promise<Map<string, boolean>> {
+    const sha = await g.git(this.root, ['rev-parse', base]).catch(() => '');
+    if (!sha) return new Map();
+    const file = path.join(this.root, '.justcode', 'checks-baseline.json');
+    let cache: Record<string, Record<string, boolean>> = {};
+    try { cache = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* none yet */ }
+    const known = cache[sha] ?? {};
+    const todo = cmds.filter(c => !(c in known));
+    if (todo.length) {
+      const key = `${sha}:${todo.join('|')}`;
+      if (!this.baselineRuns.has(key)) this.baselineRuns.set(key, (async () => {
+        const dir = g.worktreeDir(this.root, BASELINE);
+        await this.serial(async () => {
+          if (!fs.existsSync(path.join(dir, '.git'))) await g.git(this.root, ['worktree', 'add', '--detach', dir, sha]);
+          else await g.git(dir, ['checkout', '-q', '--detach', '-f', sha]);
+        });
+        g.copyEnvFiles(this.root, dir, this.d.settings().worktreeCopy);
+        await this.setupFolder(BASELINE, dir, true);
+        const out = new Map<string, boolean>();
+        for (const cmd of todo) out.set(cmd, (await C.runCommand(cmd, dir, { ...this.folderEnv(BASELINE, dir), CI: 'true' }, this.d.settings().checkTimeoutMinutes * 60_000)).code === 0);
+        return out;
+      })().finally(() => this.baselineRuns.delete(key)));
+      const res = await this.baselineRuns.get(key)!.catch(() => new Map<string, boolean>());
+      for (const [c, ok] of res) known[c] = ok;
+      cache = { [sha]: known }; // only the latest base commit is worth keeping
+      try { fs.writeFileSync(file, JSON.stringify(cache)); } catch { /* recomputed next time */ }
+    }
+    return new Map(Object.entries(known));
   }
 
   private async hasWork(id: string) {
@@ -483,7 +594,8 @@ export class Runner {
       const screenshots = () => { try { return fs.readdirSync(shots).filter(f => /\.(png|jpe?g)$/i.test(f)).map(f => path.join(shots, f)); } catch { return []; } };
       let brief = ''; try { brief = fs.readFileSync(A.briefFile(this.root, id), 'utf8').replace(/\n## When you finish[\s\S]*$/, '').trim(); } catch { /* none yet */ }
       try { brief += `\n\n## Approved plan\n${fs.readFileSync(A.planFile(this.root, id), 'utf8').slice(0, 6000)}`; } catch { /* no plan */ }
-      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli, handoff: A.readHandoff(this.root, id), brief }) + (retry
+      const passed = this.store.task(id)?.checks?.state === 'pass' ? this.store.task(id)!.checks!.results!.filter(r => r.ok).map(r => r.cmd) : [];
+      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli, handoff: A.readHandoff(this.root, id), brief, checks: passed }) + (retry
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
@@ -502,7 +614,7 @@ export class Runner {
         v = first.verdict;
         // A review that only read the code (or skipped a screenshot it could take) is sent back once to actually test.
         const missing = [
-          !v.tested.some(c => TEST_CMD.test(c)) && 'you did not run any tests, type check or build',
+          !passed.length && !v.tested.some(c => TEST_CMD.test(c)) && 'you did not run any tests, type check or build',
           device?.devices.length && UI_FILE.test(diff) && !screenshots().length && 'an Android device is connected and the diff changes UI files, but you took no screenshot',
         ].filter(Boolean);
         // The follow-up continues the reviewer's own session (its context is cached) instead of reviewing from scratch.
@@ -587,7 +699,7 @@ export class Runner {
       await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
       try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
       await this.cleanup(t);
-      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined });
+      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`);
     });
   }
@@ -615,7 +727,7 @@ export class Runner {
     return this.guarded(id, async t => {
       await this.cleanup(t);
       A.removeTaskDir(this.root, id);
-      this.store.updateTask(id, { status: 'todo', usage: undefined, branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined,
+      this.store.updateTask(id, { status: 'todo', usage: undefined, checks: undefined, startedAt: undefined, branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined,
         review: undefined, error: undefined, live: undefined, reply: undefined, remote: undefined, limited: undefined });
     });
   }

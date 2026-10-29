@@ -12,6 +12,7 @@ import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { syncSkill } from './skill';
 import * as A from './artifacts';
+import * as C from './checks';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 
@@ -40,6 +41,7 @@ export function activate(context: vscode.ExtensionContext) {
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
     personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
+    checks: setting('checks', 'auto'), setup: setting('folderSetup', 'auto'), maxCheckRounds: setting('maxCheckRounds', 3), checkTimeoutMinutes: setting('checkTimeoutMinutes', 10),
     review: { auto: setting('autoReview', true), model: setting('reviewModel', 'opus'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
   });
@@ -159,6 +161,7 @@ export function activate(context: vscode.ExtensionContext) {
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root),
       sources: A.loadSources(r.root),
+      detectedChecks: C.detectChecks(r.root),
       settings: { ...s, defaultMode: setting('defaultMode', 'auto'), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       guideSeen: context.globalState.get('guideSeen', false),
       all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({
@@ -317,6 +320,8 @@ export function activate(context: vscode.ExtensionContext) {
       case 'review': await r.review(m.id, true); return;
       case 'cancelReview': r.cancelReview(m.id); return;
       case 'sendIssues': await r.sendIssues(m.id); return;
+      case 'sendChecks': await r.sendChecks(m.id); return;
+      case 'copy': await vscode.env.clipboard.writeText(String(m.text ?? '')); vscode.window.showInformationMessage('Copied.'); return;
       case 'discard':
         if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);
         return;
@@ -356,7 +361,8 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       case 'openArtifact': {
-        const f = { brief: A.briefFile, handoff: A.handoffFile, review: A.reviewFile, plan: A.planFile }[m.which as 'brief' | 'handoff' | 'review' | 'plan']?.(r.root, m.id) ?? (m.which === 'progress' ? A.progressFile(r.root) : undefined);
+        const f = { brief: A.briefFile, handoff: A.handoffFile, review: A.reviewFile, plan: A.planFile, checks: A.checksLog,
+          setup: (root: string, id: string) => path.join(A.taskDir(root, id), 'setup.log') }[m.which as 'brief' | 'handoff' | 'review' | 'plan' | 'checks' | 'setup']?.(r.root, m.id) ?? (m.which === 'progress' ? A.progressFile(r.root) : undefined);
         if (f && fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f), { preview: true });
         else vscode.window.showInformationMessage('Not written yet.');
         return;

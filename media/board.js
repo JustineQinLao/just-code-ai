@@ -57,6 +57,8 @@
     if (t.asks?.length || t.error || t.conflicts?.length) return 'needs';
     const max = S.settings.review.maxAttempts;
     if (t.status === 'review' && t.review?.state === 'fail' && t.review.attempts >= max) return 'needs';
+    if (t.status === 'review' && t.checks?.state === 'fail' && !t.phase) return 'needs';
+    if (t.phase) return 'work';
     if (t.status === 'review' && !t.review && !t.reviewing && t.reply && t.where !== 'root' && !t.run) return 'needs';
     if (t.run && t.run !== 'idle' || t.remote || t.limited || t.status === 'doing') return 'work';
     return 'review';
@@ -67,6 +69,7 @@
     const max = S.settings.review.maxAttempts, r = t.review;
     if (t.status === 'done') return t.review?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn' } : { text: t.where === 'root' ? 'Done' : 'Merged', tone: 'ok' };
     if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : t.asks[0].kind === 'plan' ? 'Plan ready for your OK' : 'Claude needs your approval', tone: 'warn' };
+    if (t.phase) return { text: t.phase, tone: 'run' };
     if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run' };
     if (t.run === 'running') return { text: `Working${lastTool(t)}`, tone: 'run', action: ['Open', () => openTask(t.id)] };
     if (t.remote) return { text: 'In Remote Control: continue in the Claude app or claude.ai/code. Close its terminal to bring it back.', tone: 'run' };
@@ -74,6 +77,7 @@
     if (t.error) return { text: `Stopped: ${t.error}`, tone: 'err', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
     if (t.status === 'todo') return t.queued ? { text: `Queued #${S.queue.queued.indexOf(t.id) + 1}`, tone: 'muted' } : { text: 'Ready', tone: 'muted', action: ['▶ Run', () => post('run', { id: t.id })] };
     if (t.conflicts?.length) return { text: `Conflicts with ${t.base} in ${t.conflicts.length} file(s)`, tone: 'err', action: ['Resolve with Claude', () => post('resolve', { id: t.id })] };
+    if (t.status === 'review' && t.checks?.state === 'fail') return { text: `Checks still fail: ${t.checks.results.filter(r => !r.ok && !r.preexisting).map(r => r.name).join(', ')}`, tone: 'err', action: ['Send to Claude', () => post('sendChecks', { id: t.id })] };
     if (t.reviewing) return { text: `AI reviewer is testing it · ${dur(t.reviewing)}`, tone: 'run' };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Fixing review issues (round ${r.attempts} of ${max})`, tone: 'run' } : { text: 'Paused', tone: 'muted', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
     if (t.where === 'root') return { text: 'Finished. Check the result, then mark it done.', tone: 'ok', action: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
@@ -230,6 +234,7 @@
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
       btn('✦ Plan with Claude', () => planDialog(), 'ghost', 'Describe a goal; Claude reads the code and proposes tasks'),
+      btn('📊 Report', () => report(), 'ghost', 'Tokens, rounds and time per task'),
       btn(`📎 Sources${S.sources?.length ? ` (${S.sources.length})` : ''}`, () => sourcesDialog(), 'ghost', 'Specs, designs, docs and links tasks are based on'),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? ` · next waits: “${q.blocker.title.slice(0, 40)}” ${q.blocker.why}` : '',
@@ -421,9 +426,13 @@
         h('label', { class: 'blk' }, 'Details', desc = h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
         editable ? btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary') : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
         t.images?.length ? h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
+        t.checks?.results?.length ? h('div', {}, h('h4', {}, `Checks · ${t.checks.state === 'pass' ? 'pass' : 'fail'}${t.checks.rounds ? ` · fix round ${t.checks.rounds}` : ''}`),
+          h('ul', { class: 'checks' }, t.checks.results.map(r => h('li', { class: r.ok ? 'ok' : r.preexisting ? 'pre' : 'bad' },
+            h('span', { class: 'dot' }, r.ok ? '✓' : r.preexisting ? '○' : '✗'), h('code', {}, r.cmd), h('span', { class: 'muted small' }, ` ${Math.round(r.ms / 1000)}s${r.preexisting ? ' · fails on the base branch too: ignored' : ''}${r.timedOut ? ' · timed out' : ''}`)))),
+          btn('Open log', () => post('openArtifact', { id: t.id, which: 'checks' }), 'ghost')) : '',
         h('h4', {}, 'Artifacts'),
         h('div', { class: 'row' }, [['plan', 'Plan'], ['brief', 'Brief'], ['handoff', 'Handoff'], ['review', 'Review notes']].map(([k, l]) => btn(`${t.artifacts?.[k] ? '' : '○ '}${l}`, () => post('openArtifact', { id: t.id, which: k }), 'ghost', t.artifacts?.[k] ? 'Open' : 'Not written yet')),
-          btn('Project history', () => post('openArtifact', { id: t.id, which: 'progress' }), 'ghost')),
+          btn('Project history', () => post('openArtifact', { id: t.id, which: 'progress' }), 'ghost'), btn('Setup log', () => post('openArtifact', { id: t.id, which: 'setup' }), 'ghost')),
         t.files?.length ? h('p', { class: 'small' }, 'Attached: ', t.files.map(base).join(', ')) : '',
         t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
         usageTotal(t) ? h('div', {}, h('h4', {}, 'Tokens'), h('pre', { class: 'small' }, usageTitle(t))) : '',
@@ -522,6 +531,11 @@
         field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
         field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
         field('idleMinutes', 'Close idle Claude processes after (minutes)', h('input', { type: 'number', min: 1, value: s.idleMinutes })),
+        field('checks', 'Checks after each turn (no tokens)', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${S.detectedChecks?.length ? `: ${S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
+          'Failures go back to Claude before the AI review.'),
+        field('checksCustom', 'My check commands (one per line)', h('textarea', { rows: 2, placeholder: 'npm test\nnpx tsc --noEmit' }, s.checks !== 'auto' ? s.checks : '')),
+        field('folderSetup', 'Task folder setup', sel(s.setup === '' ? 'off' : s.setup === 'auto' ? 'auto' : 'custom', [['auto', 'Auto: link node_modules, use .venv'], ['off', 'Off'], ['custom', 'My command (below)']])),
+        field('setupCustom', 'My setup command', h('input', { value: s.setup !== 'auto' ? s.setup : '', placeholder: 'pnpm install' })),
         field('reviewTriage', 'Review size', sel(s.review.triage, [[true, 'Fit to the change (saves tokens)'], [false, 'Always the full reviewer']]), 'Docs-only: no review. Small, non-sensitive: lighter model.'),
         field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
         field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
@@ -538,6 +552,8 @@
           defaultMode: f.defaultMode.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
           plannerModel: f.plannerModel.value.trim(), maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
           idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
+          checks: f.checks.value === 'auto' ? 'auto' : f.checks.value === 'off' ? '' : f.checksCustom.value.trim(),
+          folderSetup: f.folderSetup.value === 'auto' ? 'auto' : f.folderSetup.value === 'off' ? '' : f.setupCustom.value.trim(),
           reviewTriage: f.reviewTriage.value === 'true', reviewLightModel: f.reviewLightModel.value.trim(), personalSetup: f.personalSetup.value === 'true',
           freshSessionTokens: Math.max(0, +f.freshSessionTokens.value || 0),
         } });
@@ -545,6 +561,30 @@
         $('#mode').dataset.set = '';
         $('#dlg').close();
       }, 'primary')));
+  }
+
+  // Per task: tokens (build/review), check and review rounds, first-try pass, time. Totals for the current view.
+  function report() {
+    const tasks = visible().filter(t => t.startedAt || usageTotal(t));
+    const mins = t => t.startedAt ? Math.round(((t.doneAt || Date.now()) - t.startedAt) / 60000) : 0;
+    const rows = tasks.map(t => ({ t, build: sum(t.usage?.build), review: sum(t.usage?.review), checks: t.checks?.rounds || 0,
+      reviews: t.review ? (t.review.state === 'pass' ? t.review.attempts + 1 : t.review.attempts) : 0, first: t.review?.state === 'pass' && !t.review.attempts && !(t.checks?.rounds), mins: mins(t) }));
+    const tot = k => rows.reduce((a, r) => a + r[k], 0);
+    const reviewed = rows.filter(r => r.t.review?.state === 'pass');
+    const viewName = view === 'all' ? 'All tasks' : view === 'backlog' ? 'Backlog' : S.board.sprints.find(s => s.id === view)?.name;
+    const md = [`# JustCode report · ${viewName}`, '', `Tasks: ${rows.length} · tokens: ${tokShort(tot('build') + tot('review'))} (build ${tokShort(tot('build'))}, review ${tokShort(tot('review'))}) · ` +
+      `first-try passes: ${reviewed.filter(r => r.first).length}/${reviewed.length} · time: ${tot('mins')} min`, '',
+      '| Task | Status | Build | Review | Check rounds | Review rounds | Minutes |', '|---|---|---|---|---|---|---|',
+      ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${tokShort(r.build)} | ${tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
+    dialog('Report',
+      h('div', { class: 'kpis' }, [['Tasks', rows.length], ['Tokens', tokShort(tot('build') + tot('review'))], ['Build / review', `${tokShort(tot('build'))} / ${tokShort(tot('review'))}`],
+        ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')]]
+        .map(([k, v]) => h('div', { class: 'kpi' }, h('b', {}, v), h('span', { class: 'muted small' }, k)))),
+      rows.length ? h('table', { class: 'rep' }, h('tr', {}, ['Task', 'Status', 'Build', 'Review', 'Checks', 'Reviews', 'Min'].map(x => h('th', {}, x))),
+        rows.sort((a, b) => (b.build + b.review) - (a.build + a.review)).map(r => h('tr', { onclick: () => { $('#dlg').close(); openTask(r.t.id, 'details'); } },
+          h('td', {}, r.t.title), h('td', {}, r.t.status), h('td', {}, tokShort(r.build)), h('td', {}, tokShort(r.review)), h('td', {}, r.checks), h('td', {}, r.reviews), h('td', {}, r.mins)))) : h('p', { class: 'muted' }, 'No task has run in this view yet.'),
+      h('p', { class: 'muted small' }, 'Tokens include cached context re-sent at each step. First-try pass: passed checks and review without a fix round.'),
+      h('div', { class: 'acts' }, btn('Copy as Markdown', () => post('copy', { text: md }))));
   }
 
   function sourcesDialog() {

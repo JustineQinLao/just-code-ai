@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Task board that runs Claude Code on each task in its own branch: approvals on the card, AI review, one-click merge, agent map, continue on your phone",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "publisher": "justine",
   "license": "UNLICENSED",
   "repository": {
@@ -112,6 +112,28 @@
           "type": "boolean",
           "default": true,
           "description": "An AI reviewer checks each finished task, and its issues go back to Claude to fix."
+        },
+        "justCode.checks": {
+          "type": "string",
+          "default": "auto",
+          "description": "Checks JustCode runs itself after each turn (no tokens): \"auto\" detects the project's tests and type check (npm/pnpm/yarn/bun, pytest, Django, go, cargo, make); empty turns them off; or list commands, one per line. Failures go back to Claude before the AI review; failures the base branch has too are ignored."
+        },
+        "justCode.maxCheckRounds": {
+          "type": "integer",
+          "default": 3,
+          "minimum": 1,
+          "description": "Failing-check rounds sent back to Claude before the task waits for you."
+        },
+        "justCode.checkTimeoutMinutes": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 1,
+          "description": "A check running longer than this is stopped and counts as failed."
+        },
+        "justCode.folderSetup": {
+          "type": "string",
+          "default": "auto",
+          "description": "Gets each task's folder ready before Claude starts: \"auto\" links node_modules from the project folder when the lockfile matches (installs otherwise) and uses the project's .venv; empty turns it off; or a command to run (e.g. \"pnpm install\")."
         },
         "justCode.autoMerge": {
           "type": "boolean",
