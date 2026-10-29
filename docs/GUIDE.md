@@ -181,8 +181,13 @@ Every task keeps short notes. Open them under **Details → Artifacts**:
 
 ## 11. Tokens
 
-Every card shows the tokens it used. **Details** splits them into build and review, and into tokens written, new
-input and cached. Cached tokens are context re-sent at each step: they are cheap, but they add up.
+Every card shows **new** tokens (what Claude wrote plus input not already cached) and **cached** tokens separately.
+Cached tokens are the conversation re-sent at every step; they cost about a tenth of new ones, which is why a card can
+show millions of them. **Details** splits build and review.
+
+- **Thinking:** tasks use *low*, the reviewer *medium*, the planner *low* (⚙ Settings). Raise it for a hard task.
+- **Subagents:** off inside tasks. Each one re-sends its own large prompt at every step, the biggest avoidable cost.
+  Turn them on in ⚙ if you want them; they then run on Haiku.
 
 - **Your personal setup:** off by default. Tasks load only the project's Claude setup, which saves about 7k tokens per
   step. Turn it on in ⚙ if tasks need your plugins or MCP servers.

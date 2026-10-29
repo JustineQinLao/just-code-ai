@@ -29,12 +29,13 @@ export interface RunnerSettings {
   worktreeCopy: string[];
   idleMinutes: number;
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
+  taskEffort: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
   checks: string;           // 'auto', '' (off) or commands, one per line
   setup: string;            // task folder setup: 'auto', '' (off) or a command
   maxCheckRounds: number;   // failing-check rounds sent back to Claude before it waits for you
   checkTimeoutMinutes: number; // a review-fix round starts a fresh session from the task's artifacts once the old one holds this much context
-  review: { auto: boolean; model: string; lightModel: string; triage: boolean; maxAttempts: number; autoMerge: boolean; mergeIfCannotRun: boolean; commands: string[]; timeoutMinutes: number };
+  review: { auto: boolean; model: string; effort: string; lightModel: string; triage: boolean; maxAttempts: number; autoMerge: boolean; mergeIfCannotRun: boolean; commands: string[]; timeoutMinutes: number };
 }
 
 export interface RunnerDeps {
@@ -205,7 +206,7 @@ export class Runner {
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
     const s = new Session({
-      bin, cwd, sessionId, resume, mode: task.mode, model: set.taskModel || undefined, agent: task.agent,
+      bin, cwd, sessionId, resume, mode: task.mode, model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
@@ -586,6 +587,7 @@ export class Runner {
         return;
       }
       const model = tri.level === 'light' && o.lightModel ? o.lightModel : o.model;
+      const effort = tri.level === 'light' ? 'low' : o.effort;
       this.store.updateTask(id, { review: { state: 'running', attempts, head, level: tri.level === 'none' ? 'full' : tri.level, why: tri.why } });
       const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
       fs.rmSync(shots, { recursive: true, force: true });
@@ -599,7 +601,7 @@ export class Runner {
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
-        const r = await runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: model || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup,
+        const r = await runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup,
           timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli, resume });
         if (r.usage) {
           usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });

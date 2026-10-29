@@ -264,7 +264,7 @@ export const addUsage = (a: Usage | undefined, u: any): Usage => ({
   cacheRead: (a?.cacheRead ?? 0) + (u?.cache_read_input_tokens ?? 0), cacheWrite: (a?.cacheWrite ?? 0) + (u?.cache_creation_input_tokens ?? 0),
 });
 
-export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; onRate?: (info: any) => void }
+export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; onRate?: (info: any) => void }
 interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage }
 
 // One unattended turn through the SDK: never asks (dontAsk denies anything not allowed), stops at the timeout or
@@ -279,7 +279,7 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   try {
     for await (const m of query({ prompt, options: {
       cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal),
-      ...(o.model ? { model: o.model } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
+      ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
       if (m.type === 'rate_limit_event') o.onRate?.((m as any).rate_limit_info);
       if (m.type === 'result') result = m;
@@ -304,7 +304,7 @@ export async function runReview(prompt: string, o: HeadlessOpts & { shots: strin
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
   const r = await headless(prompt, o, {
-    permissionMode: 'dontAsk', allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'], additionalDirectories: [o.shots],
+    permissionMode: 'dontAsk', allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
     systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
     ...(o.resume ? { resume: o.resume } : {}),
   });
@@ -319,7 +319,7 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
   const prompt = `Plan the work for this goal in the current codebase:\n\n${goal}\n\n` +
     'Read the code you need first. Split the work into small tasks that can each be built, reviewed and merged on their own, in build order, at most 12. ' +
     'Reply with ONLY a JSON array, no prose: [{"title": "...", "description": "what to change, where, and how to verify"}]';
-  const { text } = await headless(prompt, o, { permissionMode: 'dontAsk', allowedTools: ['Read', 'Grep', 'Glob', 'Bash(ls:*)', 'Bash(git log:*)'], disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'],
+  const { text } = await headless(prompt, o, { permissionMode: 'dontAsk', allowedTools: ['Read', 'Grep', 'Glob', 'Bash(ls:*)', 'Bash(git log:*)'], disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'],
     systemPrompt: systemPrompt(), persistSession: false });
   try {
     const arr = JSON.parse(/\[[\s\S]*\]/.exec(text)?.[0] ?? '[]');
