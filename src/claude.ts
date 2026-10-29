@@ -303,13 +303,25 @@ export async function runReview(prompt: string, o: HeadlessOpts & { shots: strin
   const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
-  const r = await headless(prompt, o, {
-    permissionMode: 'dontAsk', allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
+  const base = {
+    permissionMode: 'dontAsk' as const, allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
     systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
-    ...(o.resume ? { resume: o.resume } : {}),
-  });
-  const verdict = r.structured !== undefined ? toVerdict(r.structured) : parseVerdict(r.text);
-  return { verdict, sessionId: r.sessionId, usage: r.usage };
+  };
+  let r = await headless(prompt, o, { ...base, ...(o.resume ? { resume: o.resume } : {}) });
+  let usage = r.usage, sessionId = r.sessionId;
+  const read = (x: typeof r) => x.structured !== undefined ? toVerdict(x.structured) : parseVerdict(x.text);
+  // The reviewer sometimes ends without a clean verdict (it wrote prose, or the JSON was malformed). Rather than fail
+  // the whole review, ask the same session (its context is cached, so this is cheap) for just the verdict, twice.
+  for (let i = 0; ; i++) {
+    try { return { verdict: read(r), sessionId, usage }; }
+    catch (e) {
+      if (i >= 2 || !sessionId) throw e;
+      r = await headless('Reply with ONLY the JSON verdict, nothing else: {"pass": <true|false>, "issues": [<strings>], "risk": "minor"|"critical", "tested": [<commands you ran>]}. A failing verdict must list at least one issue.',
+        o, { ...base, resume: sessionId });
+      usage = addUsage(usage, { input_tokens: r.usage?.input, output_tokens: r.usage?.output, cache_read_input_tokens: r.usage?.cacheRead, cache_creation_input_tokens: r.usage?.cacheWrite });
+      sessionId = r.sessionId ?? sessionId;
+    }
+  }
 }
 
 export interface PlannedTask { title: string; description?: string }

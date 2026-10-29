@@ -86,7 +86,7 @@
     if (t.where === 'root') return { text: 'Finished. Check the result, then mark it done.', tone: 'ok', action: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
     if (r?.state === 'pass') return { text: r.risk === 'critical' ? 'Review passed, flagged critical: look before merging' : 'Review passed. Ready to merge.', tone: r.risk === 'critical' ? 'warn' : 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
     if (r?.state === 'fail' && r.attempts >= max) return { text: `Review still finds ${r.issues?.length ?? 0} issue(s) after ${r.attempts} rounds`, tone: 'err', action: ['Send to Claude', () => post('sendIssues', { id: t.id })] };
-    if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}`, tone: 'err', action: ['↻ Retry review', () => post('review', { id: t.id })] };
+    if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}`, tone: 'err', action: ['↻ Retry review', () => post('review', { id: t.id })], extra: t.worktree ? ['✓ Merge anyway', () => post('merge', { id: t.id })] : undefined };
     if (!r && t.reply && !t.run) return { text: `Claude replied without changing files: "${t.reply.slice(0, 140)}"`, tone: 'warn', action: ['Reply', () => openTask(t.id, 'activity')] };
     if (!S.settings.review.auto) return { text: 'Finished. Look at the changes, then merge.', tone: 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
     return { text: 'Waiting for the AI reviewer', tone: 'muted' };
@@ -279,7 +279,7 @@
         usageTotal(t) ? h('span', { class: 'tag', title: usageTitle(t) + '\n(cached context is re-sent at every step and costs about a tenth)' }, `${tokShort(usageTotal(t))} new · ${tokShort(cachedTotal(t))} cached`) : ''),
       h('div', { class: `next ${nx.tone}` }, nx.text),
       ...(t.asks || []).map(a => askBox(t, a)),
-      nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary')) : '');
+      nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary'), nx.extra ? btn(nx.extra[0], nx.extra[1], 'ghost') : '') : '');
     return el;
   }
 
