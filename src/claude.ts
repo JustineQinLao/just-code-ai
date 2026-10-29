@@ -363,6 +363,36 @@ export async function refine(tasks: { id: string; title: string; description?: s
   } catch { throw new Error('Claude did not return a task list. Try a clearer instruction.'); }
 }
 
+// The planner/editor is a chat: you talk with Claude, it reads the code read-only, and it keeps a proposed To do
+// list that you apply when ready. This append (identical every turn, so it stays cached) tells it to end each turn
+// with that list as a JSON block, which parseProposals reads.
+export const PLANNER_APPEND = `You are helping plan and refine the tasks on a kanban board. You never change code: this is a read-only planning chat.
+Read the code you need to make tasks accurate. Keep each task small enough to build, review and merge on its own.
+After every turn, end your message with the FULL proposed To do list as one JSON block, in build order:
+\`\`\`tasks
+[{"ref": "<existing task id, or omit for a new task>", "title": "...", "description": "what to change, where, and how to verify"}]
+\`\`\`
+Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep replies short.`;
+
+// The first message: a goal to plan from, or the current tasks to edit, plus the user's instruction.
+export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string) {
+  const list = tasks.length ? `## Current To do tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
+  return `${list}## What I want\n${instruction}\n\nRead what you need, then reply with your thoughts and the proposed task list.`;
+}
+
+export function parseProposals(text: string, taskIds: Set<string>): RefineResult[] | undefined {
+  const block = [...text.matchAll(/```tasks\s*([\s\S]*?)```/g)].pop()?.[1] ?? [...text.matchAll(/```json\s*(\[[\s\S]*?\])\s*```/g)].pop()?.[1] ?? /\[\s*\{[\s\S]*"title"[\s\S]*\}\s*\]/.exec(text)?.[0];
+  if (!block) return;
+  try {
+    const arr = JSON.parse(block);
+    if (!Array.isArray(arr)) return;
+    return arr.filter((t: any) => t && typeof t.title === 'string').map((t: any) => ({
+      ref: typeof t.ref === 'string' && taskIds.has(t.ref) ? t.ref : undefined,
+      title: t.title.trim(), description: typeof t.description === 'string' ? t.description.trim() || undefined : undefined,
+    }));
+  } catch { return; }
+}
+
 /* ---------- setup checks ---------- */
 
 const run = (bin: string, args: string[], cwd?: string, env?: Record<string, string>) => new Promise<{ ok: boolean; out: string }>(res => {

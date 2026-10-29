@@ -6,7 +6,7 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
-import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage } from './claude';
+import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult } from './claude';
 import * as A from './artifacts';
 import * as C from './checks';
 import { Limits, isLimitError } from './limits';
@@ -762,10 +762,79 @@ export class Runner {
 
   // Closing the window: every Claude process this project started ends. Tasks that were mid-turn keep `live`, so the
   // next window continues them.
+  /* ---------- planner / editor chat ---------- */
+
+  // A read-only chat that plans new tasks or edits the To do list. You see its history and keep talking to it; it
+  // maintains a proposed task list you apply when ready. One per project; lives only while open.
+  private planner?: Session;
+  private plannerTargets: string[] = [];        // the To do task ids this chat is editing (empty = planning fresh)
+  private plannerProposals?: RefineResult[];
+
+  plannerLive() {
+    const s = this.planner;
+    if (!s?.open && !this.plannerProposals) return undefined;
+    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0 };
+  }
+
+  async startPlanner(instruction: string, targetIds: string[]) {
+    const bin = this.d.bin();
+    if (!bin) throw new Error('Claude Code is not installed. Open JustCode: Check Setup.');
+    if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. Try again after the reset.');
+    this.planner?.kill();
+    this.plannerTargets = targetIds;
+    this.plannerProposals = undefined;
+    const tasks = targetIds.map(id => this.store.task(id)).filter((t): t is Task => !!t);
+    const set = this.d.settings();
+    const s = new Session({
+      bin, cwd: this.root, sessionId: randomUUID(), resume: false, mode: 'plan', model: this.d.settings().taskModel || undefined,
+      append: PLANNER_APPEND, readOnly: true, effort: set.plannerEffort || undefined,
+      allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup,
+    });
+    this.planner = s;
+    s.on('change', () => this.changed());
+    s.on('rate', info => this.d.limits.update(info));
+    s.on('turn', turn => { this.onPlannerTurn(turn); });
+    s.on('exit', () => this.changed());
+    await s.start(plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction));
+    this.changed();
+  }
+
+  private onPlannerTurn(turn: TurnEnd) {
+    if (turn.limit) { this.d.limits.setReached('usage'); return; }
+    if (!turn.ok) { this.d.notify('error', `Planner stopped: ${String(turn.error).slice(0, 200)}`); return; }
+    const ids = new Set(this.plannerTargets);
+    const p = parseProposals(turn.text, ids);
+    if (p) this.plannerProposals = p;
+    this.changed();
+  }
+
+  plannerSay(text: string) {
+    if (!this.planner?.open) throw new Error('The planning chat has ended. Start it again.');
+    this.planner.send(text);
+  }
+  stopPlanner() { this.planner?.kill(); this.planner = undefined; this.plannerProposals = undefined; this.plannerTargets = []; this.changed(); }
+
+  // Applies the proposals the user kept: edits, adds (in order), removes, reorder of the To do tasks.
+  applyProposals(changes: (RefineResult & { kind: string; apply?: boolean })[], removes: { id: string; apply?: boolean }[]) {
+    const sprintId = this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean);
+    const orderIds: string[] = [];
+    for (const c of changes) {
+      if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; }
+      if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined }); orderIds.push(c.ref); }
+      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: sprintId || undefined, mode: this.defaultMode }); orderIds.push(t.id); }
+    }
+    for (const rm of removes) if (rm.apply) void this.remove(rm.id);
+    const after = this.store.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !this.plannerTargets.includes(t.id));
+    for (const id of orderIds.reverse()) this.store.reorder(id, after?.id);
+    this.changed();
+  }
+  defaultMode: Task['mode'] = 'auto';  // set by the extension from justCode.defaultMode
+
   dispose() {
     this.disposed = true;
     this.unsub.dispose();
     clearTimeout(this.sweepTimer);
+    this.planner?.kill();
     for (const s of this.sessions.values()) s.kill();
     this.sessions.clear();
     for (const r of this.reviews.values()) r.ac.abort();

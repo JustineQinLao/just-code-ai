@@ -224,3 +224,6 @@ table.rep { width: 100%; border-collapse: collapse; font-size: 12px; }
 .rtag.add { color: var(--ok); } .rtag.edit { color: var(--warn); } .rtag.remove { color: var(--err); }
 .strike { text-decoration: line-through; }
 .opreview { margin: 4px 0 0; padding: 6px 8px; background: var(--bg); border-radius: 4px; font: 11px var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; }
+.proppanel { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.proppanel h4 { margin: 0 0 6px; }
+.refrow.same { opacity: .55; }
