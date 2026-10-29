@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Task board that runs Claude Code on each task in its own branch: approvals on the card, AI review, one-click merge, agent map, continue on your phone",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "publisher": "justine",
   "license": "UNLICENSED",
   "repository": {
