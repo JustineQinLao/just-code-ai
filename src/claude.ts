@@ -327,6 +327,30 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
   } catch { throw new Error('Claude did not return a task list. Try a more specific goal.'); }
 }
 
+// Refines existing To do tasks with an instruction: Claude reads the code read-only and returns the task list it
+// proposes. Each item keeps `ref` (an existing task's id) when it is that task reworded, or omits it for a new task.
+// An existing id in none of the items is proposed for removal. This covers edit, split, merge, reorder and add.
+export interface RefineResult { ref?: string; title: string; description?: string }
+export async function refine(tasks: { id: string; title: string; description?: string }[], instruction: string, o: HeadlessOpts): Promise<RefineResult[]> {
+  const prompt = `These are the To do tasks on a board (id, title, details). Rework them following the instruction, using the codebase to make them accurate.\n\n` +
+    `## Current tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` +
+    `## Instruction\n${instruction}\n\n` +
+    'Read the code you need first. Return the full list you propose, in build order. For a task that is an existing one reworded, keep its id in "ref"; ' +
+    'to split one task, keep its id on one item and leave "ref" off the other(s); to merge, keep one id and drop the rest; leave "ref" off a brand-new task. ' +
+    'Omit a task entirely to propose removing it. Keep each title short and each description to what to change, where, and how to verify. ' +
+    'Reply with ONLY a JSON array, no prose: [{"ref": "<id or omit>", "title": "...", "description": "..."}]';
+  const { text } = await headless(prompt, o, { permissionMode: 'dontAsk', allowedTools: ['Read', 'Grep', 'Glob', 'Bash(ls:*)', 'Bash(git log:*)'], disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'],
+    systemPrompt: systemPrompt(), persistSession: false });
+  try {
+    const ids = new Set(tasks.map(t => t.id));
+    const arr = JSON.parse(/\[[\s\S]*\]/.exec(text)?.[0] ?? '[]');
+    return arr.filter((t: any) => t && typeof t.title === 'string').map((t: any) => ({
+      ref: typeof t.ref === 'string' && ids.has(t.ref) ? t.ref : undefined,
+      title: t.title.trim(), description: typeof t.description === 'string' ? t.description.trim() || undefined : undefined,
+    }));
+  } catch { throw new Error('Claude did not return a task list. Try a clearer instruction.'); }
+}
+
 /* ---------- setup checks ---------- */
 
 const run = (bin: string, args: string[], cwd?: string, env?: Record<string, string>) => new Promise<{ ok: boolean; out: string }>(res => {

@@ -11,7 +11,7 @@ import { settingSources, systemPrompt, TASK_APPEND, OUTPUT_CAPS, addUsage, Usage
 
 export type RunState = 'starting' | 'running' | 'waiting' | 'idle';
 
-export interface Question { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string }[] }
+export interface Question { question: string; header?: string; multiSelect?: boolean; options: { label: string; description?: string; preview?: string }[] }
 
 // Something Claude waits on: a permission (Allow / Always / Deny) or a question with choices.
 export interface Ask {
@@ -388,7 +388,7 @@ function normalizeQuestions(q: unknown): Question[] {
   if (!Array.isArray(q)) return [];
   return q.filter(x => x && typeof x.question === 'string').map(x => ({
     question: x.question, header: typeof x.header === 'string' ? x.header : undefined, multiSelect: !!x.multiSelect,
-    options: Array.isArray(x.options) ? x.options.filter((o: any) => o && typeof o.label === 'string').map((o: any) => ({ label: o.label, description: typeof o.description === 'string' ? o.description : undefined })) : [],
+    options: Array.isArray(x.options) ? x.options.filter((o: any) => o && typeof o.label === 'string').map((o: any) => ({ label: o.label, description: typeof o.description === 'string' ? o.description : undefined, preview: typeof o.preview === 'string' ? o.preview.slice(0, 4000) : undefined })) : [],
   }));
 }
 

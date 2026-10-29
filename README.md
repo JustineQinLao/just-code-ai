@@ -9,6 +9,8 @@ project. Claude asks for approval right on the card, and an AI reviewer tests th
 - **Hands-off lists:** **Run all** works through a list in order. Each task is built, reviewed, fixed and (optionally)
   merged before the next one starts.
 - **Agent map:** every Claude session, subagent and reviewer at work, with elapsed time and tokens.
+- **Edit tasks with AI:** rework one task or every To do task — reword, split, merge, reorder, add acceptance
+  criteria. Claude reads the code read-only; you approve each change.
 - **Sources and artifacts:** tasks rest on your specs, designs, docs and links (**📎 Sources**). Each task keeps a
   brief, a plan, the builder's handoff and the review notes, so every step reads short notes instead of re-exploring
   the code.

@@ -237,6 +237,7 @@
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
       btn('✦ Plan with Claude', () => planDialog(), 'ghost', 'Describe a goal; Claude reads the code and proposes tasks'),
+      (() => { const ed = tasks.filter(t => t.status === 'todo' && !t.worktree); return ed.length ? btn(`✦ Edit To do${ed.length > 1 ? ` (${ed.length})` : ''}`, () => refineDialog(ed.map(t => t.id)), 'ghost', 'Reword, split, merge or reorder the To do tasks with Claude') : ''; })(),
       btn('📊 Report', () => report(), 'ghost', 'Tokens, rounds and time per task'),
       btn(`📎 Sources${S.sources?.length ? ` (${S.sources.length})` : ''}`, () => sourcesDialog(), 'ghost', 'Specs, designs, docs and links tasks are based on'),
       h('div', { class: 'spacer' }),
@@ -322,11 +323,13 @@
     const box = h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       a.questions.map((q, i) => h('div', { class: 'q' },
         h('div', {}, q.header ? h('span', { class: 'tag' }, q.header) : '', ' ', h('b', {}, q.question)),
-        h('div', { class: 'opts' }, q.options.map(o => h('label', { class: 'opt', title: o.description || '' },
+        h('div', { class: 'opts' }, q.options.map(o => h('label', { class: 'opt' },
           h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, onchange: e => {
             if (!q.multiSelect) picked[i].clear();
             e.target.checked ? picked[i].add(o.label) : picked[i].delete(o.label);
-          } }), ' ', o.label, o.description ? h('span', { class: 'muted small' }, ` — ${o.description}`) : ''))),
+          } }),
+          h('span', { class: 'otext' }, h('span', { class: 'olabel' }, o.label), o.description ? h('span', { class: 'odesc' }, o.description) : '',
+            o.preview ? h('pre', { class: 'opreview' }, o.preview) : '')))),
         h('input', { class: 'other', placeholder: 'Or type your own answer', oninput: e => { other[i] = e.target.value; } }))),
       h('div', { class: 'acts' },
         btn('Answer', () => {
@@ -427,7 +430,8 @@
       return [
         h('label', { class: 'blk' }, 'Title', title = h('input', { value: t.title, disabled: !editable })),
         h('label', { class: 'blk' }, 'Details', desc = h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
-        editable ? btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary') : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
+        editable ? h('div', { class: 'row' }, btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary'),
+          btn('✦ Edit with AI', () => refineDialog([t.id]), 'ghost', 'Claude reads the code and reworks this task (it may split it)')) : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
         t.images?.length ? h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
         t.checks?.results?.length ? h('div', {}, h('h4', {}, `Checks · ${t.checks.state === 'pass' ? 'pass' : 'fail'}${t.checks.rounds ? ` · fix round ${t.checks.rounds}` : ''}`),
           h('ul', { class: 'checks' }, t.checks.results.map(r => h('li', { class: r.ok ? 'ok' : r.preexisting ? 'pre' : 'bad' },
@@ -605,6 +609,53 @@
       h('div', { class: 'acts' }, btn('Copy as Markdown', () => post('copy', { text: md }))));
   }
 
+  // Ask Claude to rework one task or all To do tasks. The instruction is free text with quick presets.
+  function refineDialog(ids) {
+    const one = ids.length === 1 ? S.board.tasks.find(t => t.id === ids[0]) : undefined;
+    let inst;
+    const presets = one
+      ? ['Add clear acceptance criteria', 'Split this into smaller tasks', 'Add the files and steps to change', 'Make it more specific to this codebase']
+      : ['Add acceptance criteria to each', 'Split any task that is too big', 'Merge duplicates and overlaps', 'Order by build dependency', 'Make each specific to this codebase'];
+    dialog(one ? `Edit “${one.title.slice(0, 50)}” with AI` : `Edit ${ids.length} To do tasks with AI`,
+      h('p', { class: 'muted' }, one ? 'Claude reads the code and reworks this task. It may split it into several. You review every change before it applies.'
+        : 'Claude reads the code and reworks these tasks: reword, split, merge, add, reorder. You review every change before it applies.'),
+      inst = h('textarea', { rows: 3, placeholder: 'What should change? e.g. "add acceptance criteria and split anything too big"' }),
+      h('div', { class: 'chips' }, presets.map(p => h('span', { class: 'chip', onclick: () => { inst.value = inst.value ? `${inst.value}; ${p}` : p; } }, p))),
+      h('div', { class: 'acts' }, btn('✦ Rework', () => {
+        if (!inst.value.trim()) return inst.focus();
+        post('refine', { ids, instruction: inst.value.trim() });
+        $('#dlg').close();
+      }, 'primary')));
+    inst.focus();
+  }
+
+  // Review Claude's proposed task changes: each add/edit/remove has a checkbox; only the ticked ones apply.
+  function refinedDialog(m) {
+    const keep = {};
+    m.changes.forEach((c, i) => { keep[`c${i}`] = c.kind !== 'same'; });
+    m.removes.forEach((r, i) => { keep[`r${i}`] = true; });
+    const cur = id => S.board.tasks.find(t => t.id === id);
+    const changed = m.changes.filter(c => c.kind !== 'same').length + m.removes.length;
+    const row = (cls, tag, title, desc, key, before) => h('label', { class: `refrow ${cls}` },
+      key ? h('input', { type: 'checkbox', checked: keep[key], onchange: e => { keep[key] = e.target.checked; } }) : h('span', { class: 'rspace' }),
+      h('div', { class: 'rbody' }, h('div', {}, h('span', { class: `rtag ${cls}` }, tag), ' ', h('b', {}, title)),
+        before && before !== title ? h('div', { class: 'small muted strike' }, before) : '',
+        desc ? h('div', { class: 'small muted' }, desc) : ''));
+    dialog('Proposed changes',
+      h('p', { class: 'muted' }, changed ? `Claude proposes ${changed} change${changed === 1 ? '' : 's'}. Untick any you don't want, then apply.` : 'Claude kept the tasks as they are.'),
+      h('div', { class: 'reflist' },
+        m.changes.map((c, i) => row(c.kind, { add: 'NEW', edit: 'EDIT', same: 'unchanged' }[c.kind], c.title, c.description, c.kind === 'same' ? '' : `c${i}`, c.ref ? cur(c.ref)?.title : '')),
+        m.removes.map((r, i) => row('remove', 'REMOVE', r.title, r.description, `r${i}`))),
+      h('div', { class: 'acts' },
+        changed ? btn('Apply the ticked changes', () => {
+          post('applyRefine', { ids: m.order, instruction: m.instruction,
+            changes: m.changes.map((c, i) => ({ ...c, apply: c.kind !== 'same' && keep[`c${i}`] })),
+            removes: m.removes.map((r, i) => ({ ...r, apply: keep[`r${i}`] })) });
+          $('#dlg').close();
+        }, 'primary') : '',
+        btn('Cancel', () => $('#dlg').close(), 'ghost')));
+  }
+
   function sourcesDialog() {
     const list = S.sources || [];
     dialog('Sources',
@@ -650,6 +701,7 @@
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
     else if (m.type === 'focus') openTask(m.id);
     else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); if (!more) $('#more').hidden = !(more = true); drawFiles(); }
+    else if (m.type === 'refined') refinedDialog(m);
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.

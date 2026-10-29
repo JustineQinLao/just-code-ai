@@ -7,7 +7,7 @@ import { execFile } from 'child_process';
 import { Store, Task } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
-import { claudeBin, claudeEnv, discoverAgents, discoverSkills, plan, sessionLog } from './claude';
+import { claudeBin, claudeEnv, discoverAgents, discoverSkills, plan, refine, sessionLog } from './claude';
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { syncSkill } from './skill';
@@ -333,6 +333,8 @@ export function activate(context: vscode.ExtensionContext) {
         try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
       }) }); return;
       case 'plan': return runPlan(r, m);
+      case 'refine': return runRefine(r, m);
+      case 'applyRefine': return applyRefine(r, m);
       case 'pickFiles': {
         const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: true, defaultUri: vscode.Uri.file(r.root), openLabel: 'Attach' });
         if (picked?.length) void panel?.webview.postMessage({ type: 'picked', files: picked.map(u => u.fsPath) });
@@ -472,6 +474,53 @@ export function activate(context: vscode.ExtensionContext) {
     let sprintId = m.sprintId || undefined;
     if (m.newSprint) sprintId = r.store.addSprint(m.newSprint, m.goal.split('\n')[0].slice(0, 120)).id;
     for (const p of picked) r.store.addTask({ title: p.t.title, description: p.t.description, sprintId, mode: m.mode || setting('defaultMode', 'auto') });
+  }
+
+  // Refine To do tasks with Claude: it proposes a reworked list (edit, split, merge, add, reorder); the board shows a
+  // diff, and only the changes you keep are applied. `ids`: the tasks to refine (one, or all To do in view).
+  async function runRefine(r: Runner, m: any) {
+    const b = bin();
+    if (!b) { vscode.window.showErrorMessage('Claude Code is not installed. Open JustCode: Check Setup.'); return; }
+    const tasks = (m.ids as string[]).map(id => r.store.task(id)).filter((t): t is Task => !!t && t.status === 'todo' && !t.worktree);
+    if (!tasks.length) return vscode.window.showWarningMessage('No To do tasks to refine.');
+    const result = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: 'Claude is reading the code and reworking the tasks…', cancellable: true },
+      async (_p, token) => {
+        const ac = new AbortController();
+        token.onCancellationRequested(() => ac.abort());
+        try {
+          return await refine(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), m.instruction,
+            { bin: b, cwd: r.root, env: env(), model: setting('plannerModel', 'opus') || undefined, effort: setting('plannerEffort', 'low') || undefined, signal: ac.signal, timeoutMs: 15 * 60_000, onRate: i => limits.update(i) });
+        } catch (e: any) { vscode.window.showErrorMessage(e.message); return undefined; }
+      });
+    if (!result) return;
+    // Classify against the tasks sent, so the board can show a diff and let the user choose.
+    const refs = new Set(result.map(x => x.ref).filter(Boolean));
+    const changes = result.map(x => {
+      const cur = x.ref ? tasks.find(t => t.id === x.ref) : undefined;
+      const same = cur && cur.title === x.title && (cur.description ?? '') === (x.description ?? '');
+      return { ...x, kind: !cur ? 'add' : same ? 'same' : 'edit' };
+    });
+    const removes = tasks.filter(t => !refs.has(t.id)).map(t => ({ id: t.id, title: t.title, description: t.description, kind: 'remove' as const }));
+    void panel?.webview.postMessage({ type: 'refined', root: r.root, instruction: m.instruction, order: m.ids, changes, removes });
+  }
+
+  // Applies the refine changes the user kept: edits, adds (in the proposed order), removes, and reorders To do.
+  async function applyRefine(r: Runner, m: any) {
+    const s = r.store;
+    const sprintId = (m.ids as string[]).map((id: string) => s.task(id)?.sprintId).find(Boolean);
+    const defMode = setting('defaultMode', 'auto');
+    const orderIds: string[] = [];
+    for (const c of m.changes as any[]) {
+      if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; } // unchanged kept task
+      if (c.ref) { s.updateTask(c.ref, { title: c.title, description: c.description || undefined }); orderIds.push(c.ref); }
+      else { const t = s.addTask({ title: c.title, description: c.description || undefined, sprintId: sprintId || undefined, mode: defMode }); orderIds.push(t.id); }
+    }
+    for (const rm of m.removes as any[]) if (rm.apply) await r.remove(rm.id);
+    // Put the kept/new tasks in the proposed order, before the first task that came after them.
+    const after = s.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !(m.ids as string[]).includes(t.id));
+    for (const id of orderIds.reverse()) s.reorder(id, after?.id);
+    push();
   }
 
   // Optional: Claude drafts agents, skills, CLAUDE.md and TASKS.md for this project, then syncs TASKS.md to the board.
