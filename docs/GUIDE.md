@@ -190,7 +190,30 @@ input and cached. Cached tokens are context re-sent at each step: they are cheap
   lighter model.
 - **Fresh session for fixes:** a fix round in a long session restarts from the artifacts instead of the whole history.
 
-## 12. Reloads, crashes, cleanup
+## 12. Checks and ready folders
+
+**Ready folders.** Before Claude starts, JustCode prepares the task's folder: `node_modules` is linked from your project
+folder when the lockfile is the same (otherwise installed), and your project's `.venv` is used. Each task gets its own
+`PORT`, so parallel tasks do not collide. A problem shows under **Details → Artifacts → Setup log**.
+
+**Checks.** When Claude finishes a turn, JustCode runs the project's tests and type check itself. It costs no tokens.
+
+- The card says *Running checks…* while they run.
+- If one fails, the end of its log goes back to Claude, which fixes it and finishes again. After 3 rounds (⚙) the card
+  waits under **Needs you** with **Send to Claude**.
+- A check that also fails on the base branch is not the task's fault: it is marked *fails on the base branch too:
+  ignored*.
+- The AI reviewer starts only when the checks pass, and does not re-run them.
+- See the results under **Details → Checks**, or open the full log.
+
+⚙ Settings → *Checks after each turn*: **Auto** (detected from your project), **Off**, or **My commands**.
+
+## 13. Report
+
+**📊 Report** (toolbar) summarises the tasks in the current view: tokens (build and review), check and review rounds,
+first-try passes and minutes. Click a row to open the task; **Copy as Markdown** pastes it into a PR or a note.
+
+## 14. Reloads, crashes, cleanup
 
 - Closing or hiding the board never stops work. Processes run in VS Code's extension host.
 - A Claude process idle for 10 minutes closes to free memory. A later message resumes it with its full history.

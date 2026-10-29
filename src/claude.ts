@@ -220,17 +220,18 @@ config changes are "minor".
 In "tested", list every command you ran (or why nothing could run).`;
 
 // The review's task-specific part: the task, the builder's handoff, how to test the UI, and the diff.
-export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; handoff?: string; brief?: string } = { shots: '' }) {
+export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; handoff?: string; brief?: string; checks?: string[] } = { shots: '' }) {
   const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
   return [
     test.brief ? `# Task\n${test.brief}` : `# Task: ${t.title}\n${t.description ?? ''}`,
+    test.checks?.length ? `# Checks JustCode already ran on this commit: all pass\n${test.checks.map(c => `- ${c}`).join('\n')}\nDo not re-run them; run only tests they do not cover, if the change needs any.` : '',
     test.handoff ? `# Builder's handoff (its own account: verify it)\n${test.handoff}` : '# Builder\'s handoff\n(none written: find out how it was meant to be verified from the diff)',
     test.adb?.devices.length
       ? `# UI checks\nAn Android device is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app with adb, ` +
         `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
       : `# UI checks\nFor a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read it. Save screenshots only in ${test.shots}.`,
     `# Diff against ${base}\n\`\`\`diff\n${clipped}\n\`\`\``,
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 }
 
 // The verdict as structured output (schema-checked by Claude Code, no parsing guesswork).

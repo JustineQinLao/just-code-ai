@@ -33,6 +33,9 @@ export interface Task {
   files?: string[];           // files or URLs attached to this task as its basis (listed in its brief)
   sources?: string[];         // ids of the project sources this task rests on; undefined = all of them
   usage?: { build?: StageUsage; review?: StageUsage };  // tokens spent, per stage
+  checks?: Checks;            // the project's checks, run by JustCode after each turn
+  startedAt?: number;         // first run
+  doneAt?: number;            // merged or marked done
   live?: boolean;             // Claude was mid-turn; a window that closed then continues it when it opens again
   reply?: string;             // Claude's last message when its turn ended (shown when it asks something instead of changing files)
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
@@ -43,6 +46,9 @@ export interface Task {
 }
 
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
+export interface CheckRun { name: string; cmd: string; ok: boolean; ms: number; tail?: string; preexisting?: boolean; timedOut?: boolean }
+export interface Checks { state: 'pass' | 'fail' | 'none'; rounds: number; head?: string; results?: CheckRun[] }
+
 export interface StageUsage { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }

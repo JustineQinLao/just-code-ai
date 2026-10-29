@@ -12,6 +12,11 @@ project. Claude asks for approval right on the card, and an AI reviewer tests th
 - **Sources and artifacts:** tasks rest on your specs, designs, docs and links (**📎 Sources**). Each task keeps a
   brief, a plan, the builder's handoff and the review notes, so every step reads short notes instead of re-exploring
   the code.
+- **Checks before review:** JustCode runs the project's own tests and type check after every turn (no tokens). A failure
+  goes straight back to Claude, so the AI reviewer only sees work that already passes.
+- **Ready-to-build task folders:** dependencies are linked or installed and the project's `.venv` is used before Claude
+  starts. Each task gets its own port.
+- **Report:** tokens, check and review rounds, first-try passes and time per task.
 - **Fewer tokens:** lean sessions, a shared cached system prompt, capped command output, reviews sized to the change.
   Each card shows the tokens it used.
 - **Continue on your phone:** move any task to Claude Code Remote Control and steer it from the Claude app or
@@ -81,6 +86,8 @@ answers. JustCode cuts both, without lowering the bar for review.
 | Reviewer | Reads the brief, plan and handoff, re-runs only the tests that cover the change, reports blocking issues only (max 8, no style), and returns a schema-checked verdict. Its follow-up continues its own cached session. |
 | Review triage | Docs-only diffs need no reviewer. Small changes outside sensitive code (auth, payments, migrations, config…) use `justCode.reviewLightModel`. Everything else gets the full reviewer. Set `justCode.reviewTriage` to off to always use the full reviewer. |
 | Fresh fix rounds | Once a session holds more than `justCode.freshSessionTokens` (120k) of context, the next review-fix round starts fresh from the artifacts. |
+| Checks first | After each turn JustCode runs the project's checks itself (`justCode.checks`: tests and type check detected for npm/pnpm/yarn/bun, pytest, Django, go, cargo, make). Failures go back to Claude with the end of the log; the reviewer is told these already pass and does not re-run them. A check that fails on the base branch too is not the task's fault and is ignored. |
+| Ready folders | Before Claude starts, `node_modules` is linked from the project folder when the lockfile matches (otherwise installed), the project's `.venv` is used, and each task gets its own `PORT` (`justCode.folderSetup`). Claude no longer spends turns installing. |
 | Visibility | Each card shows its tokens. Details splits build and review into written, new input and cached tokens. |
 
 ## Safety
@@ -107,6 +114,9 @@ The everyday settings are on the board (⚙). All of them are also in VS Code Se
 | `justCode.defaultMode` | `auto` | Permissions for new tasks |
 | `justCode.maxParallel` | 1 | Tasks **Run all** keeps in progress at once |
 | `justCode.taskModel` / `reviewModel` / `plannerModel` | `sonnet` / `opus` / `opus` | Models |
+| `justCode.checks` | `auto` | Checks run after each turn: `auto`, empty (off), or commands one per line |
+| `justCode.maxCheckRounds` | 3 | Failing-check rounds sent back to Claude before it waits for you |
+| `justCode.folderSetup` | `auto` | Task folder setup: `auto`, empty (off), or a command |
 | `justCode.autoReview` | true | AI review after each finished task |
 | `justCode.autoMerge` | false | Merge automatically when the review passes (never when it is flagged critical) |
 | `justCode.maxReviews` | 3 | Review rounds before it waits for you |

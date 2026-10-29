@@ -213,3 +213,83 @@ test('review triage: docs need none, small code light, sensitive or big full', (
   assert.equal(A.triage(d('src/auth/login.ts', 5)).level, 'full');
   assert.equal(A.triage(d('src/a.ts', 200)).level, 'full');
 });
+
+import * as C from '../checks';
+
+test('checks: detected from the project, never watch modes', () => {
+  const d = tmp();
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run', typecheck: 'tsc --noEmit', dev: 'vite' } }));
+  fs.writeFileSync(path.join(d, 'pnpm-lock.yaml'), '');
+  assert.deepEqual(C.detectChecks(d).map(c => c.cmd), ['pnpm run typecheck', 'pnpm test']);
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: 'jest --watch' } }));
+  assert.deepEqual(C.detectChecks(d), []);
+  const py = tmp();
+  fs.writeFileSync(path.join(py, 'pyproject.toml'), '[tool.pytest.ini_options]\n');
+  assert.deepEqual(C.detectChecks(py).map(c => c.cmd), ['python -m pytest -q -x']);
+  assert.deepEqual(C.checksFor(py, ''), []);
+  assert.deepEqual(C.checksFor(py, 'make lint\nmake test').map(c => c.cmd), ['make lint', 'make test']);
+});
+
+test('checks: run, keep the failing tail, stop at the timeout with the whole tree', async () => {
+  const d = tmp();
+  const { results } = await C.runChecks([{ name: 'ok', cmd: 'echo fine' }, { name: 'bad', cmd: 'echo boom; exit 3' }], d, { PATH: process.env.PATH! }, 10_000);
+  assert.deepEqual(results.map(r => [r.name, r.ok, r.code]), [['ok', true, 0], ['bad', false, 3]]);
+  assert.match(results[1].tail, /boom/);
+  const t0 = Date.now();
+  const r = await C.runCommand('sleep 30 & sleep 30', d, { PATH: process.env.PATH! }, 500);
+  assert.equal(r.timedOut, true);
+  assert.ok(Date.now() - t0 < 5000);
+});
+
+test('folder setup: node_modules linked when the lockfile matches; ports per task', async () => {
+  const root = tmp(), wt = path.join(root, 'wt');
+  fs.mkdirSync(path.join(root, 'node_modules', 'x'), { recursive: true });
+  fs.mkdirSync(wt);
+  for (const dir of [root, wt]) { fs.writeFileSync(path.join(dir, 'package.json'), '{}'); fs.writeFileSync(path.join(dir, 'package-lock.json'), '{"v":1}'); }
+  const log: string[] = [];
+  assert.equal(await C.setupFolder(root, wt, 'auto', { PATH: process.env.PATH! }, s => log.push(s)), true);
+  assert.equal(fs.realpathSync(path.join(wt, 'node_modules')), fs.realpathSync(path.join(root, 'node_modules')));
+  const a = C.folderEnv(root, 'aaaa1111', { PATH: '/bin' }), b = C.folderEnv(root, 'bbbb2222', { PATH: '/bin' });
+  assert.notEqual(a.PORT, b.PORT);
+  assert.equal(a.PATH, '/bin');
+});
+
+import { Runner } from '../runner';
+
+// A runner on a real temp repo with a fake Claude: checks run by JustCode, failures sent back, base failures ignored.
+test('runner: failing check goes back to Claude; a failure the base already has is ignored', async () => {
+  const root = tmp();
+  const sh = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+  sh(root, 'init', '-q', '-b', 'main'); sh(root, 'config', 'user.email', 't@t'); sh(root, 'config', 'user.name', 't');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node t.js', typecheck: 'node tc.js' } }));
+  fs.writeFileSync(path.join(root, 't.js'), 'process.exit(0)');
+  fs.writeFileSync(path.join(root, 'tc.js'), 'console.log("base type error"); process.exit(1)'); // fails on main already
+  sh(root, 'add', '-A'); sh(root, 'commit', '-qm', 'init');
+  const store = new Store(root);
+  const said: string[] = [];
+  const settings: any = { maxParallel: 1, taskModel: '', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, freshAfterTokens: 0, checks: 'auto', setup: '', maxCheckRounds: 2, checkTimeoutMinutes: 1,
+    review: { auto: false, model: '', lightModel: '', triage: true, maxAttempts: 3, autoMerge: false, mergeIfCannotRun: false, commands: [], timeoutMinutes: 1 } };
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({ PATH: process.env.PATH! }), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  r.say = async (_id: string, text: string) => { said.push(text); };
+  const t = store.addTask({ title: 'Feature', mode: 'auto' });
+  const wt = g.worktreeDir(root, t.id);
+  await g.addWorktree(root, wt, 'jc/feature-' + t.id, 'main');
+  store.updateTask(t.id, { worktree: wt, branch: 'jc/feature-' + t.id, base: 'main', status: 'review' });
+  fs.writeFileSync(path.join(wt, 't.js'), 'console.log("FAIL: expected 2 got 3"); process.exit(1)');
+  await g.commitAll(wt, 'work');
+  assert.equal(await r.check(t.id), 'fail');
+  const c1 = store.task(t.id)!.checks!;
+  assert.equal(c1.state, 'fail');
+  assert.deepEqual(c1.results!.map(x => [x.name, x.ok, !!x.preexisting]), [['type check', false, true], ['tests', false, false]]);
+  assert.equal(said.length, 1);
+  assert.match(said[0], /expected 2 got 3/);
+  assert.doesNotMatch(said[0], /base type error/);
+  assert.equal(store.task(t.id)!.status, 'doing');
+  // Claude fixes it: the same head is not re-run, a new commit passes.
+  fs.writeFileSync(path.join(wt, 't.js'), 'process.exit(0)');
+  await g.commitAll(wt, 'fix');
+  assert.equal(await r.check(t.id), 'pass');
+  assert.equal(store.task(t.id)!.checks!.state, 'pass');
+  assert.equal(said.length, 1);
+  r.dispose();
+});
