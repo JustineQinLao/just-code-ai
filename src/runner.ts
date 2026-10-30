@@ -781,11 +781,12 @@ export class Runner {
   private planner?: Session;
   private plannerTargets: string[] = [];        // the To do task ids this chat is editing (empty = planning fresh)
   private plannerProposals?: RefineResult[];
+  private plannerNote?: string;  // last apply result, shown in the panel
 
   plannerLive() {
     const s = this.planner;
     if (!s?.open && !this.plannerProposals) return undefined;
-    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0 };
+    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0, note: this.plannerNote };
   }
 
   async startPlanner(instruction: string, targetIds: string[]) {
@@ -795,6 +796,7 @@ export class Runner {
     this.planner?.kill();
     this.plannerTargets = targetIds;
     this.plannerProposals = undefined;
+    this.plannerNote = undefined;
     const tasks = targetIds.map(id => this.store.task(id)).filter((t): t is Task => !!t);
     const set = this.d.settings();
     const s = new Session({
@@ -816,7 +818,7 @@ export class Runner {
     if (!turn.ok) { this.d.notify('error', `Planner stopped: ${String(turn.error).slice(0, 200)}`); return; }
     const ids = new Set(this.plannerTargets);
     const p = parseProposals(turn.text, ids);
-    if (p) this.plannerProposals = p;
+    if (p) { this.plannerProposals = p; this.plannerNote = undefined; }
     this.changed();
   }
 
@@ -827,17 +829,26 @@ export class Runner {
   stopPlanner() { this.planner?.kill(); this.planner = undefined; this.plannerProposals = undefined; this.plannerTargets = []; this.changed(); }
 
   // Applies the proposals the user kept: edits, adds (in order), removes, reorder of the To do tasks.
+  // sprintId: where new tasks land. Editing tasks keeps their sprint; a fresh plan uses the active sprint (so the
+  // tasks appear where you work) or the backlog.
   applyProposals(changes: (RefineResult & { kind: string; apply?: boolean })[], removes: { id: string; apply?: boolean }[]) {
-    const sprintId = this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean);
+    const sprintId = this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean)
+      ?? (this.plannerTargets.length ? undefined : this.store.data.sprints.find(s => s.active && !s.closed)?.id);
     const orderIds: string[] = [];
+    let added = 0, edited = 0, removed = 0;
     for (const c of changes) {
       if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; }
-      if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined }); orderIds.push(c.ref); }
-      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: sprintId || undefined, mode: this.defaultMode }); orderIds.push(t.id); }
+      if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined }); orderIds.push(c.ref); edited++; }
+      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: sprintId || undefined, mode: this.defaultMode }); orderIds.push(t.id); added++; }
     }
-    for (const rm of removes) if (rm.apply) void this.remove(rm.id);
+    for (const rm of removes) if (rm.apply) { void this.remove(rm.id); removed++; }
     const after = this.store.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !this.plannerTargets.includes(t.id));
     for (const id of orderIds.reverse()) this.store.reorder(id, after?.id);
+    // The proposals are now real tasks: clear the panel (no double-apply) and let further chat refine them.
+    this.plannerProposals = undefined;
+    this.plannerTargets = orderIds.slice().reverse();
+    const parts = [added && `added ${added}`, edited && `updated ${edited}`, removed && `removed ${removed}`].filter(Boolean);
+    this.plannerNote = parts.length ? `Applied: ${parts.join(', ')} task${added + edited + removed === 1 ? '' : 's'}. Keep chatting to add or change more.` : 'No tasks changed.';
     this.changed();
   }
   defaultMode: Task['mode'] = 'auto';  // set by the extension from justCode.defaultMode

@@ -227,3 +227,4 @@ table.rep { width: 100%; border-collapse: collapse; font-size: 12px; }
 .proppanel { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 .proppanel h4 { margin: 0 0 6px; }
 .refrow.same { opacity: .55; }
+.applied { margin-top: 12px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
