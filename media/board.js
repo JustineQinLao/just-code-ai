@@ -231,8 +231,8 @@
     const sprint = S.board.sprints.find(s => s.id === view);
     $('#toolbar').replaceChildren(
       h('select', { onchange: e => { view = e.target.value; remember(); render(); } },
-        h('option', { value: 'all' }, 'All tasks'), h('option', { value: 'backlog' }, 'Backlog'),
-        ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
+        h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
+        ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
       btn('+ Sprint', () => newSprint(), 'ghost'),
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
