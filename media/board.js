@@ -479,6 +479,7 @@
         p.context ? h('span', { class: 'muted small' }, ` · ${tok(p.context)}`) : ''));
     const prop = p.proposals;
     const panel = [];
+    if (p.note) panel.push(h('div', { class: 'applied' }, '✓ ', p.note));
     if (prop) {
       const cur = id => S.board.tasks.find(t => t.id === id);
       const targets = (p.targets || []).map(cur).filter(Boolean);
