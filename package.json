@@ -2,7 +2,7 @@
   "name": "just-code",
   "displayName": "JustCode",
   "description": "Task board that runs Claude Code on each task in its own branch: approvals on the card, AI review, one-click merge, agent map, continue on your phone",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "publisher": "justine",
   "license": "UNLICENSED",
   "repository": {
@@ -174,7 +174,7 @@
           "default": 1,
           "minimum": 1,
           "maximum": 6,
-          "description": "Tasks Run all keeps in progress at once. 1: one after another, each building on the previous one's merged work."
+          "description": "Tasks allowed to run at once (any way they are started: \u25b6 Run or Run all). 1 (default): strictly one at a time, each building on the previous one's merged work. More: several run side by side, each in its own folder."
         },
         "justCode.autoReview": {
           "type": "boolean",

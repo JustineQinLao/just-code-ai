@@ -293,3 +293,28 @@ test('runner: failing check goes back to Claude; a failure the base already has 
   assert.equal(said.length, 1);
   r.dispose();
 });
+
+test('requestRun: honors the one-at-a-time limit, queues the rest', async () => {
+  const root = tmp();
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 't@t'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+  fs.writeFileSync(path.join(root, 'a.txt'), 'x'); execFileSync('git', ['add', '-A'], { cwd: root }); execFileSync('git', ['commit', '-qm', 'init'], { cwd: root });
+  const store = new Store(root);
+  const settings: any = { maxParallel: 1, taskModel: '', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, freshAfterTokens: 0, subagents: false, taskEffort: '', plannerEffort: '', checks: '', setup: '', maxCheckRounds: 2, checkTimeoutMinutes: 1,
+    review: { auto: false, model: '', effort: '', lightModel: '', triage: true, maxAttempts: 3, autoMerge: false, mergeIfCannotRun: false, commands: [], timeoutMinutes: 1 } };
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  const runCalls: string[] = [];
+  r.run = async (id: string) => { runCalls.push(id); };
+  const a = store.addTask({ title: 'A', mode: 'auto' }), b = store.addTask({ title: 'B', mode: 'auto' });
+  // A is already in flight (doing, with a worktree): the slot is taken.
+  store.updateTask(a.id, { status: 'doing', worktree: g.worktreeDir(root, a.id), branch: 'jc/a', base: 'main' });
+  await r.requestRun(b.id);
+  assert.deepEqual(runCalls, []);                 // not started: limit reached
+  assert.deepEqual(store.queue, [b.id]);          // queued instead
+  // Free the slot: A done. requestRun B again starts it.
+  store.updateTask(a.id, { status: 'done', worktree: undefined });
+  await r.requestRun(b.id);
+  assert.deepEqual(runCalls, [b.id]);
+  r.dispose();
+});
