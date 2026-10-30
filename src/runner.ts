@@ -441,6 +441,18 @@ export class Runner {
   }
   cancelQueue() { this.store.setQueue([]); }
 
+  // A card's ▶ Run. It honors the "tasks at once" limit (maxParallel): if a slot is free it starts now, otherwise it
+  // goes to the front of the queue and starts when a running task is merged. Raise the limit in Settings to run several.
+  async requestRun(id: string) {
+    const t = this.store.task(id);
+    if (!t || t.status !== 'todo') return this.run(id);  // continuing an existing task is not a new start
+    const free = this.d.settings().maxParallel - this.inFlight().length;
+    if (free > 0 && !this.d.limits.held()) return this.run(id);
+    if (!this.store.queue.includes(id)) this.store.setQueue([id, ...this.store.queue]);
+    this.pump();
+    this.d.notify('info', this.d.limits.held() ? `"${t.title}" is queued: it starts after the usage limit resets.` : `"${t.title}" is queued: ${this.inFlight().length} task(s) already running (limit ${this.d.settings().maxParallel}). Raise "Tasks at once" in Settings to run more.`, id);
+  }
+
   // Tasks still on their way to Done. Each holds its slot until merged, so with maxParallel 1 Run all builds every
   // task on the previous one's merged work. A project-root task is finished when its turn ends.
   private inFlight() {

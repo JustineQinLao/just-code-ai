@@ -289,7 +289,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'closeSprint':
         if (await confirm('Close this sprint? Unfinished tasks go back to the backlog.', 'Close sprint')) s.closeSprint(m.sprintId);
         return;
-      case 'run': await r.run(m.id); return;
+      case 'run': await r.requestRun(m.id); return;
       case 'runAll': r.runAll(m.ids); return;
       case 'cancelQueue': r.cancelQueue(); return;
       case 'stop': r.stop(m.id); return;
