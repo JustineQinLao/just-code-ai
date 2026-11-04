@@ -292,6 +292,11 @@
           "minimum": 0,
           "description": "When a task's session holds more context than this, its review-fix round starts a fresh session from the task's brief, handoff and review notes instead of carrying the whole history. 0: never."
         },
+        "justCode.bypassAll": {
+          "type": "boolean",
+          "default": false,
+          "description": "DANGEROUS: run every task with Bypass permissions (no approvals). Applies to new, planner-created and not-started tasks. Confirmed once when enabled."
+        },
         "justCode.phoneServer": {
           "type": "boolean",
           "default": false,

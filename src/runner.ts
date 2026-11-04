@@ -29,6 +29,7 @@ export interface RunnerSettings {
   allowedTools: string[];
   worktreeCopy: string[];
   idleMinutes: number;
+  bypassAll?: boolean;   // justCode.bypassAll: every task runs with bypassPermissions
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
   taskEffort: string; plannerModel: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
@@ -216,7 +217,7 @@ export class Runner {
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
     const s = new Session({
-      bin, cwd, sessionId, resume, mode: task.mode, model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
+      bin, cwd, sessionId, resume, mode: set.bypassAll ? 'bypassPermissions' : task.mode, model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: task.output === 'artifact' && !set.personalSetup ? [frontendDesignPlugin()].filter((p): p is string => !!p) : undefined,
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.

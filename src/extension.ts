@@ -22,8 +22,10 @@ const cfg = () => vscode.workspace.getConfiguration('justCode');
 // Settings changed on the board are kept by JustCode itself (so saving never depends on VS Code's settings registry,
 // which can be out of date right after an update) and also written to VS Code's settings when that works.
 let ctx: vscode.ExtensionContext;
+let bypassAsked = false;   // the board already confirmed bypass-all, so the settings listener must not ask again
 const overrides = () => ctx.globalState.get<Record<string, unknown>>('settings', {});
-const setting = <T,>(key: string, fallback: T): T => { const o = overrides(); return key in o ? o[key] as T : cfg().get<T>(key, fallback); };
+const bypassAllOn = () => { const o = overrides(); return (('bypassAll' in o ? o.bypassAll : cfg().get<boolean>('bypassAll', false))) === true; };
+const setting = <T,>(key: string, fallback: T): T => { if (key === 'defaultMode' && bypassAllOn()) return 'bypassPermissions' as unknown as T; const o = overrides(); return key in o ? o[key] as T : cfg().get<T>(key, fallback); };
 
 const runners = new Map<string, Runner>(); // project root → runner
 let panel: vscode.WebviewPanel | undefined;
@@ -44,7 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
     taskEffort: setting('taskEffort', 'low'), plannerModel: setting('plannerModel', 'opus'), plannerEffort: setting('plannerEffort', 'low'), subagents: setting('allowSubagents', false),
-    personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
+    bypassAll: bypassAllOn(), personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
     checks: setting('checks', 'auto'), setup: setting('folderSetup', 'auto'), maxCheckRounds: setting('maxCheckRounds', 3), checkTimeoutMinutes: setting('checkTimeoutMinutes', 10),
     review: { auto: setting('autoReview', true), model: setting('reviewModel', 'sonnet'), effort: setting('reviewEffort', 'medium'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
@@ -192,7 +194,7 @@ export function activate(context: vscode.ExtensionContext) {
       skills: discoverSkills(r.root, setting('personalSetup', false)),
       sources: A.loadSources(r.root),
       detectedChecks: C.detectChecks(r.root),
-      settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
+      settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       planner: r.plannerLive(),
       guideSeen: context.globalState.get('guideSeen', false),
       all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({
@@ -315,6 +317,12 @@ export function activate(context: vscode.ExtensionContext) {
   const confirm = confirmFor(false);
   const BYPASS_TEXT = 'Bypass permissions: this task runs with NO approvals. It can run any command and change any file it can reach, including outside its folder. Use it only for work you trust.';
   const confirmBypass = () => confirm(BYPASS_TEXT, 'Bypass permissions');
+  // One confirm when "bypass all" is switched on; a second one when the phone server is also on.
+  async function confirmBypassAll() {
+    if (!await confirm('Bypass ALL permissions: every task (new, planned and not yet started) will run with NO approvals and can run any command or change any file it can reach. Use it only for work you trust.', 'Bypass all')) return false;
+    if (setting('phoneServer', false)) return confirm('The phone server is also on, so anyone with the phone token could start tasks that run any command on this computer without approval. Keep bypass-all on?', 'Keep it on');
+    return true;
+  }
 
   // `remote` is set by the phone server only (never read from the message), so a client cannot pick the confirmation path.
   async function handle(m: any, remote = false) {
@@ -333,10 +341,17 @@ export function activate(context: vscode.ExtensionContext) {
       case 'guideSeen': await context.globalState.update('guideSeen', true); return;
       case 'openUrl': if (/^https:\/\//.test(m.url)) { if (remote) hub.emit({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
       case 'settings':
-        await context.globalState.update('settings', { ...overrides(), ...m.values });
-        for (const [k, v] of Object.entries(m.values)) {
-          try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
+        if (m.values && 'bypassAll' in m.values) {
+          // Turning it on needs the desktop confirms; a phone can never switch it on.
+          if (m.values.bypassAll === true && !bypassAllOn() && (remote || !await confirmBypassAll())) { m = { ...m, values: { ...m.values, bypassAll: false } }; push(); }
         }
+        await context.globalState.update('settings', { ...overrides(), ...m.values });
+        bypassAsked = true;
+        try {
+          for (const [k, v] of Object.entries(m.values)) {
+            try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
+          }
+        } finally { setTimeout(() => { bypassAsked = false; }, 500); }
         return push();
       case 'apiKey': return vscode.commands.executeCommand('justCode.setApiKey');
       case 'resumeNow': limits.clear(); return;
@@ -350,7 +365,7 @@ export function activate(context: vscode.ExtensionContext) {
     switch (m.type) {
       case 'addTask': {
         if (!String(m.title ?? '').trim()) return;
-        if (m.mode === 'bypassPermissions' && !await confirmBypass()) return;
+        if (m.mode === 'bypassPermissions' && !bypassAllOn() && !await confirmBypass()) return;
         const all = A.loadSources(r.root).map(x => x.id);
         const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
         const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
@@ -399,7 +414,7 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showWarningMessage('That request is no longer open (Claude moved on or the session closed).');
         return;
       case 'setMode':
-        if (m.mode === 'bypassPermissions' && !await confirmBypass()) return;
+        if (m.mode === 'bypassPermissions' && !bypassAllOn() && !await confirmBypass()) return;
         await r.setMode(m.id, m.mode); return;
       case 'rules': s.setRules(Array.isArray(m.rules) ? m.rules.map(String) : []); return;
       case 'watch': watching = m.id ? { root: r.root, id: m.id, n: -1 } : undefined; sendSteps(true); return;
@@ -677,6 +692,7 @@ export function activate(context: vscode.ExtensionContext) {
       const o = { ...overrides() }; let changed = false;
       for (const k of Object.keys(o)) if (e.affectsConfiguration(`justCode.${k}`) && JSON.stringify(cfg().get(k)) !== JSON.stringify(o[k])) { delete o[k]; changed = true; }
       if (changed) void context.globalState.update('settings', o).then(push);
+      if (e.affectsConfiguration('justCode.bypassAll') && bypassAllOn() && !bypassAsked) void confirmBypassAll().then(async ok => { if (!ok) { await cfg().update('bypassAll', false, vscode.ConfigurationTarget.Global); const o2 = { ...overrides() }; delete o2.bypassAll; await context.globalState.update('settings', o2); } push(); });
       if (e.affectsConfiguration('justCode.claudePath')) void recheck();
       if (e.affectsConfiguration('justCode.phoneServer')) void syncPhone();
     }),
