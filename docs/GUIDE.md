@@ -157,6 +157,29 @@ with Claude Code Remote Control. To use it:
 Requirements: a Claude account login (Pro, Max, Team or Enterprise), not an API key. On Team and Enterprise plans, an
 admin must turn Remote Control on.
 
+## 7b. Phone and Android app access (local server)
+
+JustCode can serve the board to your phone over your own network. This is separate from *Continue on phone* above.
+
+- **Turn it on:** it is off by default. Enable the phone server in settings (`justCode.phoneServer`). While it is on,
+  the status bar and board show a short hint with the address to open or pair.
+- **Same network:** the phone and the computer must be on the same Wi-Fi or LAN.
+- **Keep the computer awake:** the server runs inside VS Code on your computer. If it sleeps or VS Code closes, the
+  phone loses the board and tasks stop.
+- **Pair the Android app:** build the APK from the `android/` folder (`./gradlew assembleDebug`), install it with
+  `adb install app/build/outputs/apk/debug/app-debug.apk`, then open the app and enter the address and token shown
+  in VS Code (or scan its QR code).
+- **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
+  on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks
+  run with no approvals, so a phone with the token can start commands and change files unchecked. Leave the server
+  off on untrusted networks.
+
+| | Phone server + Android app | Continue on phone (Remote Control) |
+|---|---|---|
+| Goes through | your network, directly to your computer | Anthropic's Remote Control, from anywhere |
+| Needs | same network, computer awake | a Claude account login, no API key |
+| Shows | the JustCode board | one task's Claude session |
+
 ## 8. Agent map
 
 **Agent map** (under **⋯** next to Run all) shows everything at work, grouped by project and then by task:
