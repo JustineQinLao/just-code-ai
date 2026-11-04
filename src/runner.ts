@@ -58,6 +58,9 @@ export interface RunnerDeps {
 // What a card shows about its live work, beyond what board.json keeps.
 export interface Live { phase?: string; run?: RunState; asks: Ask[]; agents: AgentNode[]; context: number; output: number; modeNote?: string; mode?: string; reviewing?: number; busy: boolean; queued: boolean }
 
+/** The mode a task actually runs with: bypass-all forces bypassPermissions. */
+export const effectiveMode = <M,>(mode: M, bypassAll?: boolean): M | 'bypassPermissions' => bypassAll ? 'bypassPermissions' : mode;
+
 export class Runner {
   private sessions = new Map<string, Session>();
   private starting = new Set<string>();
@@ -217,7 +220,7 @@ export class Runner {
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
     const s = new Session({
-      bin, cwd, sessionId, resume, mode: set.bypassAll ? 'bypassPermissions' : task.mode, model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
+      bin, cwd, sessionId, resume, mode: effectiveMode(task.mode, set.bypassAll), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: task.output === 'artifact' && !set.personalSetup ? [frontendDesignPlugin()].filter((p): p is string => !!p) : undefined,
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.

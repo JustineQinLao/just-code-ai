@@ -1,4 +1,4 @@
-import { DialogHub, makePhoneBoard, confirmBypassFor, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
+import { bypassGate, canEnableBypassAll, DialogHub, makePhoneBoard, confirmBypassFor, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -22,9 +22,11 @@ const cfg = () => vscode.workspace.getConfiguration('justCode');
 // Settings changed on the board are kept by JustCode itself (so saving never depends on VS Code's settings registry,
 // which can be out of date right after an update) and also written to VS Code's settings when that works.
 let ctx: vscode.ExtensionContext;
-let bypassAsked = false;   // the board already confirmed bypass-all, so the settings listener must not ask again
+let bypassPending: Promise<boolean> | undefined;   // one bypass-all confirm at a time
 const overrides = () => ctx.globalState.get<Record<string, unknown>>('settings', {});
-const bypassAllOn = () => { const o = overrides(); return (('bypassAll' in o ? o.bypassAll : cfg().get<boolean>('bypassAll', false))) === true; };
+const bypassAllRaw = () => { const o = overrides(); return (('bypassAll' in o ? o.bypassAll : cfg().get<boolean>('bypassAll', false))) === true; };
+// Counts only once the desktop user has confirmed it, so a value that arrives from a settings file never takes effect on its own.
+const bypassAllOn = () => bypassAllRaw() && ctx.globalState.get<boolean>('bypassAllConfirmed', false);
 const setting = <T,>(key: string, fallback: T): T => { if (key === 'defaultMode' && bypassAllOn()) return 'bypassPermissions' as unknown as T; const o = overrides(); return key in o ? o[key] as T : cfg().get<T>(key, fallback); };
 
 const runners = new Map<string, Runner>(); // project root → runner
@@ -320,8 +322,27 @@ export function activate(context: vscode.ExtensionContext) {
   // One confirm when "bypass all" is switched on; a second one when the phone server is also on.
   async function confirmBypassAll() {
     if (!await confirm('Bypass ALL permissions: every task (new, planned and not yet started) will run with NO approvals and can run any command or change any file it can reach. Use it only for work you trust.', 'Bypass all')) return false;
-    if (setting('phoneServer', false)) return confirm('The phone server is also on, so anyone with the phone token could start tasks that run any command on this computer without approval. Keep bypass-all on?', 'Keep it on');
     return true;
+  }
+  const PHONE_BYPASS_TEXT = 'The phone server is on while Bypass all is on, so anyone with the phone token could start tasks that run any command on this computer without approval. Keep both on?';
+  // Confirms (once at a time) and records the answer; the phone server adds a second confirm.
+  function ensureBypassAll(): Promise<boolean> {
+    return bypassPending ??= (async () => {
+      try {
+        const ok = await confirmBypassAll() && (!setting('phoneServer', false) || await confirm(PHONE_BYPASS_TEXT, 'Keep both on'));
+        await context.globalState.update('bypassAllConfirmed', ok);
+        return ok;
+      } finally { bypassPending = undefined; }
+    })();
+  }
+  // Settings-file / Settings-UI changes: ask when it is on but unconfirmed, and switch it off everywhere if declined.
+  async function checkBypassAll() {
+    if (!bypassAllRaw()) { if (context.globalState.get('bypassAllConfirmed')) await context.globalState.update('bypassAllConfirmed', false); return; }
+    if (bypassAllOn()) return;
+    if (await ensureBypassAll()) return push();
+    const o2 = { ...overrides() }; delete o2.bypassAll; await context.globalState.update('settings', o2);
+    for (const t of [vscode.ConfigurationTarget.Global, vscode.ConfigurationTarget.Workspace]) { try { await cfg().update('bypassAll', false, t); } catch { /* not set at this level */ } }
+    push();
   }
 
   // `remote` is set by the phone server only (never read from the message), so a client cannot pick the confirmation path.
@@ -342,16 +363,13 @@ export function activate(context: vscode.ExtensionContext) {
       case 'openUrl': if (/^https:\/\//.test(m.url)) { if (remote) hub.emit({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
       case 'settings':
         if (m.values && 'bypassAll' in m.values) {
-          // Turning it on needs the desktop confirms; a phone can never switch it on.
-          if (m.values.bypassAll === true && !bypassAllOn() && (remote || !await confirmBypassAll())) { m = { ...m, values: { ...m.values, bypassAll: false } }; push(); }
+          if (m.values.bypassAll === true && !bypassAllOn() && !await canEnableBypassAll(remote, () => ensureBypassAll())) m = { ...m, values: { ...m.values, bypassAll: false } };
+          else if (m.values.bypassAll !== true) await context.globalState.update('bypassAllConfirmed', false);
         }
         await context.globalState.update('settings', { ...overrides(), ...m.values });
-        bypassAsked = true;
-        try {
-          for (const [k, v] of Object.entries(m.values)) {
-            try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
-          }
-        } finally { setTimeout(() => { bypassAsked = false; }, 500); }
+        for (const [k, v] of Object.entries(m.values)) {
+          try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
+        }
         return push();
       case 'apiKey': return vscode.commands.executeCommand('justCode.setApiKey');
       case 'resumeNow': limits.clear(); return;
@@ -365,7 +383,7 @@ export function activate(context: vscode.ExtensionContext) {
     switch (m.type) {
       case 'addTask': {
         if (!String(m.title ?? '').trim()) return;
-        if (m.mode === 'bypassPermissions' && !bypassAllOn() && !await confirmBypass()) return;
+        if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return;
         const all = A.loadSources(r.root).map(x => x.id);
         const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
         const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
@@ -414,7 +432,7 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showWarningMessage('That request is no longer open (Claude moved on or the session closed).');
         return;
       case 'setMode':
-        if (m.mode === 'bypassPermissions' && !bypassAllOn() && !await confirmBypass()) return;
+        if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return;
         await r.setMode(m.id, m.mode); return;
       case 'rules': s.setRules(Array.isArray(m.rules) ? m.rules.map(String) : []); return;
       case 'watch': watching = m.id ? { root: r.root, id: m.id, n: -1 } : undefined; sendSteps(true); return;
@@ -692,7 +710,8 @@ export function activate(context: vscode.ExtensionContext) {
       const o = { ...overrides() }; let changed = false;
       for (const k of Object.keys(o)) if (e.affectsConfiguration(`justCode.${k}`) && JSON.stringify(cfg().get(k)) !== JSON.stringify(o[k])) { delete o[k]; changed = true; }
       if (changed) void context.globalState.update('settings', o).then(push);
-      if (e.affectsConfiguration('justCode.bypassAll') && bypassAllOn() && !bypassAsked) void confirmBypassAll().then(async ok => { if (!ok) { await cfg().update('bypassAll', false, vscode.ConfigurationTarget.Global); const o2 = { ...overrides() }; delete o2.bypassAll; await context.globalState.update('settings', o2); } push(); });
+      if (e.affectsConfiguration('justCode.bypassAll')) void checkBypassAll();
+      if (e.affectsConfiguration('justCode.phoneServer') && bypassAllOn() && setting('phoneServer', false)) void confirm(PHONE_BYPASS_TEXT, 'Keep both on').then(async ok => { if (!ok) { await cfg().update('phoneServer', false, vscode.ConfigurationTarget.Global); const o3 = { ...overrides() }; delete o3.phoneServer; await context.globalState.update('settings', o3); void syncPhone(); push(); } });
       if (e.affectsConfiguration('justCode.claudePath')) void recheck();
       if (e.affectsConfiguration('justCode.phoneServer')) void syncPhone();
     }),
@@ -702,6 +721,7 @@ export function activate(context: vscode.ExtensionContext) {
   );
   updateStatus();
   void syncPhone();
+  void checkBypassAll();
 }
 
 const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter(k => o && k in o).map(k => [k, o[k] === '' ? undefined : o[k]]));

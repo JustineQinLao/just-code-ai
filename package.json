@@ -294,6 +294,7 @@
         },
         "justCode.bypassAll": {
           "type": "boolean",
+          "scope": "machine",
           "default": false,
           "description": "DANGEROUS: run every task with Bypass permissions (no approvals). Applies to new, planner-created and not-started tasks. Confirmed once when enabled."
         },
