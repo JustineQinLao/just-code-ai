@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as vm from 'vm';
 import { AddressInfo } from 'net';
-import { startPhoneServer, canPhoneMerge } from '../phone';
+import { startPhoneServer, canPhoneMerge, phoneLinkUrl, qrSvg } from '../phone';
 
 test('phone server: token required, only whitelisted actions', async () => {
   const acts: any[] = [];
@@ -120,4 +120,11 @@ test('phone page: success resets to the normal 3s interval', async () => {
 test('phone page: says notifications are unavailable outside a secure context', async () => {
   const { els } = await runPage([ok]);
   assert.match(els.nt.textContent, /unavailable/);
+});
+
+test('phoneLinkUrl and qrSvg', () => {
+  assert.equal(phoneLinkUrl('192.168.1.5', 7878, 'a b'), 'http://192.168.1.5:7878/?token=a%20b');
+  const svg = qrSvg('http://192.168.1.5:7878/?token=abc');
+  assert.match(svg, /^<svg/);
+  assert.ok(svg.length > 500);
 });

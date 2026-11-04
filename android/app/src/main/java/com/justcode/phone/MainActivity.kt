@@ -22,10 +22,14 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
     private lateinit var root: FrameLayout
     private var scanning = false
+    private var boardShown = false
+    private var scanPreview: PreviewView? = null
+    private var scanCb: ((String) -> Unit)? = null
+    private var firstResume = true
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        val bar = androidx.appcompat.widget.Toolbar(this).apply { title = "JustCode"; setTitleTextColor(0xFFFFFFFF.toInt()); setBackgroundColor(0xFF263238.toInt()) }
+        val bar = androidx.appcompat.widget.Toolbar(androidx.appcompat.view.ContextThemeWrapper(this, androidx.appcompat.R.style.ThemeOverlay_AppCompat_Dark_ActionBar)).apply { title = "JustCode"; setTitleTextColor(0xFFFFFFFF.toInt()); setBackgroundColor(0xFF263238.toInt()) }
         root = FrameLayout(this)
         setContentView(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(bar, LinearLayout.LayoutParams(-1, -2)); addView(root, LinearLayout.LayoutParams(-1, 0, 1f)) })
         setSupportActionBar(bar)
@@ -55,7 +59,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMessage(text: String, button: String?, onClick: (() -> Unit)? = null) {
-        scanning = false
+        scanning = false; boardShown = false; scanPreview = null
         root.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 96, 48, 48) }
         col.addView(TextView(this).apply { this.text = text; textSize = 16f })
@@ -65,12 +69,13 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun showBoard(link: String) {
+        scanPreview = null; boardShown = true
         root.removeAllViews()
         root.addView(WebView(this).apply {
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             webViewClient = object : android.webkit.WebViewClient() {
                 override fun onReceivedHttpError(v: WebView, r: android.webkit.WebResourceRequest, e: android.webkit.WebResourceResponse) {
-                    if (e.statusCode == 401) runOnUiThread { Pairing.forget(this@MainActivity); showPairing("The pairing token is no longer valid (it was regenerated). Pair again.") }
+                    if (e.statusCode == 401 && (r.isForMainFrame || r.url.path?.startsWith("/api/") == true)) runOnUiThread { Pairing.forget(this@MainActivity); showPairing("The pairing token is no longer valid (it was regenerated). Pair again.") }
                 }
             }
             loadUrl(link)
@@ -78,6 +83,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPairing(error: String?) {
+        boardShown = false; scanPreview = null; scanning = false
         root.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 48, 32, 32) }
         val msg = TextView(this).apply { text = error ?: "Scan the QR from “JustCode: Show Phone Pairing”, or paste the link."; textSize = 15f }
@@ -118,10 +124,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun stopScan() { scanning = false; try { ProcessCameraProvider.getInstance(this).get().unbindAll() } catch (_: Exception) {} }
     override fun onPause() { stopScan(); super.onPause() }
+    override fun onResume() {
+        super.onResume()
+        if (firstResume) { firstResume = false; return }
+        // A token regenerated while the board is open can't be seen by the page's own fetches, so check again.
+        if (boardShown) connect()
+        else { val p = scanPreview; val cb = scanCb; if (p != null && cb != null && p.visibility == View.VISIBLE) startScan(p, cb) }
+    }
     override fun onDestroy() { stopScan(); super.onDestroy() }
 
     private fun startScan(preview: PreviewView, onCode: (String) -> Unit) {
-        preview.visibility = View.VISIBLE; scanning = true
+        preview.visibility = View.VISIBLE; scanning = true; scanPreview = preview; scanCb = onCode
         val fut = ProcessCameraProvider.getInstance(this)
         fut.addListener({
             val scanner = BarcodeScanning.getClient()
