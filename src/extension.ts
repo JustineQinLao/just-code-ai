@@ -10,7 +10,7 @@ import * as g from './git';
 import { claudeBin, claudeEnv, discoverAgents, discoverSkills, sessionLog } from './claude';
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
-import { syncSkill } from './skill';
+import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
 
@@ -40,25 +40,45 @@ export function activate(context: vscode.ExtensionContext) {
   const runnerSettings = (): RunnerSettings => ({
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
-    taskEffort: setting('taskEffort', 'low'), plannerEffort: setting('plannerEffort', 'low'), subagents: setting('allowSubagents', false),
+    taskEffort: setting('taskEffort', 'low'), plannerModel: setting('plannerModel', 'opus'), plannerEffort: setting('plannerEffort', 'low'), subagents: setting('allowSubagents', false),
     personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
     checks: setting('checks', 'auto'), setup: setting('folderSetup', 'auto'), maxCheckRounds: setting('maxCheckRounds', 3), checkTimeoutMinutes: setting('checkTimeoutMinutes', 10),
     review: { auto: setting('autoReview', true), model: setting('reviewModel', 'sonnet'), effort: setting('reviewEffort', 'medium'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },
   });
 
+  const recent = new Map<string, number>(); // notification text → when it was last shown (no repeats within a minute)
   const runnerFor = (root: string) => {
     let r = runners.get(root);
     if (r) return r;
     r = new Runner(new Store(root), {
       bin, env, settings: runnerSettings, limits, cli: path.join(context.extensionPath, 'out', 'cli.js'),
-      notify: (level, text, taskId) => {
+      notify: (level, text, taskId, toast) => {
         out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] ${level}: ${text}`);
-        // On screen, the board already shows it; only errors and "needs you" are worth a toast then.
-        if (panel?.visible && current === root && level === 'info') return;
-        if (panel?.visible && current === root && level === 'warn' && taskId) return;
+        // A toast only for what you can act on (a question, ready to merge, a failure); the rest is in the output log.
+        // When the board shows this project, the card already says it: no toast for that task.
+        // justCode.notifications: actionable (default), errors, off. VS Code's guidelines: only when necessary, never
+        // repeated, always with a way to turn them off.
+        const pref = setting<string>('notifications', 'actionable');
+        if (pref === 'off' || (pref === 'errors' && level !== 'error')) return;
+        if (!toast && level !== 'error') return;
+        if (taskId && panel?.visible && current === root) return;
+        const key = `${root}\n${text}`, now = Date.now();
+        if ((recent.get(key) ?? 0) > now - 60_000) return;
+        recent.set(key, now);
         const show = level === 'error' ? vscode.window.showErrorMessage : level === 'warn' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
-        show(text, ...(taskId ? ['Show'] : [])).then(c => { if (c) { setCurrent(root); open(taskId); } });
+        const action = taskId ? 'Open task' : level === 'error' ? 'Show log' : undefined;
+        const mute = "Don't show again";
+        show(text, ...(action ? [action] : []), mute).then(c => {
+          if (c === 'Open task') { setCurrent(root); open(taskId); }
+          else if (c === 'Show log') out.show(true);
+          else if (c === mute) {
+            const next = level === 'error' ? 'off' : 'errors';
+            void vscode.workspace.getConfiguration('justCode').update('notifications', next, vscode.ConfigurationTarget.Global);
+            void vscode.window.showInformationMessage(next === 'off' ? 'JustCode notifications are off.' : 'JustCode now notifies only on errors.', 'Undo')
+              .then(u => { if (u) void vscode.workspace.getConfiguration('justCode').update('notifications', pref, vscode.ConfigurationTarget.Global); });
+          }
+        });
       },
       choose: async (text, ...buttons) => vscode.window.showWarningMessage(text, { modal: true }, ...buttons),
     });
@@ -160,10 +180,10 @@ export function activate(context: vscode.ExtensionContext) {
       version: context.extension.packageJSON.version,
       queue: r.queueInfo(),
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
-      skills: discoverSkills(r.root),
+      skills: discoverSkills(r.root, setting('personalSetup', false)),
       sources: A.loadSources(r.root),
       detectedChecks: C.detectChecks(r.root),
-      settings: { ...s, defaultMode: setting('defaultMode', 'auto'), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
+      settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       planner: r.plannerLive(),
       guideSeen: context.globalState.get('guideSeen', false),
       all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({
@@ -223,7 +243,7 @@ export function activate(context: vscode.ExtensionContext) {
   };
 
   const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
-  const confirmBypass = () => confirm('Allow everything: this task runs with NO approvals. It can run any command and change any file it can reach, including outside its folder. Use it only for work you trust.', 'Allow everything');
+  const confirmBypass = () => confirm('Bypass permissions: this task runs with NO approvals. It can run any command and change any file it can reach, including outside its folder. Use it only for work you trust.', 'Bypass permissions');
 
   async function handle(m: any) {
     switch (m.type) {
@@ -334,6 +354,7 @@ export function activate(context: vscode.ExtensionContext) {
         try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
       }) }); return;
       case 'planner': r.defaultMode = setting('defaultMode', 'auto'); await r.startPlanner(m.instruction, m.ids ?? []).catch(e => vscode.window.showErrorMessage(e.message)); return;
+      case 'plannerAnswer': r.plannerAnswer({ id: m.ask, choice: m.choice, message: m.message, answers: m.answers }); return;
       case 'plannerSay': try { r.plannerSay(m.text); } catch (e: any) { vscode.window.showErrorMessage(e.message); } return;
       case 'stopPlanner': r.stopPlanner(); return;
       case 'applyProposals': r.defaultMode = setting('defaultMode', 'auto'); r.applyProposals(m.changes, m.removes); return;
@@ -463,8 +484,8 @@ export function activate(context: vscode.ExtensionContext) {
   async function initialize(r: Runner) {
     const file = installSkill();
     if (!file) return;
-    const task = r.store.addTask({ title: '/just-code-ai-sync', description: 'Set up this project for Claude (agents, skills, CLAUDE.md, TASKS.md) where missing, then sync TASKS.md into the board.',
-      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/setup/**)', 'Bash(ls:*)', `Bash(node ${q(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`, `Bash(node ${q(path.join(context.extensionPath, 'out', 'cli.js'))} setup:*)`] });
+    const task = r.store.addTask({ title: 'Set up this project for Claude', description: 'Set up this project: Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve. Then it syncs TASKS.md (with sprints) into the board.',
+      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/setup/**)', 'Bash(ls:*)', `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`, `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} setup:*)`] });
     await r.run(task.id);
     open(task.id);
   }

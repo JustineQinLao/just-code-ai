@@ -5,11 +5,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { parseVerdict, carryOver, claudeEnv } from '../claude';
+import { parseVerdict, carryOver, claudeEnv, parseProposals, taskText } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store } from '../store';
-import { parseTasks } from '../tasksmd';
+import { parseTasks, syncTasks } from '../tasksmd';
 import { Session } from '../session';
+import { cliCommand, syncSkill } from '../skill';
 import * as g from '../git';
 import * as A from '../artifacts';
 
@@ -111,6 +112,37 @@ test('TASKS.md parsing', () => {
   const t = parseTasks('## Sprint 1\n- [ ] Login\n  with email\n- [x] Setup\n## Backlog\n- [~] Search');
   assert.deepEqual(t.map(x => [x.title, x.status, x.sprint]), [['Login', 'todo', 'Sprint 1'], ['Setup', 'done', 'Sprint 1'], ['Search', 'doing', undefined]]);
   assert.equal(t[0].description, 'with email');
+});
+
+test('TASKS.md: sprint goals, Done when checklists, sprints created on sync', () => {
+  const md = '## Sprint 1: Auth basics\n- [ ] Login\n  Goal: sign in with email\n  Done when:\n  - wrong password shows an error\n  - npm test passes\n## Sprint 2 — Search\n- [ ] Search\n## Backlog\n- [ ] Later';
+  const t = parseTasks(md);
+  assert.deepEqual(t.map(x => [x.title, x.sprint, x.sprintGoal]), [['Login', 'Sprint 1', 'Auth basics'], ['Search', 'Sprint 2', 'Search'], ['Later', undefined, undefined]]);
+  assert.equal(t[0].description, 'Goal: sign in with email\nDone when:\n- wrong password shows an error\n- npm test passes');
+  const root = tmp(), file = path.join(root, 'TASKS.md');
+  fs.writeFileSync(file, md);
+  const s = new Store(root);
+  const dry = syncTasks(s, file, true);
+  assert.deepEqual(dry.sprints, ['Sprint 1: Auth basics', 'Sprint 2: Search']);
+  assert.equal(s.data.sprints.length, 0);
+  syncTasks(s, file, false);
+  assert.deepEqual(s.data.sprints.map(x => [x.name, x.goal]), [['Sprint 1', 'Auth basics'], ['Sprint 2', 'Search']]);
+  const login = s.data.tasks.find(x => x.title === 'Login')!;
+  assert.equal(login.sprintId, s.data.sprints[0].id);
+  assert.equal(login.mode, 'auto');
+  assert.equal(s.data.tasks.find(x => x.title === 'Later')!.sprintId, undefined);
+  assert.deepEqual(syncTasks(s, file, false).sprints, []);  // existing sprints are reused
+  s.dispose();
+});
+
+test('planner proposals: goal, files, done-when and sprint', () => {
+  const text = 'Thoughts.\n```tasks\n[{"ref":"a1","title":"Login","goal":"Sign in","files":["src/auth.ts"],"done":["bad password errors","npm test passes"],"sprint":"Sprint 1: Auth"},{"title":"Logout"}]\n```';
+  const p = parseProposals(text, new Set(['a1']))!;
+  assert.equal(p[0].ref, 'a1');
+  assert.equal(p[0].sprint, 'Sprint 1: Auth');
+  assert.equal(p[0].description, 'Goal: Sign in\nFiles: src/auth.ts\nDone when:\n- bad password errors\n- npm test passes');
+  assert.equal(p[1].description, undefined);
+  assert.equal(taskText({ goal: 'x', done: [] }), 'Goal: x');
 });
 
 test('git: secrets stay out, orphan task folders are pruned', async () => {
@@ -317,4 +349,14 @@ test('requestRun: honors the one-at-a-time limit, queues the rest', async () => 
   await r.requestRun(b.id);
   assert.deepEqual(runCalls, [b.id]);
   r.dispose();
+});
+
+test('setup skill: its commands match the setup task\'s allow rules', () => {
+  const cli = '/Users/me/.vscode/extensions/just code/out/cli.js';
+  const rule = `Bash(${cliCommand(cli)} sync:*)`;
+  const skill = syncSkill(cli);
+  assert.ok(skill.includes(`${cliCommand(cli)} sync --dry-run`));
+  assert.ok(skill.includes('disable-model-invocation: true'));
+  assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync --dry-run` }), true);
+  assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync && rm -rf x` }), false);
 });

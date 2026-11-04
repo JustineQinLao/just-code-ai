@@ -129,7 +129,7 @@ export class Session {
       env: { ...o.env, ...OUTPUT_CAPS, ...(o.subagents ? { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' } : {}) },
       systemPrompt: systemPrompt(o.append ?? TASK_APPEND),
       permissionMode: o.mode as Sdk.PermissionMode,
-      // Lets the user switch a running task to Allow everything; it does not turn that mode on by itself.
+      // Lets the user switch a running task to Bypass permissions; it does not turn that mode on by itself.
       allowDangerouslySkipPermissions: true,
       settingSources: settingSources(!!o.personal),
       ...(o.settingsFile ? { settings: o.settingsFile } : {}),
@@ -143,6 +143,8 @@ export class Session {
       ...(o.resume ? { resume: o.sessionId } : { sessionId: o.sessionId }),
       abortController: this.ac,
       agentProgressSummaries: true,
+      // Question options may carry a Markdown preview (a file list, a layout sketch); the card shows it.
+      toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       canUseTool: (tool, input, opt) => this.permission(tool, input, opt as any),
       stderr: (s: string) => { if (/error/i.test(s)) this.step({ kind: 'error', text: s.trim().slice(0, 400) }); },
     };
@@ -274,7 +276,7 @@ export class Session {
 
   /* ---------- permissions and questions ---------- */
 
-  private async permission(tool: string, input: Record<string, unknown>, opt: { signal: AbortSignal; suggestions?: Suggestion[]; decisionReason?: string; blockedPath?: string; toolUseID?: string }): Promise<Sdk.PermissionResult> {
+  private async permission(tool: string, input: Record<string, unknown>, opt: { signal: AbortSignal; suggestions?: Suggestion[]; decisionReason?: string; blockedPath?: string; toolUseID?: string; suppressAlwaysAllowRule?: boolean }): Promise<Sdk.PermissionResult> {
     // A rule approved on another card while this session runs.
     if (tool !== 'AskUserQuestion' && allowedBy(this.o.rules(), tool, input)) return { behavior: 'allow', updatedInput: input };
     // The task's mode as the user set it. Claude Code may still ask in some cases (a protected path, a mode switch it
@@ -282,7 +284,7 @@ export class Session {
     if (tool !== 'AskUserQuestion' && autoApproves(this.mode, tool)) return { behavior: 'allow', updatedInput: input };
     const id = opt.toolUseID ?? randomUUID();
     const isQuestion = tool === 'AskUserQuestion';
-    const always = isQuestion ? undefined : alwaysChoice(opt.suggestions);
+    const always = isQuestion || opt.suppressAlwaysAllowRule ? undefined : alwaysChoice(opt.suggestions);
     const ask: Ask = isQuestion
       ? { id, kind: 'question', tool, detail: '', questions: normalizeQuestions(input.questions), at: Date.now() }
       : tool === 'ExitPlanMode'
@@ -302,7 +304,7 @@ export class Session {
     this.changed();
     if (isQuestion) {
       if (answer.choice === 'deny' || !answer.answers) return { behavior: 'deny', message: answer.message || 'The user did not answer.' };
-      return { behavior: 'allow', updatedInput: { ...input, answers: answer.answers } };
+      return { behavior: 'allow', updatedInput: { ...input, questions: input.questions, answers: answer.answers } };
     }
     if (answer.choice === 'deny') return { behavior: 'deny', message: answer.message?.trim() || 'The user denied this.', interrupt: false };
     if (answer.choice === 'always' && always) {
@@ -339,7 +341,7 @@ export class Session {
   }
 
   // Switches the running session's mode. Requests already waiting on the card that the new mode would not ask
-  // about are approved at once (Allow everything: all of them; Auto-edit: file edits).
+  // about are approved at once (Bypass permissions: all of them; Edit automatically: file edits).
   async setMode(mode: string) {
     this.mode = mode;
     if (this.q && !this.ended) {

@@ -28,28 +28,31 @@ Type what you want in the box at the top:
 
 - **Enter** adds the task to **To do**.
 - **⌘/Ctrl+Enter** adds it and starts it.
-- **More ▾** opens the extra fields:
-  - **Details**: acceptance criteria, links. Paste screenshots here; Claude reads them first.
-  - **Agent**: an agent from `.claude/agents` (yours or the project's). *Default* is plain Claude.
-  - **Permissions**: see section 4.
-  - **Runs in**:
-    - *Own branch* (default): the task works in an isolated copy. You review and merge the result.
-    - *Project folder*: the task runs in the project itself. Use it for deploys, syncs and releases; finish it with
-      **✓ Done**.
-  - **Goes to**: the backlog, or a sprint.
-- **Skill chips** (`/deploy`, `/test`…) come from `.claude/skills` and `.claude/commands`. Click one to add it to the
-  task.
+- **Add** does the same as Enter.
+- **Details ▾** opens the extra fields:
+  - **Goal and details**: links and context. Paste screenshots here; Claude reads them first.
+  - **Done when**: one check per line. The AI reviewer checks the work against this list.
+  - **📎 Attach files**, and **Goes to**: the backlog, or a sprint.
+  - **Skill chips** (`/deploy`, `/test`…): skills the task can use, from the project's `.claude/skills` and
+    `.claude/commands` (your personal ones too when *Your personal Claude setup in tasks* is on). Hover for the
+    description; click to add it to the task.
+  - **Advanced**:
+    - **Agent**: an agent from `.claude/agents`. *Default* is plain Claude.
+    - **Permissions**: see section 4.
+    - **Runs in**: *Own branch* (default, reviewed and merged) or *Project folder* (for deploys, syncs and
+      releases; finish it with **✓ Done**).
 
-**Plan with Claude / Edit with AI.** Both open a **planning chat** in the drawer that you can keep talking to:
-- **✦ Plan with Claude** (toolbar): describe a goal; Claude reads the code and proposes new tasks.
-- **✦ Edit To do** (toolbar): rework every To do task. **Details → ✦ Edit with AI** does one task (it may split it).
+**✦ Plan** (toolbar) is the one way to plan with Claude. Describe a goal, and tick *Also rework the To do tasks* to
+reword, split, merge or reorder the existing ones too. Claude reads the code read-only and, when the goal is unclear,
+asks you 2-4 questions in the panel first. It proposes tasks with a goal, likely files and a *Done when* checklist,
+grouped into sprints with a goal each.
 
-The chat shows Claude's activity and a message box. Keep refining ("split the second one", "add a task for X"). Claude
-keeps a **proposed task list** at the bottom, each item tagged NEW, EDIT, keep or REMOVE with a checkbox; press **Apply
-the ticked tasks** when you are happy. The chat is read-only (it never changes code) and stays open while you work.
+The chat opens in the drawer. Keep refining ("split the second one", "add a task for X"). The proposed task list at the
+bottom tags each item NEW, EDIT, keep or REMOVE, with its sprint and a checkbox. Press **Apply the ticked tasks** when
+you are happy: sprints Claude named are created if needed. While a chat is open, ✦ Plan reopens it.
 
-**Plan with Claude.** Describe a goal. Claude reads the code without changing anything and proposes small tasks in
-build order. You pick which to add.
+In a project without `CLAUDE.md`, a reviewer agent or `TASKS.md`, the Plan dialog offers **Set up project** first: Claude
+interviews you, shows the files it will write, and writes them after you approve (see the README).
 
 ## 3. While a task runs
 
@@ -81,10 +84,10 @@ Each task has a permission mode. You can change it in the task panel at any time
 | Mode | What Claude may do without asking |
 |---|---|
 | **Auto** (default) | Whatever Claude's safety classifier judges safe. It asks only when unsure. |
-| **Auto-edit** | Edit files. Commands outside your rules ask. |
-| **Ask me** | Nothing outside your rules. |
-| **Plan only** | Read only, and it changes nothing. |
-| **Allow everything ⚠** | Anything: no approvals at all. You confirm each time you choose it. |
+| **Edit automatically** | Edit files. Commands outside your rules ask. |
+| **Manual** | Nothing outside your rules. |
+| **Plan** | Read only, and it changes nothing. |
+| **Bypass permissions ⚠** | Anything: no approvals at all. You confirm each time you choose it. |
 
 When Claude asks, the card moves to **Needs you** and the status bar shows a bell. The card offers three answers:
 
@@ -152,7 +155,7 @@ admin must turn Remote Control on.
 
 ## 8. Agent map
 
-**Agent map** (top right) shows everything at work, grouped by project and then by task:
+**Agent map** (under **⋯** next to Run all) shows everything at work, grouped by project and then by task:
 
 - each task's own session;
 - every subagent it started;
@@ -174,7 +177,7 @@ Claude's own servers. When a limit is reached:
 **📎 Sources** (toolbar) holds the material tasks are based on: specs, designs, API docs, data files, folders and
 links. Each source has a one-line note that Claude reads first. When you add a task:
 
-- every source is listed in its brief by default (untick one under *More ▾ → Based on* to leave it out);
+- every source is listed in its brief by default (untick one under *Details ▾ → Based on* to leave it out);
 - **📎 Attach files…** adds files that only this task needs.
 
 Every task keeps short notes. Open them under **Details → Artifacts**:
@@ -182,7 +185,7 @@ Every task keeps short notes. Open them under **Details → Artifacts**:
 | Artifact | Written by | Read by |
 |---|---|---|
 | Brief | JustCode: the task, its sources, where to write the handoff | the builder |
-| Plan | Claude, in *Plan only* mode. Approve it on the card with **Build it**, or **Revise…** | the builder, the reviewer |
+| Plan | Claude, in *Plan* mode. Approve it on the card with **Build it**, or **Revise…** | the builder, the reviewer |
 | Handoff | Claude at the end of each turn: what changed, the commands it ran and their results | the reviewer, fix rounds |
 | Review notes | JustCode: the reviewer's last verdict | fix rounds |
 | Project history | JustCode on each merge | later tasks |

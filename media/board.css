@@ -228,3 +228,15 @@ table.rep { width: 100%; border-collapse: collapse; font-size: 12px; }
 .proppanel h4 { margin: 0 0 6px; }
 .refrow.same { opacity: .55; }
 .applied { margin-top: 12px; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+
+/* Advanced options and logs, folded away until needed */
+details.adv { border-top: 1px solid var(--line); padding-top: 6px; }
+details.adv > summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+details.adv[open] > summary { margin-bottom: 6px; }
+.banner .grow { flex: 1; min-width: 200px; }
+
+/* ⋯ menu */
+.menu { display: grid; gap: 4px; min-width: 320px; }
+.menuitem { display: grid; gap: 2px; text-align: left; white-space: normal; padding: 8px 10px; background: transparent; border: 1px solid transparent; border-radius: 6px; }
+.menuitem:hover { background: var(--card); border-color: var(--line); }
+.rbody .small, .card .desc { white-space: pre-line; }

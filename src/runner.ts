@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
+import { syncSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult } from './claude';
 import * as A from './artifacts';
@@ -29,7 +30,7 @@ export interface RunnerSettings {
   worktreeCopy: string[];
   idleMinutes: number;
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
-  taskEffort: string; plannerEffort: string; subagents: boolean;
+  taskEffort: string; plannerModel: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
   checks: string;           // 'auto', '' (off) or commands, one per line
   setup: string;            // task folder setup: 'auto', '' (off) or a command
@@ -43,7 +44,9 @@ export interface RunnerDeps {
   env(): Record<string, string>;
   settings(): RunnerSettings;
   limits: Limits;
-  notify(level: 'info' | 'warn' | 'error', text: string, taskId?: string): void;
+  // toast: show a VS Code notification (errors always do). Everything else only goes to the JustCode output log,
+  // so notifications are kept for things you can act on.
+  notify(level: 'info' | 'warn' | 'error', text: string, taskId?: string, toast?: boolean): void;
   // A modal question; resolves to the chosen button, or undefined when dismissed.
   choose(text: string, ...buttons: string[]): Promise<string | undefined>;
   cli: string; // out/cli.js, for the reviewer's screenshot command
@@ -119,7 +122,7 @@ export class Runner {
     if (await g.isRepo(this.root)) {
       const { removed, kept } = await this.serial(() => g.pruneOrphans(this.root, keep)).catch(() => ({ removed: [], kept: [] as string[] }));
       if (removed.length) this.d.notify('info', `Cleaned up ${removed.length} leftover task folder(s) in .justcode/worktrees.`);
-      if (kept.length) this.d.notify('warn', `.justcode/worktrees has ${kept.length} folder(s) with uncommitted work that belong to no task: ${kept.join(', ')}. Check them, then delete them.`);
+      if (kept.length) this.d.notify('warn', `.justcode/worktrees has ${kept.length} folder(s) with uncommitted work that belong to no task: ${kept.join(', ')}. Check them, then delete them.`, undefined, true);
     }
     // Tasks that were mid-turn when the window closed continue where they stopped.
     for (const t of this.store.data.tasks) {
@@ -200,7 +203,7 @@ export class Runner {
     // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
     const sources = A.loadSources(this.root);
-    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), prompt].filter(Boolean).join('\n\n');
+    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), t.init ? syncSkillBody(this.d.cli) : '', prompt].filter(Boolean).join('\n\n');
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
     const carry = carryOver(this.root, cwd);
@@ -217,7 +220,7 @@ export class Runner {
     this.sessions.set(id, s);
     s.on('change', () => this.changed());
     s.on('ask', a => { if (a.kind === 'plan' && a.plan) try { A.writePlan(this.root, id, a.plan); } catch { /* the card still shows it */ } });
-    s.on('ask', a => this.d.notify('warn', `"${task.title}" needs you: ${a.kind === 'question' ? 'Claude has a question' : `${a.tool} ${a.detail}`.slice(0, 120)}`, id));
+    s.on('ask', a => this.d.notify('warn', `"${task.title}" needs you: ${a.kind === 'question' ? 'Claude has a question' : `${a.tool} ${a.detail}`.slice(0, 120)}`, id, true));
     s.onRules(rules => { this.store.addRules(rules); this.d.notify('info', `Approved for every task in ${path.basename(this.root)}: ${rules.join(', ')}`); });
     s.on('rate', info => this.d.limits.update(info));
     s.on('running', () => {
@@ -376,7 +379,7 @@ export class Runner {
       results: results.map(r => ({ name: r.name, cmd: r.cmd, ok: r.ok, ms: r.ms, tail: r.tail || undefined, preexisting: r.preexisting, timedOut: r.timedOut })) } });
     if (!real.length) return 'pass';
     if (rounds > set.maxCheckRounds) {
-      this.d.notify('warn', `"${t.title}": checks still fail after ${rounds - 1} fix rounds. Details are on the card.`, id);
+      this.d.notify('warn', `"${t.title}": checks still fail after ${rounds - 1} fix rounds. Details are on the card.`, id, true);
       return 'fail';
     }
     await this.sendChecks(id);
@@ -595,7 +598,7 @@ export class Runner {
         A.writeReview(this.root, id, v, attempts + 1);
         this.reviews.delete(id);
         if (o.autoMerge) { await this.merge(id, true); return; }
-        this.d.notify('info', `"${t.title}" needs no AI review (${tri.why}). Ready to merge.`, id);
+        this.d.notify('info', `"${t.title}" needs no AI review (${tri.why}). Ready to merge.`, id, true);
         return;
       }
       const model = tri.level === 'light' && o.lightModel ? o.lightModel : o.model;
@@ -656,13 +659,13 @@ export class Runner {
         this.store.updateTask(id, { review: { ...lv, state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
         this.reviews.delete(id);
         if (o.autoMerge && v.risk !== 'critical') { await this.merge(id, true); return; }
-        this.d.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id);
+        this.d.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id, true);
         return;
       }
       const n = attempts + 1;
       this.store.updateTask(id, { review: { ...lv, state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
       this.reviews.delete(id);
-      if (n >= o.maxAttempts) return this.d.notify('warn', `"${t.title}" failed AI review ${n} times. The issues are on the card.`, id);
+      if (n >= o.maxAttempts) return this.d.notify('warn', `"${t.title}" failed AI review ${n} times. The issues are on the card.`, id, true);
       await this.sendIssues(id);
     } finally {
       if (this.reviews.get(id)?.ac === ac) this.reviews.delete(id);
@@ -671,7 +674,7 @@ export class Runner {
     if (after === 'retry') return this.review(id, true, retry + 1);
     if (after === 'merge') {
       const err = this.store.task(id)?.review?.error;
-      this.d.notify('warn', `The AI review of "${t.title}" could not run twice (${err}). Merged without a finished review, as set.`, id);
+      this.d.notify('warn', `The AI review of "${t.title}" could not run twice (${err}). Merged without a finished review, as set.`, id, true);
       this.store.updateTask(id, { review: { ...this.store.task(id)!.review!, unreviewed: true } });
       await this.merge(id, true);
     }
@@ -707,14 +710,14 @@ export class Runner {
       const conflicts = await g.syncWithBase(t.worktree, t.base);
       if (conflicts.length) {
         this.store.updateTask(id, { conflicts, status: 'review' });
-        this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id);
+        this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id, true);
         return;
       }
       await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
       try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
       await this.cleanup(t);
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
-      this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`);
+      this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
     });
   }
 
@@ -732,7 +735,7 @@ export class Runner {
       if (left.length) throw new Error(`Conflict markers still in: ${left.join(', ')}`);
       if (await g.merging(t.worktree)) await g.finishResolve(t.worktree);
       this.store.updateTask(id, { conflicts: undefined });
-      this.d.notify('info', `Conflicts resolved for "${t.title}". Merge it when ready.`);
+      this.d.notify('info', `Conflicts resolved for "${t.title}". Merge it when ready.`, id);
     });
   }
 
@@ -786,7 +789,8 @@ export class Runner {
   plannerLive() {
     const s = this.planner;
     if (!s?.open && !this.plannerProposals) return undefined;
-    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0, note: this.plannerNote };
+    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0, note: this.plannerNote,
+      asks: s?.open ? [...s.asks.values()].filter(a => a.kind === 'question') : [] };
   }
 
   async startPlanner(instruction: string, targetIds: string[]) {
@@ -800,7 +804,7 @@ export class Runner {
     const tasks = targetIds.map(id => this.store.task(id)).filter((t): t is Task => !!t);
     const set = this.d.settings();
     const s = new Session({
-      bin, cwd: this.root, sessionId: randomUUID(), resume: false, mode: 'plan', model: this.d.settings().taskModel || undefined,
+      bin, cwd: this.root, sessionId: randomUUID(), resume: false, mode: 'plan', model: set.plannerModel || undefined,
       append: PLANNER_APPEND, readOnly: true, effort: set.plannerEffort || undefined,
       allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup,
     });
@@ -808,8 +812,11 @@ export class Runner {
     s.on('change', () => this.changed());
     s.on('rate', info => this.d.limits.update(info));
     s.on('turn', turn => { this.onPlannerTurn(turn); });
+    // Questions show in the planning panel. The chat stays in plan mode: a request to leave it is declined.
+    s.on('ask', a => { if (a.kind !== 'question') setImmediate(() => s.answer({ id: a.id, choice: 'deny', message: 'This is a planning chat. Stay read-only and reply with the proposed task list.' })); });
     s.on('exit', () => this.changed());
-    await s.start(plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction));
+    const sprints = this.store.data.sprints.filter(x => !x.closed).map(x => ({ name: x.name, goal: x.goal }));
+    await s.start(plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints));
     this.changed();
   }
 
@@ -822,6 +829,8 @@ export class Runner {
     this.changed();
   }
 
+  plannerAnswer(a: Answer) { this.planner?.answer(a); }
+
   plannerSay(text: string) {
     if (!this.planner?.open) throw new Error('The planning chat has ended. Start it again.');
     this.planner.send(text);
@@ -829,8 +838,8 @@ export class Runner {
   stopPlanner() { this.planner?.kill(); this.planner = undefined; this.plannerProposals = undefined; this.plannerTargets = []; this.changed(); }
 
   // Applies the proposals the user kept: edits, adds (in order), removes, reorder of the To do tasks.
-  // sprintId: where new tasks land. Editing tasks keeps their sprint; a fresh plan uses the active sprint (so the
-  // tasks appear where you work) or the backlog.
+  // Where a task lands: the sprint Claude named (created when the board has no open sprint of that name), else an
+  // edited task keeps its sprint, and a fresh plan uses the active sprint (so the tasks appear where you work).
   applyProposals(changes: (RefineResult & { kind: string; apply?: boolean })[], removes: { id: string; apply?: boolean }[]) {
     const sprintId = this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean)
       ?? (this.plannerTargets.length ? undefined : this.store.data.sprints.find(s => s.active && !s.closed)?.id);
@@ -838,8 +847,9 @@ export class Runner {
     let added = 0, edited = 0, removed = 0;
     for (const c of changes) {
       if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; }
-      if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined }); orderIds.push(c.ref); edited++; }
-      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: sprintId || undefined, mode: this.defaultMode }); orderIds.push(t.id); added++; }
+      const named = this.sprintFor(c.sprint);
+      if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined, ...(named ? { sprintId: named } : {}) }); orderIds.push(c.ref); edited++; }
+      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: named ?? (sprintId || undefined), mode: this.defaultMode }); orderIds.push(t.id); added++; }
     }
     for (const rm of removes) if (rm.apply) { void this.remove(rm.id); removed++; }
     const after = this.store.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !this.plannerTargets.includes(t.id));
@@ -852,6 +862,16 @@ export class Runner {
     this.changed();
   }
   defaultMode: Task['mode'] = 'auto';  // set by the extension from justCode.defaultMode
+
+  // "Sprint 2: Search" → the open sprint named "Sprint 2", created with goal "Search" when there is none.
+  private sprintFor(label?: string) {
+    if (!label) return undefined;
+    const m = /^(.*?)\s*(?:[:—–]\s*|\s-\s)(.*)$/.exec(label);
+    const name = (m ? m[1] : label).trim(), goal = m?.[2].trim() || undefined;
+    if (!name) return undefined;
+    const k = (x: string) => x.toLowerCase().replace(/\s+/g, ' ').trim();
+    return this.store.data.sprints.find(x => !x.closed && k(x.name) === k(name))?.id ?? this.store.addSprint(name, goal).id;
+  }
 
   dispose() {
     this.disposed = true;

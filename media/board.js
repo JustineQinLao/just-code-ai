@@ -36,7 +36,8 @@
     return el;
   }
   const $ = s => document.querySelector(s);
-  const btn = (label, onclick, cls = '', title) => h('button', { class: cls, onclick: e => { e.stopPropagation(); onclick(e); }, title }, label);
+  // Icon buttons (⚙, ?, ⋯, ×) get their tooltip as an accessible name for screen readers.
+  const btn = (label, onclick, cls = '', title) => h('button', { class: cls, onclick: e => { e.stopPropagation(); onclick(e); }, title, 'aria-label': title && String(label).length <= 2 ? title : undefined }, label);
   const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
   const dur = ms => ms ? ago(Date.now() - ms) : '';
   const tok = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k tokens` : `${n} tokens`;
@@ -49,8 +50,9 @@
   const cachedTotal = t => (t.usage?.build?.cacheRead || 0) + (t.usage?.review?.cacheRead || 0);
   const usageTitle = t => ['build', 'review'].filter(k => t.usage?.[k]).map(k => { const u = t.usage[k]; return `${k}: ${tokShort(fresh(u))} new (written ${u.output}, new input ${u.input + u.cacheWrite}) + ${tokShort(u.cacheRead)} cached re-reads`; }).join('\n');
   const srcLabel = s => s.kind === 'url' ? s.ref.replace(/^https?:\/\//, '').slice(0, 40) : (s.ref.split(/[\\/]/).filter(Boolean).pop() || s.ref) + (s.kind === 'folder' ? '/' : '');
-  const MODES = [['auto', 'Auto', 'Claude approves what is safe, asks when unsure'], ['acceptEdits', 'Auto-edit', 'Edits approved, commands ask'],
-    ['default', 'Ask me', 'Every edit and command asks'], ['plan', 'Plan only', 'Read-only'], ['bypassPermissions', 'Allow everything ⚠', 'No approvals at all']];
+  // Claude Code's own names for its permission modes (code.claude.com/docs/en/permission-modes).
+  const MODES = [['auto', 'Auto', 'A classifier approves safe actions; risky ones ask'], ['acceptEdits', 'Edit automatically', 'File edits and simple file commands approved; other commands ask'],
+    ['default', 'Manual', 'Only reads run; every edit and command asks'], ['plan', 'Plan', 'Read-only'], ['bypassPermissions', 'Bypass permissions ⚠', 'No approvals at all']];
   const modeName = m => (MODES.find(x => x[0] === m) || [m, m])[1];
 
   /* ---------- lanes and what each card says ---------- */
@@ -101,38 +103,40 @@
       h('div', { id: 'projects', class: 'projects' }),
       h('div', { class: 'spacer' }),
       h('div', { id: 'meter', class: 'meter' }),
-      btn('Agent map', () => agentMap(), 'ghost', 'Every Claude session and subagent at work'),
       btn('⚙', () => settings(), 'ghost icon', 'Settings'),
       btn('?', () => guide(), 'ghost icon', 'Guide')),
     h('div', { id: 'banners' }),
     h('section', { class: 'add' },
       h('div', { class: 'addrow' },
-        h('input', { id: 'title', class: 'grow', placeholder: 'What should Claude do?  Enter adds it · ⌘/Ctrl+Enter adds and runs it', onkeydown: e => {
+        h('input', { id: 'title', class: 'grow', placeholder: 'What should Claude do?  Enter adds · ⌘/Ctrl+Enter adds and runs', onkeydown: e => {
           if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTask(e.metaKey || e.ctrlKey); }
         }, onpaste: pasteImages }),
-        btn('More ▾', e => { more = !more; e.target.textContent = more ? 'Less ▴' : 'More ▾'; $('#more').hidden = !more; }, 'ghost'),
-        btn('Add', () => addTask(false)),
-        btn('Add & run', () => addTask(true), 'primary')),
+        btn('Details ▾', () => toggleMore(), 'ghost', 'Details, a "Done when" checklist, files, sprint'),
+        btn('Add', () => addTask(false), 'primary', 'Adds to To do. ⌘/Ctrl+Enter adds and runs it.')),
       h('div', { id: 'more', class: 'more', hidden: true },
-        h('textarea', { id: 'desc', placeholder: 'Details, acceptance criteria, links. Paste screenshots here.', onpaste: pasteImages }),
+        h('textarea', { id: 'desc', rows: 2, placeholder: 'Goal and details. Paste screenshots here.', onpaste: pasteImages }),
+        h('textarea', { id: 'done', rows: 2, placeholder: 'Done when (one check per line), e.g.\nthe toggle persists after a reload\nnpm test passes' }),
         h('div', { id: 'imgs', class: 'imgs' }),
-        h('div', { class: 'row' }, btn('📎 Attach files…', () => post('pickFiles'), 'ghost', 'Files or folders this task is based on (specs, designs, data)'), h('span', { id: 'files', class: 'chips' })),
-        h('div', { id: 'srcpick', class: 'chips' }),
-        h('div', { class: 'row' },
-          h('label', {}, 'Agent ', h('select', { id: 'agent' })),
-          h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
-          h('label', { title: 'Own branch: an isolated copy you review and merge. Project folder: runs in the project itself (deploys, syncs, releases).' }, 'Runs in ',
-            h('select', { id: 'where' }, h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'root' }, 'Project folder'))),
+        h('div', { class: 'row' }, btn('📎 Attach files…', () => post('pickFiles'), 'ghost', 'Files or folders this task is based on (specs, designs, data)'), h('span', { id: 'files', class: 'chips' }),
           h('label', {}, 'Goes to ', h('select', { id: 'sprintSel' }))),
-        h('div', { id: 'skills', class: 'chips' }))),
+        h('div', { id: 'srcpick', class: 'chips' }),
+        h('div', { id: 'skills', class: 'chips' }),
+        h('details', { class: 'adv' }, h('summary', {}, 'Advanced'),
+          h('div', { class: 'row' },
+            h('label', {}, 'Agent ', h('select', { id: 'agent' })),
+            h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
+            h('label', { title: 'Own branch: an isolated copy you review and merge. Project folder: runs in the project itself (deploys, syncs, releases).' }, 'Runs in ',
+              h('select', { id: 'where' }, h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'root' }, 'Project folder'))))))),
     h('div', { id: 'toolbar', class: 'toolbar' }),
     h('main', { id: 'lanes', class: 'lanes' }));
+
+  function toggleMore(on = !more) { more = on; $('#more').hidden = !more; }
 
   function pasteImages(e) {
     const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
     if (!files.length) return;
     e.preventDefault();
-    if (!more) $('#more').hidden = !(more = true);
+    toggleMore(true);
     for (const f of files) {
       const rd = new FileReader();
       rd.onload = () => { images.push({ name: f.name || 'pasted.png', data: rd.result }); drawImages(); };
@@ -140,20 +144,22 @@
     }
   }
   function drawImages() {
-    $('#imgs').replaceChildren(...images.map((im, i) => h('span', { class: 'thumb' }, h('img', { src: im.data }), btn('×', () => { images.splice(i, 1); drawImages(); }, 'x'))));
+    $('#imgs').replaceChildren(...images.map((im, i) => h('span', { class: 'thumb' }, h('img', { src: im.data }), btn('×', () => { images.splice(i, 1); drawImages(); }, 'x', 'Remove'))));
   }
 
   const base = f => f.split(/[\\/]/).filter(Boolean).pop() || f;
   function drawFiles() {
-    $('#files').replaceChildren(...files.map((f, i) => h('span', { class: 'chip', title: f }, base(f), btn('×', () => { files.splice(i, 1); drawFiles(); }, 'x'))));
+    $('#files').replaceChildren(...files.map((f, i) => h('span', { class: 'chip', title: f }, base(f), btn('×', () => { files.splice(i, 1); drawFiles(); }, 'x', 'Remove'))));
   }
   function addTask(start) {
     const title = $('#title').value.trim();
     if (!title) return $('#title').focus();
     const sprint = $('#sprintSel').value;
-    post('addTask', { title, description: $('#desc').value, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
+    const done = $('#done').value.split('\n').map(x => x.trim().replace(/^[-*]\s*/, '')).filter(Boolean);
+    const description = [$('#desc').value.trim(), done.length ? `Done when:\n${done.map(d => `- ${d}`).join('\n')}` : ''].filter(Boolean).join('\n');
+    post('addTask', { title, description, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
       sprintId: sprint || undefined, images, files, sources: (S.sources || []).map(s => s.id).filter(id => !srcOff.has(id)), start });
-    $('#title').value = ''; $('#desc').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
+    $('#title').value = ''; $('#desc').value = ''; $('#done').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
   }
 
   /* ---------- render ---------- */
@@ -214,10 +220,11 @@
     const srcs = S.sources || [];
     $('#srcpick').replaceChildren(...(srcs.length ? [h('span', { class: 'muted small' }, 'Based on:')] : []), ...srcs.map(s => h('label', { class: 'chip', title: s.note || s.ref },
       h('input', { type: 'checkbox', checked: !srcOff.has(s.id), onchange: e => { e.target.checked ? srcOff.delete(s.id) : srcOff.add(s.id); } }), ' ', srcLabel(s))));
-    $('#skills').replaceChildren(...(S.skills.length ? [h('span', { class: 'muted small' }, 'Skills:')] : []), ...S.skills.map(n => h('span', { class: 'chip', title: 'Add to the task', onclick: () => {
-      const t = $('#title'); if (!t.value.trim()) t.value = `/${n}`; else { $('#desc').value += `${$('#desc').value ? '\n' : ''}/${n}`; if (!more) $('#more').hidden = !(more = true); }
-      if (t.value.trim() === `/${n}`) $('#where').value = 'root';
-    } }, `/${n}`)));
+    $('#skills').replaceChildren(...(S.skills.length ? [h('span', { class: 'muted small', title: 'Skills this task can use. Your personal skills appear when "Your personal Claude setup in tasks" is on (⚙).' }, 'Skills:')] : []),
+      ...S.skills.map(({ name: n, description: d }) => h('span', { class: 'chip', title: `${d || 'No description'}\n\nClick to use it in this task.`, onclick: () => {
+        const t = $('#title'); if (!t.value.trim()) t.value = `/${n}`; else $('#desc').value += `${$('#desc').value ? '\n' : ''}/${n}`;
+        if (t.value.trim() === `/${n}`) $('#where').value = 'root';
+      } }, `/${n}`)));
   }
 
   const visible = () => S.board.tasks.filter(t => (showArchived ? t.archived : !t.archived) &&
@@ -236,16 +243,15 @@
       btn('+ Sprint', () => newSprint(), 'ghost'),
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
-      btn('✦ Plan with Claude', () => planDialog(), 'ghost', 'Describe a goal; Claude reads the code and proposes tasks'),
-      (() => { const ed = tasks.filter(t => t.status === 'todo' && !t.worktree); return ed.length ? btn(`✦ Edit To do${ed.length > 1 ? ` (${ed.length})` : ''}`, () => refineDialog(ed.map(t => t.id)), 'ghost', 'Reword, split, merge or reorder the To do tasks with Claude') : ''; })(),
-      btn('📊 Report', () => report(), 'ghost', 'Tokens, rounds and time per task'),
+      btn('✦ Plan', () => S.planner ? openPlanner() : planDialog(tasks.filter(t => t.status === 'todo' && !t.worktree).map(t => t.id)), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
       btn(`📎 Sources${S.sources?.length ? ` (${S.sources.length})` : ''}`, () => sourcesDialog(), 'ghost', 'Specs, designs, docs and links tasks are based on'),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? ` · next waits: “${q.blocker.title.slice(0, 40)}” ${q.blocker.why}` : '',
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
+      showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
       ready.length ? btn(`✓ Merge ready (${ready.length})`, () => post('mergeReady', { ids: ready.map(t => t.id) })) : '',
       btn(`▶ Run all${todo.length ? ` (${todo.length})` : ''}`, () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
-      h('label', { class: 'muted small' }, h('input', { type: 'checkbox', checked: showArchived, onchange: e => { showArchived = e.target.checked; render(); } }), ' Archived'));
+      btn('⋯', () => moreMenu(), 'ghost icon', 'Agent map, report, history, archived tasks'));
   }
 
   const LANES = [['todo', 'To do'], ['work', 'Working'], ['needs', 'Needs you'], ['review', 'Review'], ['done', 'Done']];
@@ -266,6 +272,8 @@
   function card(t, n) {
     const nx = next(t);
     const el = h('article', { class: `card tone-${nx.tone}${open === t.id ? ' sel' : ''}`, draggable: t.status === 'todo' ? 'true' : undefined, 'data-id': t.id,
+      tabindex: '0', role: 'button', 'aria-label': `${t.title}: ${nx.text}`,
+      onkeydown: e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); openTask(t.id); } },
       onclick: () => openTask(t.id), ondragstart: () => { dragId = t.id; }, ondragend: () => { dragId = undefined; },
       ondragover: e => { if (dragId && dragId !== t.id && t.status === 'todo') e.preventDefault(); },
       ondrop: e => { if (dragId && dragId !== t.id && t.status === 'todo') { e.stopPropagation(); post('reorder', { id: dragId, before: t.id }); } } },
@@ -276,7 +284,7 @@
         t.where === 'root' ? h('span', { class: 'tag' }, 'project folder') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
-        usageTotal(t) ? h('span', { class: 'tag', title: usageTitle(t) + '\n(cached context is re-sent at every step and costs about a tenth)' }, `${tokShort(usageTotal(t))} new · ${tokShort(cachedTotal(t))} cached`) : ''),
+        usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}` }, nx.text),
       ...(t.asks || []).map(a => askBox(t, a)),
       nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary'), nx.extra ? btn(nx.extra[0], nx.extra[1], 'ghost') : '') : '');
@@ -318,6 +326,7 @@
   }
 
   function questionBox(t, a) {
+    const reply = x => t.id === '__planner' ? post('plannerAnswer', x) : post('answer', { id: t.id, ...x });
     const picked = a.questions.map(() => new Set());
     const other = a.questions.map(() => '');
     const box = h('div', { class: 'ask', onclick: e => e.stopPropagation() },
@@ -336,9 +345,9 @@
           const answers = {};
           a.questions.forEach((q, i) => { answers[q.question] = other[i].trim() || [...picked[i]].join(', '); });
           if (Object.values(answers).some(v => !v)) return;
-          post('answer', { id: t.id, ask: a.id, choice: 'allow', answers });
+          reply({ ask: a.id, choice: 'allow', answers });
         }, 'primary'),
-        btn('Skip', () => post('answer', { id: t.id, ask: a.id, choice: 'deny', message: 'The user skipped the question. Use your best judgement.' }), 'ghost')));
+        btn('Skip', () => reply({ ask: a.id, choice: 'deny', message: 'The user skipped the question. Use your best judgement.' }), 'ghost')));
     return box;
   }
 
@@ -432,18 +441,18 @@
         h('label', { class: 'blk' }, 'Title', title = h('input', { value: t.title, disabled: !editable })),
         h('label', { class: 'blk' }, 'Details', desc = h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
         editable ? h('div', { class: 'row' }, btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary'),
-          btn('✦ Edit with AI', () => refineDialog([t.id]), 'ghost', 'Claude reads the code and reworks this task (it may split it)')) : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
+          h('span', { class: 'muted small' }, 'To rework it with Claude, use ✦ Plan.')) : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
         t.images?.length ? h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
         t.checks?.results?.length ? h('div', {}, h('h4', {}, `Checks · ${t.checks.state === 'pass' ? 'pass' : 'fail'}${t.checks.rounds ? ` · fix round ${t.checks.rounds}` : ''}`),
           h('ul', { class: 'checks' }, t.checks.results.map(r => h('li', { class: r.ok ? 'ok' : r.preexisting ? 'pre' : 'bad' },
             h('span', { class: 'dot' }, r.ok ? '✓' : r.preexisting ? '○' : '✗'), h('code', {}, r.cmd), h('span', { class: 'muted small' }, ` ${Math.round(r.ms / 1000)}s${r.preexisting ? ' · fails on the base branch too: ignored' : ''}${r.timedOut ? ' · timed out' : ''}`)))),
           btn('Open log', () => post('openArtifact', { id: t.id, which: 'checks' }), 'ghost')) : '',
-        h('h4', {}, 'Artifacts'),
-        h('div', { class: 'row' }, [['plan', 'Plan'], ['brief', 'Brief'], ['handoff', 'Handoff'], ['review', 'Review notes']].map(([k, l]) => btn(`${t.artifacts?.[k] ? '' : '○ '}${l}`, () => post('openArtifact', { id: t.id, which: k }), 'ghost', t.artifacts?.[k] ? 'Open' : 'Not written yet')),
-          btn('Project history', () => post('openArtifact', { id: t.id, which: 'progress' }), 'ghost'), btn('Setup log', () => post('openArtifact', { id: t.id, which: 'setup' }), 'ghost')),
         t.files?.length ? h('p', { class: 'small' }, 'Attached: ', t.files.map(base).join(', ')) : '',
         t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
-        usageTotal(t) ? h('div', {}, h('h4', {}, 'Tokens'), h('pre', { class: 'small' }, usageTitle(t))) : '',
+        h('details', { class: 'adv' }, h('summary', {}, 'Files Claude wrote, logs and tokens'),
+          h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => btn(l, () => post('openArtifact', { id: t.id, which: k }), 'ghost')),
+            t.worktree ? btn('Setup log', () => post('openArtifact', { id: t.id, which: 'setup' }), 'ghost') : ''),
+          usageTotal(t) ? h('pre', { class: 'small' }, usageTitle(t) + '\nCached re-reads are context re-sent at every step and cost about a tenth.') : ''),
         h('p', { class: 'muted small' }, `Created ${new Date(t.created).toLocaleString()}${t.sessionId ? ` · session ${t.sessionId.slice(0, 8)}` : ''}${t.costUsd ? ` · ~$${t.costUsd.toFixed(2)} at API prices` : ''}`),
       ];
     }
@@ -467,7 +476,7 @@
     drawer.classList.add('on');
     document.body.classList.add('drawer-open');
     if (!p) {
-      head.replaceChildren(h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Planning'), btn('×', closeTask, 'ghost icon')));
+      head.replaceChildren(h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Planning'), btn('×', closeTask, 'ghost icon', 'Close')));
       body.replaceChildren(h('p', { class: 'muted' }, 'Starting the planning chat…'));
       return;
     }
@@ -475,11 +484,12 @@
     head.replaceChildren(
       h('div', { class: 'row' }, h('h3', { class: 'grow' }, p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
         btn('×', closeTask, 'ghost icon', 'Close (the chat keeps running)')),
-      h('div', { class: `next ${running ? 'run' : 'muted'}` }, running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
+      h('div', { class: `next ${p.asks?.length ? 'warn' : running ? 'run' : 'muted'}` }, p.asks?.length ? 'Claude has a question for you (below).' : running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
         p.context ? h('span', { class: 'muted small' }, ` · ${tok(p.context)}`) : ''));
     const prop = p.proposals;
     const panel = [];
     if (p.note) panel.push(h('div', { class: 'applied' }, '✓ ', p.note));
+    for (const a of p.asks || []) panel.push(questionBox({ id: '__planner' }, a));
     if (prop) {
       const cur = id => S.board.tasks.find(t => t.id === id);
       const targets = (p.targets || []).map(cur).filter(Boolean);
@@ -497,7 +507,7 @@
         h('div', { class: 'row' }, h('h4', { class: 'grow' }, `Proposed tasks (${prop.length})`), nChange ? h('span', { class: 'muted small' }, `${nChange} change${nChange === 1 ? '' : 's'}`) : ''),
         h('div', { class: 'reflist' }, all.map(c => h('label', { class: `refrow ${c.kind}` },
           c.kind === 'same' ? h('span', { class: 'rspace' }) : h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; } }),
-          h('div', { class: 'rbody' }, h('div', {}, h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE' }[c.kind]), ' ', h('b', {}, c.title)),
+          h('div', { class: 'rbody' }, h('div', {}, h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE' }[c.kind]), ' ', h('b', {}, c.title), c.sprint ? h('span', { class: 'tag' }, ` ${c.sprint}`) : ''),
             c.before && c.before !== c.title ? h('div', { class: 'small muted strike' }, c.before) : '',
             c.description ? h('div', { class: 'small muted' }, c.description) : '')))),
         h('div', { class: 'acts' },
@@ -544,7 +554,7 @@
   /* ---------- dialogs ---------- */
   function dialog(title, ...content) {
     const d = $('#dlg');
-    d.replaceChildren(h('div', { class: 'dlghead' }, h('h3', {}, title), btn('×', () => d.close(), 'ghost icon')), h('div', { class: 'dlgbody' }, content));
+    d.replaceChildren(h('div', { class: 'dlghead' }, h('h3', {}, title), btn('×', () => d.close(), 'ghost icon', 'Close')), h('div', { class: 'dlgbody' }, content));
     if (!d.open) d.showModal();
     return d;
   }
@@ -558,18 +568,39 @@
 
   function openPlanner() { open = '__planner'; remember(); render(); }
 
-  function planDialog() {
-    let goal;
+  // The one way to plan with Claude: new tasks from a goal, or rework the To do list. Offers project setup first
+  // when the project has no Claude setup yet.
+  function planDialog(todoIds) {
+    const pr = S.project || {};
+    const missing = [!pr.claudeMd && 'CLAUDE.md', !pr.agents && 'a reviewer agent', !pr.tasksMd && 'TASKS.md'].filter(Boolean);
+    let goal, rework, chips;
+    const presets = ['Add a "Done when" checklist to each', 'Split anything too big', 'Merge duplicates', 'Order by dependency', 'Group into sprints'];
     dialog('Plan with Claude',
-      h('p', { class: 'muted' }, 'Describe a goal. Claude reads the code (read-only) and proposes small tasks. It opens as a chat: keep talking to refine, then apply the tasks you want.'),
-      goal = h('textarea', { rows: 5, placeholder: 'e.g. Add password reset by email, with tests' }),
-      h('div', { class: 'acts' }, btn('Start planning', () => {
+      missing.length ? h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'Set up this project first? '),
+        `It has no ${missing.join(', ')}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. TASKS.md becomes sprints and tasks on the board.`),
+        btn('Set up project', () => { post('initialize'); $('#dlg').close(); }, 'primary')) : '',
+      h('p', { class: 'muted' }, 'Claude reads the code (read-only) and may ask you a few questions. It proposes tasks with a goal, likely files and a "Done when" checklist, grouped into sprints. Keep chatting to refine, then apply the ones you want.'),
+      goal = h('textarea', { rows: 4, placeholder: todoIds.length ? 'What do you want? e.g. "Add password reset by email" or "split anything too big"' : 'What do you want to build or change? e.g. Add password reset by email, with tests' }),
+      todoIds.length ? h('label', { class: 'row' }, rework = h('input', { type: 'checkbox', onchange: () => { chips.hidden = !rework.checked; } }), ` Also rework the ${todoIds.length} To do task${todoIds.length === 1 ? '' : 's'}`) : '',
+      chips = h('div', { class: 'chips', hidden: true }, presets.map(p => h('span', { class: 'chip', onclick: () => { goal.value = goal.value ? `${goal.value}; ${p}` : p; } }, p))),
+      h('div', { class: 'acts' }, btn('✦ Start planning', () => {
         if (!goal.value.trim()) return goal.focus();
-        post('planner', { instruction: goal.value.trim(), ids: [] });
+        post('planner', { instruction: goal.value.trim(), ids: rework?.checked ? todoIds : [] });
         $('#dlg').close();
         openPlanner();
       }, 'primary')));
     goal.focus();
+  }
+
+  function moreMenu() {
+    const item = (label, help, fn) => h('button', { class: 'menuitem', onclick: () => { $('#dlg').close(); fn(); } }, h('b', {}, label), h('span', { class: 'muted small' }, help));
+    dialog('More',
+      h('div', { class: 'menu' },
+        item('Agent map', 'Every Claude session, subagent and reviewer at work', () => agentMap()),
+        item('Report', 'Tokens, rounds and time per task', () => report()),
+        item('Project history', 'What merged tasks changed', () => post('openArtifact', { which: 'progress' })),
+        item(showArchived ? 'Hide archived tasks' : 'Show archived tasks', 'Archived tasks stay out of the lanes', () => { showArchived = !showArchived; render(); }),
+        item('Set up project with Claude', 'Interview, then CLAUDE.md, a reviewer agent and TASKS.md', () => post('initialize'))));
   }
 
   function settings() {
@@ -594,6 +625,7 @@
     dialog('Settings',
       h('div', { class: 'grid' },
         field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
+        field('notifications', 'Notifications', sel(s.notifications || 'actionable', [['actionable', 'When a task needs me, is ready or failed'], ['errors', 'Only errors'], ['off', 'Off']]), 'The board and the JustCode output log always show everything.'),
         field('maxParallel', 'Tasks running at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
         field('taskModel', 'Task model', models(s.taskModel)),
         field('taskEffort', 'Task thinking', effort(s.taskEffort)),
@@ -625,7 +657,7 @@
       h('div', { class: 'acts' }, btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         post('settings', { values: {
-          defaultMode: f.defaultMode.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
+          defaultMode: f.defaultMode.value, notifications: f.notifications.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
           plannerModel: f.plannerModel.value.trim(), taskEffort: f.taskEffort.value, reviewEffort: f.reviewEffort.value, plannerEffort: f.plannerEffort.value, allowSubagents: f.allowSubagents.value === 'true', maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
           idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
           checks: f.checks.value === 'auto' ? 'auto' : f.checks.value === 'off' ? '' : f.checksCustom.value.trim(),
@@ -663,26 +695,6 @@
       h('div', { class: 'acts' }, btn('Copy as Markdown', () => post('copy', { text: md }))));
   }
 
-  // Ask Claude to rework one task or all To do tasks. The instruction is free text with quick presets.
-  function refineDialog(ids) {
-    const one = ids.length === 1 ? S.board.tasks.find(t => t.id === ids[0]) : undefined;
-    let inst;
-    const presets = one
-      ? ['Add clear acceptance criteria', 'Split this into smaller tasks', 'Add the files and steps to change', 'Make it more specific to this codebase']
-      : ['Add acceptance criteria to each', 'Split any task that is too big', 'Merge duplicates and overlaps', 'Order by build dependency', 'Make each specific to this codebase'];
-    dialog(one ? `Edit “${one.title.slice(0, 50)}” with AI` : `Edit ${ids.length} To do tasks with AI`,
-      h('p', { class: 'muted' }, 'Opens as a chat. Claude reads the code (read-only) and proposes a reworked list; keep talking to refine, then apply the tasks you want.'),
-      inst = h('textarea', { rows: 3, placeholder: 'What should change? e.g. "add acceptance criteria and split anything too big"' }),
-      h('div', { class: 'chips' }, presets.map(p => h('span', { class: 'chip', onclick: () => { inst.value = inst.value ? `${inst.value}; ${p}` : p; } }, p))),
-      h('div', { class: 'acts' }, btn('✦ Start editing', () => {
-        if (!inst.value.trim()) return inst.focus();
-        post('planner', { ids, instruction: inst.value.trim() });
-        $('#dlg').close();
-        openPlanner();
-      }, 'primary')));
-    inst.focus();
-  }
-
   function sourcesDialog() {
     const list = S.sources || [];
     dialog('Sources',
@@ -699,14 +711,15 @@
     const sec = (n, title, ...p) => h('section', { class: 'gsec' }, h('h4', {}, h('span', { class: 'gn' }, n), title), ...p.map(x => typeof x === 'string' ? h('p', {}, x) : x));
     dialog('JustCode in 2 minutes',
       sec(1, 'Set up once', 'The checklist at the top checks Claude Code, your sign-in and git, and fixes what is missing. Any folder works: an existing project, or an empty one (JustCode asks before creating a git repository).'),
-      sec(2, 'Add a task', 'Type what you want and press ⌘/Ctrl+Enter to add and run it. "More" adds details, screenshots (paste them), an agent from .claude/agents, and permissions.'),
+      sec(2, 'Add a task', 'Type what you want. Enter adds it, ⌘/Ctrl+Enter adds and runs it. "Details" adds the goal, a "Done when" checklist the reviewer checks against, screenshots (paste them), files and the sprint. Agent and permissions are under Advanced.'),
+      sec('✦', 'Plan with Claude', '✦ Plan turns a goal into small tasks, or reworks the To do list. Claude reads the code, may ask you a few questions, and proposes tasks with a goal, likely files and "Done when", grouped into sprints. In a new project it offers to set it up first: it interviews you, then writes CLAUDE.md, a reviewer agent and TASKS.md after you approve.'),
       sec(3, 'Claude works on its own branch', 'Every task gets its own copy of the project and its own branch, so your files and other tasks are never touched. Click a card to watch its activity, message Claude, or see its agents.'),
       sec(4, 'Approvals without babysitting', h('p', {}, h('b', {}, 'Auto'), ' (the default) lets Claude approve what is safe and ask only when unsure. A question or approval turns the card yellow under ', h('b', {}, 'Needs you'), ' with buttons: Allow, Always allow (remembered for the whole project), or Deny with a reason.'),
-        'Other modes: Auto-edit (edits approved, commands ask), Ask me (everything asks), Plan only, Allow everything (no approvals; only for trusted work).'),
+        'Other modes: Edit automatically (edits approved, commands ask), Manual (everything asks), Plan, Bypass permissions (no approvals; only for trusted work).'),
       sec(5, 'Review and merge', 'When Claude finishes, its work is committed and an AI reviewer runs the tests and checks the diff. Issues go back to Claude automatically. When the review passes, press ✓ Merge (or turn on automatic merging in ⚙). Conflicts stay on the task\'s branch until you or Claude resolve them.'),
       sec(6, 'Run a whole list', '▶ Run all runs every To do task in board order (drag cards to reorder), one at a time by default so each builds on the last merged one. Turn on automatic merging and a sprint runs unattended.'),
       sec(7, 'Continue on your phone', '📱 Continue on phone (in a task) moves its session to Claude Code Remote Control: open the Claude app or claude.ai/code to watch, answer and steer it. Close its terminal to bring the task back to the board. Needs a Claude account login.'),
-      sec(8, 'Agent map', 'Agent map (top right) shows every Claude session, subagent and reviewer at work across your projects, with time and tokens.'),
+      sec(8, 'More (⋯)', 'The ⋯ button next to Run all opens the agent map (every Claude session and reviewer at work), the report (tokens and rounds per task), the project history and archived tasks. Notifications appear only when something needs you or is ready to merge; everything else is in the JustCode output log.'),
       sec(9, 'Sources and artifacts', 'Add specs, designs, docs and links under 📎 Sources, or attach files to one task. Each task gets a brief (task + sources), Claude writes a handoff (what changed, how it verified it), and the reviewer reads both instead of re-exploring. Merged tasks add a line to the project history. Open them under Details.'),
       sec(10, 'Spending fewer tokens', 'Tasks load only the project\'s Claude setup, share a cached system prompt, and keep command output short. Reviews fit the change (docs: none, small: lighter model) and continue their own session for follow-ups. Long fix rounds restart from the artifacts. Each card shows its tokens; Details splits build and review.'),
       sec(11, 'Good to know', h('ul', {},
@@ -728,7 +741,7 @@
     else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) renderDrawer(); }
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
     else if (m.type === 'focus') openTask(m.id);
-    else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); if (!more) $('#more').hidden = !(more = true); drawFiles(); }
+    else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); toggleMore(true); drawFiles(); }
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.

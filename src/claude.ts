@@ -62,17 +62,34 @@ export function discoverAgents(root: string): AgentDef[] {
   return [...project, ...readAgents(path.join(os.homedir(), '.claude', 'agents'), 'user').filter(a => !names.has(a.name))];
 }
 
-// Skills (<name>/SKILL.md) and commands (<name>.md), project then user; offered as chips to drop into a task.
-export function discoverSkills(root: string): string[] {
-  const names = (dir: string, skills: boolean) => {
+// Skills (<name>/SKILL.md) and commands (<name>.md) a task can actually use, offered as chips to drop into a task.
+// Tasks load only the project's Claude setup unless personal setup is on, so your ~/.claude skills are listed only
+// then. Skills hidden from the / menu (user-invocable: false) and JustCode's own setup skill are left out.
+export interface SkillDef { name: string; description: string; scope: 'project' | 'user' }
+export function discoverSkills(root: string, personal: boolean): SkillDef[] {
+  const read = (base: string, scope: SkillDef['scope']): SkillDef[] => {
+    const out: SkillDef[] = [];
+    const skills = path.join(base, '.claude', 'skills'), commands = path.join(base, '.claude', 'commands');
     try {
-      return fs.readdirSync(dir, { withFileTypes: true }).flatMap(d => skills
-        ? d.isDirectory() && fs.existsSync(path.join(dir, d.name, 'SKILL.md')) ? [d.name] : []
-        : d.isFile() && d.name.endsWith('.md') ? [d.name.slice(0, -3)] : []);
-    } catch { return []; }
+      for (const d of fs.readdirSync(skills, { withFileTypes: true })) {
+        const file = path.join(skills, d.name, 'SKILL.md');
+        if (!d.isDirectory() || !fs.existsSync(file)) continue;
+        const fm = frontmatter(fs.readFileSync(file, 'utf8'));
+        if (fm['user-invocable'] === 'false') continue;
+        out.push({ name: fm.name || d.name, description: fm.description ?? '', scope });
+      }
+    } catch { /* none */ }
+    try {
+      for (const d of fs.readdirSync(commands, { withFileTypes: true })) {
+        if (!d.isFile() || !d.name.endsWith('.md')) continue;
+        out.push({ name: d.name.slice(0, -3), description: frontmatter(fs.readFileSync(path.join(commands, d.name), 'utf8')).description ?? '', scope });
+      }
+    } catch { /* none */ }
+    return out;
   };
-  return [...new Set([root, os.homedir()].flatMap(r => [...names(path.join(r, '.claude', 'skills'), true), ...names(path.join(r, '.claude', 'commands'), false)]))]
-    .filter(n => !/^lex-?code/i.test(n));
+  const all = [...read(root, 'project'), ...(personal ? read(os.homedir(), 'user') : [])];
+  const seen = new Set<string>();
+  return all.filter(k => !/^lex-?code|^just-code-ai-sync$/i.test(k.name) && !seen.has(k.name) && (seen.add(k.name), true));
 }
 
 // A task's copy of the project only has committed files. Project agents, skills and local settings that are not
@@ -110,7 +127,8 @@ export const TASK_APPEND = `You are running as a JustCode task: one focused chan
 Work efficiently: read only the files the task needs, prefer Grep/Glob over broad directory reads, and do not re-read files you already have.
 Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
 (e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands.
-When a turn ends, update the handoff file named in your brief with what changed and how you verified it.`;
+If the task has a "Done when" list, meet every item: the reviewer checks each one.
+When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).`;
 
 // Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
 // not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
@@ -207,7 +225,7 @@ const q = (p: string) => /\s/.test(p) ? `"${p}"` : p;
 // The reviewer's standing instructions: identical for every review, so they stay in the cached system prompt.
 export const REVIEW_APPEND = `You are the code reviewer for a JustCode task: another agent built a change on this branch; you decide if it can merge.
 You do not change code: never edit or write project files. You run unattended: never ask questions.
-Judge correctness only: does the change do what the task asks, completely; bugs, unhandled errors, edge cases, regressions in callers;
+If the task has a "Done when" list, check every item; each unmet item is a blocking issue. Judge correctness only: does the change do what the task asks, completely; bugs, unhandled errors, edge cases, regressions in callers;
 missing tests for new behaviour; security (validation, authorization, data isolation, injection, secrets). Do not report style or naming.
 Report only issues that should block the merge, at most 8, each specific and actionable (file, line, what to change). If the change is sound, pass it.
 Verify, do not only read: the builder's handoff lists what it ran. Re-run the tests that cover the changed files (and the build or type check if quick)
@@ -342,7 +360,7 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
 // Refines existing To do tasks with an instruction: Claude reads the code read-only and returns the task list it
 // proposes. Each item keeps `ref` (an existing task's id) when it is that task reworded, or omits it for a new task.
 // An existing id in none of the items is proposed for removal. This covers edit, split, merge, reorder and add.
-export interface RefineResult { ref?: string; title: string; description?: string }
+export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string }
 export async function refine(tasks: { id: string; title: string; description?: string }[], instruction: string, o: HeadlessOpts): Promise<RefineResult[]> {
   const prompt = `These are the To do tasks on a board (id, title, details). Rework them following the instruction, using the codebase to make them accurate.\n\n` +
     `## Current tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` +
@@ -366,19 +384,36 @@ export async function refine(tasks: { id: string; title: string; description?: s
 // The planner/editor is a chat: you talk with Claude, it reads the code read-only, and it keeps a proposed To do
 // list that you apply when ready. This append (identical every turn, so it stays cached) tells it to end each turn
 // with that list as a JSON block, which parseProposals reads.
-export const PLANNER_APPEND = `You are helping plan and refine the tasks on a kanban board. You never change code: this is a read-only planning chat.
-Read the code you need to make tasks accurate. Keep each task small enough to build, review and merge on its own.
-After every turn, end your message with the FULL proposed To do list as one JSON block, in build order:
-\`\`\`tasks
-[{"ref": "<existing task id, or omit for a new task>", "title": "...", "description": "what to change, where, and how to verify"}]
-\`\`\`
-Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep replies short.`;
+export const PLANNER_APPEND = `You are planning tasks for a kanban board where each task is built by Claude on its own branch, checked by an AI reviewer, then merged. You never change code: this is a read-only planning chat.
 
-// The first message: a goal to plan from, or the current tasks to edit, plus the user's instruction.
-export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string) {
+How to plan:
+1. If the goal is vague (no clear outcome, scope or way to check it), first ask 2-4 short multiple-choice questions with AskUserQuestion. Do not ask what the code already answers.
+2. Read only the code you need (Grep/Glob first). Name real files.
+3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
+4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
+
+After every turn, end your message with the FULL proposed To do list as one JSON block:
+\`\`\`tasks
+[{"ref": "<existing task id, or omit for a new task>", "title": "short imperative title", "goal": "the outcome in one sentence", "files": ["path/likely/changed.ts"], "done": ["a check the reviewer can verify", "the test or command that must pass"], "sprint": "Sprint 1: <goal>"}]
+\`\`\`
+Every task needs a goal and 1-4 "done" items that are concrete and testable (not "works well"). "files" are your best guess. Omit "sprint" for backlog tasks.
+Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.`;
+
+// The first message: the board's sprints, the To do tasks being edited (if any), and the user's request.
+export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string, sprints: { name: string; goal?: string }[] = []) {
+  const sp = sprints.length ? `## Open sprints\n${sprints.map(s => `- ${s.name}${s.goal ? `: ${s.goal}` : ''}`).join('\n')}\n\n` : '';
   const list = tasks.length ? `## Current To do tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
-  return `${list}## What I want\n${instruction}\n\nRead what you need, then reply with your thoughts and the proposed task list.`;
+  return `${sp}${list}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
 }
+
+// A task's details as stored on the board and in TASKS.md: the reviewer checks the work against "Done when".
+export function taskText(t: { goal?: string; files?: string[]; done?: string[]; description?: string }) {
+  const parts = [t.goal?.trim() && `Goal: ${t.goal.trim()}`, t.files?.length && `Files: ${t.files.join(', ')}`,
+    t.done?.length && `Done when:\n${t.done.map(d => `- ${d}`).join('\n')}`, t.description?.trim()].filter(Boolean);
+  return parts.length ? parts.join('\n') : undefined;
+}
+
+const strs = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).map(x => x.trim()) : [];
 
 export function parseProposals(text: string, taskIds: Set<string>): RefineResult[] | undefined {
   const block = [...text.matchAll(/```tasks\s*([\s\S]*?)```/g)].pop()?.[1] ?? [...text.matchAll(/```json\s*(\[[\s\S]*?\])\s*```/g)].pop()?.[1] ?? /\[\s*\{[\s\S]*"title"[\s\S]*\}\s*\]/.exec(text)?.[0];
@@ -388,7 +423,9 @@ export function parseProposals(text: string, taskIds: Set<string>): RefineResult
     if (!Array.isArray(arr)) return;
     return arr.filter((t: any) => t && typeof t.title === 'string').map((t: any) => ({
       ref: typeof t.ref === 'string' && taskIds.has(t.ref) ? t.ref : undefined,
-      title: t.title.trim(), description: typeof t.description === 'string' ? t.description.trim() || undefined : undefined,
+      title: t.title.trim(),
+      description: taskText({ goal: typeof t.goal === 'string' ? t.goal : undefined, files: strs(t.files), done: strs(t.done), description: typeof t.description === 'string' ? t.description : undefined }),
+      sprint: typeof t.sprint === 'string' && t.sprint.trim() ? t.sprint.trim() : undefined,
     }));
   } catch { return; }
 }

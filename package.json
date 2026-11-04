@@ -61,10 +61,10 @@
           ],
           "enumItemLabels": [
             "Auto (recommended)",
-            "Auto-edit",
-            "Ask me",
-            "Plan only",
-            "Allow everything"
+            "Edit automatically",
+            "Manual",
+            "Plan",
+            "Bypass permissions"
           ],
           "default": "auto",
           "enumDescriptions": [
@@ -202,6 +202,13 @@
           "type": "string",
           "default": "auto",
           "description": "Gets each task's folder ready before Claude starts: \"auto\" links node_modules from the project folder when the lockfile matches (installs otherwise) and uses the project's .venv; empty turns it off; or a command to run (e.g. \"pnpm install\")."
+        },
+        "justCode.notifications": {
+          "type": "string",
+          "enum": ["actionable", "errors", "off"],
+          "enumDescriptions": ["When a task needs you, is ready to merge, or failed", "Only errors", "None (the board and the JustCode output log still show everything)"],
+          "default": "actionable",
+          "description": "Which JustCode events show a VS Code notification."
         },
         "justCode.autoMerge": {
           "type": "boolean",
