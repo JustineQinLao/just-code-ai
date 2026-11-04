@@ -19,7 +19,17 @@
   let files = [];                          // files attached to the new task
   let srcOff = new Set();                  // project sources unticked for the new task
   let dragId;
-  const remember = () => vscode.setState({ view, open });
+  let initLater = saved.initLater || {};   // project root → the user chose "Not now" on the setup banner
+  const remember = () => vscode.setState({ view, open, initLater });
+
+  // Is this project set up for Claude? Set up = CLAUDE.md, an agent in .claude/agents and TASKS.md all exist.
+  // `running` is the setup task while it works.
+  function initState() {
+    const pr = S.project || {};
+    const missing = [!pr.claudeMd && 'CLAUDE.md', !pr.agents && 'a reviewer agent', !pr.tasksMd && 'TASKS.md'].filter(Boolean);
+    const running = S.board.tasks.find(t => t.init && !t.archived && t.status !== 'done');
+    return { done: !missing.length, missing, running };
+  }
 
   /* ---------- tiny DOM helper ---------- */
   function h(tag, attrs, ...kids) {
@@ -36,6 +46,7 @@
     return el;
   }
   const $ = s => document.querySelector(s);
+  const andList = xs => xs.length > 1 ? `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}` : xs.join('');
   // Icon buttons (⚙, ?, ⋯, ×) get their tooltip as an accessible name for screen readers.
   const btn = (label, onclick, cls = '', title) => h('button', { class: cls, onclick: e => { e.stopPropagation(); onclick(e); }, title, 'aria-label': title && String(label).length <= 2 ? title : undefined }, label);
   const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
@@ -178,7 +189,17 @@
     $('#projects').replaceChildren(...S.roots.map(p => h('span', { class: `proj${p.path === S.root ? ' on' : ''}`, title: p.path, onclick: () => { open = undefined; post('root', { root: p.path }); } },
       p.name, p.running ? h('b', { class: 'badge run' }, `▶${p.running}`) : '', p.waiting ? h('b', { class: 'badge warn' }, `●${p.waiting}`) : '',
       p.removable ? btn('×', () => post('removeProject', { root: p.path }), 'x', 'Remove from JustCode (files are kept)') : '')),
-      btn('+', () => post('addProject'), 'ghost icon', 'Add a project folder'));
+      btn('+', () => post('addProject'), 'ghost icon', 'Add a project folder'),
+      setupPill());
+  }
+
+  // Next to the project name: whether it is set up for Claude, and what it has.
+  function setupPill() {
+    const st = initState(), pr = S.project || {};
+    const has = [['CLAUDE.md', pr.claudeMd], ['agents', pr.agents], ['skills', pr.skills], ['TASKS.md', pr.tasksMd]].map(([n, ok]) => `${ok ? '✓' : '✗'} ${n}`).join('\n');
+    if (st.running) return h('span', { class: 'pill run', title: 'Claude is setting up this project. Open the task to answer its questions.', onclick: () => openTask(st.running.id) }, '◌ Setting up…');
+    if (st.done) return h('span', { class: 'pill ok', title: `Set up for Claude\n${has}` }, '✓ Set up');
+    return h('span', { class: 'pill warn', title: `Not set up for Claude\n${has}\n\nClick to set it up.`, onclick: () => post('initialize') }, '● Not set up');
   }
 
   function renderMeter() {
@@ -204,6 +225,12 @@
           !c.ok && c.fix ? btn(c.fix.label, () => post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : ''))),
         h('p', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : 'Remote Control (continue on your phone) needs a Claude account login.')));
     } else if (!st) out.push(h('div', { class: 'banner' }, 'Checking your setup…'));
+    const init = initState();
+    if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
+      btn('Answer', () => openTask(init.running.id), 'primary')));
+    else if (st?.ready && !init.done && !init.running && !initLater[S.root]) out.push(h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'This project is not set up for Claude yet. '),
+      `It is missing ${andList(init.missing)}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. Tasks then follow your conventions and come with a "Done when" checklist.`),
+      btn('Set up project', () => post('initialize'), 'primary'), btn('Not now', () => { initLater[S.root] = true; remember(); render(); }, 'ghost', 'Hide for this project. The "Not set up" label at the top still sets it up.')));
     if (st?.ready && !S.guideSeen) out.push(h('div', { class: 'banner info' }, h('b', {}, 'New here? '), 'Add a task above and press ⌘/Ctrl+Enter. Claude works on its own branch; you answer on the card and merge when it passes review.',
       btn('2-minute guide', () => guide(), 'ghost'), btn('Got it', () => { S.guideSeen = true; post('guideSeen'); render(); }, 'ghost')));
     $('#banners').replaceChildren(...out);
@@ -582,7 +609,7 @@
     const presets = ['Add a "Done when" checklist to each', 'Split anything too big', 'Merge duplicates', 'Order by dependency', sprint ? 'Make them fit the sprint goal' : 'Group into sprints'];
     dialog(editSprint ? `Edit ${sprint.name} with Claude` : 'Plan with Claude',
       missing.length && !editSprint ? h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'Set up this project first? '),
-        `It has no ${missing.join(', ')}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. TASKS.md becomes sprints and tasks on the board.`),
+        `It is missing ${andList(missing)}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. TASKS.md becomes sprints and tasks on the board.`),
         btn('Set up project', () => { post('initialize'); $('#dlg').close(); }, 'primary')) : '',
       h('p', { class: 'muted' }, editSprint
         ? `One prompt edits all ${todoIds.length} not-started task${todoIds.length === 1 ? '' : 's'}${where}: reword, split, merge, add, remove or reorder.${sprint.goal ? ` Sprint goal: ${sprint.goal}.` : ''}${started ? ` ${started} started task${started === 1 ? ' is' : 's are'} left as ${started === 1 ? 'it is' : 'they are'}.` : ''} You review every change before it is applied.`

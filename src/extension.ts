@@ -482,6 +482,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Optional: Claude drafts agents, skills, CLAUDE.md and TASKS.md for this project, then syncs TASKS.md to the board.
   async function initialize(r: Runner) {
+    const running = r.store.data.tasks.find(t => t.init && !t.archived && t.status !== 'done');
+    if (running) return open(running.id);
     const file = installSkill();
     if (!file) return;
     const task = r.store.addTask({ title: 'Set up this project for Claude', description: 'Set up this project: Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve. Then it syncs TASKS.md (with sprints) into the board.',
