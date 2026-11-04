@@ -445,6 +445,10 @@ test('phone auth: link sets cookie, missing/wrong/old token gets 401', async () 
     assert.match(ck, /HttpOnly/);
     const cookie = ck.split(';')[0];
     assert.equal((await fetch(base(srv) + '/api/state', { headers: { cookie } })).status, 200);
+    assert.equal((await fetch(base(srv) + '/api/state', { headers: { cookie: 'jc_token=%' } })).status, 401);
+    const r2 = await fetch(base(srv) + '/?token=tok1');
+    assert.equal(r2.status, 200);
+    assert.match(r2.headers.get('set-cookie')!, /jc_token=tok1.*HttpOnly/);
     srv.close(); srv = await mk('tok2'); // regenerated
     assert.equal((await fetch(base(srv) + '/api/state', { headers: { cookie } })).status, 401);
     assert.equal((await fetch(base(srv) + '/?t=tok1')).status, 401);

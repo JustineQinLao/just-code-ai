@@ -30,7 +30,7 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
     const hdr = String(req.headers['x-token'] ?? '');
     const q = url.searchParams.get('t') ?? url.searchParams.get('token') ?? '';
     const ck = /(?:^|;\s*)jc_token=([^;]*)/.exec(req.headers.cookie ?? '')?.[1] ?? '';
-    const ok = [hdr, q, decodeURIComponent(ck)].some(t => t && same(t, d.token));
+    const ok = [hdr, q, (() => { try { return decodeURIComponent(ck); } catch { return ''; } })()].some(t => t && same(t, d.token));
     if (!ok) return send(401, '{"error":"bad token"}');
     // A valid link sets an HttpOnly cookie so later requests from the page need no token in the URL.
     if (q && same(q, d.token)) res.setHeader('set-cookie', `jc_token=${encodeURIComponent(d.token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
