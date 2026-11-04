@@ -166,15 +166,20 @@ export function activate(context: vscode.ExtensionContext) {
     pending = setTimeout(() => { pending = undefined; post(); }, 60);
   }
 
+  // Everything the board says goes through these sinks: the webview panel, plus any remote client that registers one.
+  type Sink = (m: any) => void;
+  const sinks = new Set<Sink>();
+  const emit = (m: any) => { for (const s of sinks) s(m); };
+
   let watching: { root: string; id: string; n: number; last?: string } | undefined; // the task whose log is open
   function post() {
-    if (!panel) return;
+    if (!sinks.size) return;
     const r = runner();
-    if (!r) { void panel.webview.postMessage({ type: 'state', empty: true, roots: [], setup, version: context.extension.packageJSON.version }); return; }
+    if (!r) { emit({ type: 'state', empty: true, roots: [], setup, version: context.extension.packageJSON.version }); return; }
     const tasks = r.store.data.tasks.map(t => ({ ...t, ...r.live(t.id),
       artifacts: { plan: fs.existsSync(A.planFile(r.root, t.id)), brief: fs.existsSync(A.briefFile(r.root, t.id)), handoff: fs.existsSync(A.handoffFile(r.root, t.id)), review: fs.existsSync(A.reviewFile(r.root, t.id)) } }));
     const s = runnerSettings();
-    void panel.webview.postMessage({
+    emit({
       type: 'state',
       roots: roots().map(p => ({ path: p, name: path.basename(p), removable: !workspace().includes(p), ...(runners.get(p)?.counts() ?? { running: 0, waiting: 0 }) })),
       root: r.root,
@@ -201,7 +206,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // The open task's activity: live from its session, or from Claude Code's saved transcript once it has closed.
   function sendSteps(force = false) {
-    if (!panel || !watching) return;
+    if (!sinks.size || !watching) return;
     const r = runners.get(watching.root), t = r?.store.task(watching.id);
     if (!r || !t) return;
     const live = r.steps(t.id);
@@ -209,7 +214,7 @@ export function activate(context: vscode.ExtensionContext) {
     const last = steps.length ? steps[steps.length - 1].time + steps[steps.length - 1].text.slice(0, 40) : '';
     if (!force && steps.length === watching.n && last === watching.last) return;
     watching.n = steps.length; watching.last = last;
-    void panel.webview.postMessage({ type: 'steps', id: t.id, steps, live: !!live });
+    emit({ type: 'steps', id: t.id, steps, live: !!live });
   }
 
   /* ---------- phone server (off by default) ---------- */
@@ -292,11 +297,13 @@ export function activate(context: vscode.ExtensionContext) {
 <link rel="stylesheet" href="${u('board.css')}"></head>
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
 <script nonce="${nonce}" src="${u('board.js')}"></script></body></html>`;
+      const sink: Sink = m => void w.postMessage(m);
+      sinks.add(sink);
       w.onDidReceiveMessage(m => handle(m).catch(e => vscode.window.showErrorMessage(e.message)));
-      panel.onDidDispose(() => { panel = undefined; watching = undefined; }); // runs keep going; reopening reattaches
+      panel.onDidDispose(() => { sinks.delete(sink); panel = undefined; watching = undefined; }); // runs keep going; reopening reattaches
       void recheck();
     }
-    if (focusTask) void panel.webview.postMessage({ type: 'focus', id: focusTask });
+    if (focusTask) emit({ type: 'focus', id: focusTask });
     push();
   };
 
@@ -396,7 +403,7 @@ export function activate(context: vscode.ExtensionContext) {
         await r.setMode(m.id, m.mode); return;
       case 'rules': s.setRules(Array.isArray(m.rules) ? m.rules.map(String) : []); return;
       case 'watch': watching = m.id ? { root: r.root, id: m.id, n: -1 } : undefined; sendSteps(true); return;
-      case 'changes': void panel?.webview.postMessage({ type: 'changes', id: m.id, files: await r.changes(m.id) }); return;
+      case 'changes': emit({ type: 'changes', id: m.id, files: await r.changes(m.id) }); return;
       case 'diff': return diff(t, m.file);
       case 'openFile': if (t?.worktree) void vscode.window.showTextDocument(vscode.Uri.file(path.join(t.worktree, m.file))); return;
       case 'openFolder': if (t?.worktree) void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); return;
@@ -426,7 +433,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (!t) return;
         if (!fs.existsSync(A.artifactFile(r.root, t.id))) { vscode.window.showWarningMessage(`"${t.title}" has no page yet. Message Claude to build it.`); return; }
         return publishArtifact(r.root, t.id);
-      case 'shots': void panel?.webview.postMessage({ type: 'shots', id: m.id, images: (t?.review?.screenshots ?? []).flatMap(f => {
+      case 'shots': emit({ type: 'shots', id: m.id, images: (t?.review?.screenshots ?? []).flatMap(f => {
         try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
       }) }); return;
       case 'planner': r.defaultMode = setting('defaultMode', 'auto'); await r.startPlanner(m.instruction, m.ids ?? [], m.sprint).catch(e => vscode.window.showErrorMessage(e.message)); return;
@@ -436,7 +443,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'applyProposals': r.defaultMode = setting('defaultMode', 'auto'); r.applyProposals(m.changes, m.removes); return;
       case 'pickFiles': {
         const files = await pickPaths(r.root, 'Attach', remote);
-        if (files.length) { if (remote) hub.emit({ type: 'picked', files }); else void panel?.webview.postMessage({ type: 'picked', files }); }
+        if (files.length) { if (remote) hub.emit({ type: 'picked', files }); else emit({ type: 'picked', files }); }
         return;
       }
       case 'addSource': {
@@ -633,7 +640,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('justCode.open', () => open()),
     vscode.commands.registerCommand('justCode.addProject', async () => { open(); await addProject(); }),
-    vscode.commands.registerCommand('justCode.setup', () => { open(); void panel?.webview.postMessage({ type: 'showSetup' }); void recheck(); }),
+    vscode.commands.registerCommand('justCode.setup', () => { open(); emit({ type: 'showSetup' }); void recheck(); }),
     vscode.commands.registerCommand('justCode.setApiKey', async () => {
       const key = await vscode.window.showInputBox({ title: 'Anthropic API key (optional)', prompt: 'Tasks use it instead of your Claude login and are billed per token. Remote Control needs a Claude login. Leave empty to remove the key.', password: true, ignoreFocusOut: true });
       if (key === undefined) return;
