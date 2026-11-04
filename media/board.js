@@ -236,6 +236,7 @@
     const ready = tasks.filter(t => t.review?.state === 'pass' && t.review.risk !== 'critical' && t.status !== 'done');
     const q = S.queue;
     const sprint = S.board.sprints.find(s => s.id === view);
+    const editable = tasks.filter(t => t.status === 'todo' && !t.worktree && !t.queued);
     $('#toolbar').replaceChildren(
       h('select', { onchange: e => { view = e.target.value; remember(); render(); } },
         h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
@@ -243,7 +244,8 @@
       btn('+ Sprint', () => newSprint(), 'ghost'),
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
-      btn('✦ Plan', () => S.planner ? openPlanner() : planDialog(tasks.filter(t => t.status === 'todo' && !t.worktree).map(t => t.id)), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
+      btn('✦ Plan', () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
+      sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
       btn(`📎 Sources${S.sources?.length ? ` (${S.sources.length})` : ''}`, () => sourcesDialog(), 'ghost', 'Specs, designs, docs and links tasks are based on'),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? ` · next waits: “${q.blocker.title.slice(0, 40)}” ${q.blocker.why}` : '',
@@ -568,24 +570,30 @@
 
   function openPlanner() { open = '__planner'; remember(); render(); }
 
-  // The one way to plan with Claude: new tasks from a goal, or rework the To do list. Offers project setup first
-  // when the project has no Claude setup yet.
-  function planDialog(todoIds) {
+  // The one way to plan with Claude: new tasks from a goal, or rework To do tasks. With a sprint (✦ Edit sprint, or
+  // ✦ Plan while a sprint is shown), one prompt edits every not-started task in that sprint. Offers project setup
+  // first when the project has no Claude setup yet.
+  function planDialog(todoIds, sprint, editSprint = false) {
     const pr = S.project || {};
     const missing = [!pr.claudeMd && 'CLAUDE.md', !pr.agents && 'a reviewer agent', !pr.tasksMd && 'TASKS.md'].filter(Boolean);
+    const started = sprint ? S.board.tasks.filter(t => t.sprintId === sprint.id && !t.archived && !(t.status === 'todo' && !t.worktree)).length : 0;
+    const where = sprint ? ` in ${sprint.name}` : '';
     let goal, rework, chips;
-    const presets = ['Add a "Done when" checklist to each', 'Split anything too big', 'Merge duplicates', 'Order by dependency', 'Group into sprints'];
-    dialog('Plan with Claude',
-      missing.length ? h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'Set up this project first? '),
+    const presets = ['Add a "Done when" checklist to each', 'Split anything too big', 'Merge duplicates', 'Order by dependency', sprint ? 'Make them fit the sprint goal' : 'Group into sprints'];
+    dialog(editSprint ? `Edit ${sprint.name} with Claude` : 'Plan with Claude',
+      missing.length && !editSprint ? h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'Set up this project first? '),
         `It has no ${missing.join(', ')}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. TASKS.md becomes sprints and tasks on the board.`),
         btn('Set up project', () => { post('initialize'); $('#dlg').close(); }, 'primary')) : '',
-      h('p', { class: 'muted' }, 'Claude reads the code (read-only) and may ask you a few questions. It proposes tasks with a goal, likely files and a "Done when" checklist, grouped into sprints. Keep chatting to refine, then apply the ones you want.'),
-      goal = h('textarea', { rows: 4, placeholder: todoIds.length ? 'What do you want? e.g. "Add password reset by email" or "split anything too big"' : 'What do you want to build or change? e.g. Add password reset by email, with tests' }),
-      todoIds.length ? h('label', { class: 'row' }, rework = h('input', { type: 'checkbox', onchange: () => { chips.hidden = !rework.checked; } }), ` Also rework the ${todoIds.length} To do task${todoIds.length === 1 ? '' : 's'}`) : '',
-      chips = h('div', { class: 'chips', hidden: true }, presets.map(p => h('span', { class: 'chip', onclick: () => { goal.value = goal.value ? `${goal.value}; ${p}` : p; } }, p))),
-      h('div', { class: 'acts' }, btn('✦ Start planning', () => {
+      h('p', { class: 'muted' }, editSprint
+        ? `One prompt edits all ${todoIds.length} not-started task${todoIds.length === 1 ? '' : 's'}${where}: reword, split, merge, add, remove or reorder.${sprint.goal ? ` Sprint goal: ${sprint.goal}.` : ''}${started ? ` ${started} started task${started === 1 ? ' is' : 's are'} left as ${started === 1 ? 'it is' : 'they are'}.` : ''} You review every change before it is applied.`
+        : 'Claude reads the code (read-only) and may ask you a few questions. It proposes tasks with a goal, likely files and a "Done when" checklist, grouped into sprints. Keep chatting to refine, then apply the ones you want.'),
+      goal = h('textarea', { rows: 4, placeholder: editSprint ? `What should change in all of them? e.g. "add Done when to each and split anything too big"` : todoIds.length ? 'What do you want? e.g. "Add password reset by email" or "split anything too big"' : 'What do you want to build or change? e.g. Add password reset by email, with tests' }),
+      todoIds.length && !editSprint ? h('label', { class: 'row' }, rework = h('input', { type: 'checkbox', onchange: () => { chips.hidden = !rework.checked; } }), ` Also rework the ${todoIds.length} To do task${todoIds.length === 1 ? '' : 's'}${where}`) : '',
+      chips = h('div', { class: 'chips', hidden: !editSprint }, presets.map(p => h('span', { class: 'chip', onclick: () => { goal.value = goal.value ? `${goal.value}; ${p}` : p; } }, p))),
+      h('div', { class: 'acts' }, btn(editSprint ? '✦ Edit the sprint' : '✦ Start planning', () => {
         if (!goal.value.trim()) return goal.focus();
-        post('planner', { instruction: goal.value.trim(), ids: rework?.checked ? todoIds : [] });
+        const ids = editSprint || rework?.checked ? todoIds : [];
+        post('planner', { instruction: goal.value.trim(), ids, sprint: ids.length && sprint ? { name: sprint.name, goal: sprint.goal } : undefined });
         $('#dlg').close();
         openPlanner();
       }, 'primary')));

@@ -400,9 +400,12 @@ Every task needs a goal and 1-4 "done" items that are concrete and testable (not
 Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.`;
 
 // The first message: the board's sprints, the To do tasks being edited (if any), and the user's request.
-export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string, sprints: { name: string; goal?: string }[] = []) {
+// With `sprint`, the tasks are every not-started task of that sprint and the instruction applies to all of them.
+export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string, sprints: { name: string; goal?: string }[] = [], sprint?: { name: string; goal?: string }) {
   const sp = sprints.length ? `## Open sprints\n${sprints.map(s => `- ${s.name}${s.goal ? `: ${s.goal}` : ''}`).join('\n')}\n\n` : '';
-  const list = tasks.length ? `## Current To do tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
+  const scope = sprint ? `## Scope\nEdit all the tasks below: they are every not-started task of ${sprint.name}${sprint.goal ? ` (goal: ${sprint.goal})` : ''}. ` +
+    `Apply my instruction to each of them, keep them in this sprint (set "sprint" to "${sprint.name}" on every item), and return the whole sprint list.\n\n` : '';
+  const list = tasks.length ? `${scope}## Current To do tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
   return `${sp}${list}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
 }
 

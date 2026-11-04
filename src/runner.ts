@@ -793,7 +793,7 @@ export class Runner {
       asks: s?.open ? [...s.asks.values()].filter(a => a.kind === 'question') : [] };
   }
 
-  async startPlanner(instruction: string, targetIds: string[]) {
+  async startPlanner(instruction: string, targetIds: string[], sprint?: { name: string; goal?: string }) {
     const bin = this.d.bin();
     if (!bin) throw new Error('Claude Code is not installed. Open JustCode: Check Setup.');
     if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. Try again after the reset.');
@@ -816,7 +816,7 @@ export class Runner {
     s.on('ask', a => { if (a.kind !== 'question') setImmediate(() => s.answer({ id: a.id, choice: 'deny', message: 'This is a planning chat. Stay read-only and reply with the proposed task list.' })); });
     s.on('exit', () => this.changed());
     const sprints = this.store.data.sprints.filter(x => !x.closed).map(x => ({ name: x.name, goal: x.goal }));
-    await s.start(plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints));
+    await s.start(plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint));
     this.changed();
   }
 

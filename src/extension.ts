@@ -353,7 +353,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'shots': void panel?.webview.postMessage({ type: 'shots', id: m.id, images: (t?.review?.screenshots ?? []).flatMap(f => {
         try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
       }) }); return;
-      case 'planner': r.defaultMode = setting('defaultMode', 'auto'); await r.startPlanner(m.instruction, m.ids ?? []).catch(e => vscode.window.showErrorMessage(e.message)); return;
+      case 'planner': r.defaultMode = setting('defaultMode', 'auto'); await r.startPlanner(m.instruction, m.ids ?? [], m.sprint).catch(e => vscode.window.showErrorMessage(e.message)); return;
       case 'plannerAnswer': r.plannerAnswer({ id: m.ask, choice: m.choice, message: m.message, answers: m.answers }); return;
       case 'plannerSay': try { r.plannerSay(m.text); } catch (e: any) { vscode.window.showErrorMessage(e.message); } return;
       case 'stopPlanner': r.stopPlanner(); return;

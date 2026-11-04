@@ -51,6 +51,10 @@ The chat opens in the drawer. Keep refining ("split the second one", "add a task
 bottom tags each item NEW, EDIT, keep or REMOVE, with its sprint and a checkbox. Press **Apply the ticked tasks** when
 you are happy: sprints Claude named are created if needed. While a chat is open, ✦ Plan reopens it.
 
+**✦ Edit sprint** (toolbar, while a sprint is shown) edits every not-started task in that sprint with one prompt, for
+example "add Done when to each and split anything too big". Started tasks are left as they are, and you review every
+change before it is applied.
+
 In a project without `CLAUDE.md`, a reviewer agent or `TASKS.md`, the Plan dialog offers **Set up project** first: Claude
 interviews you, shows the files it will write, and writes them after you approve (see the README).
 

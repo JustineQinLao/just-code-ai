@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { parseVerdict, carryOver, claudeEnv, parseProposals, taskText } from '../claude';
+import { parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store } from '../store';
 import { parseTasks, syncTasks } from '../tasksmd';
@@ -359,4 +359,11 @@ test('setup skill: its commands match the setup task\'s allow rules', () => {
   assert.ok(skill.includes('disable-model-invocation: true'));
   assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync --dry-run` }), true);
   assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync && rm -rf x` }), false);
+});
+
+test('planner: editing a sprint scopes the instruction to all its tasks', () => {
+  const text = plannerFirst([{ id: 'a', title: 'Login' }, { id: 'b', title: 'Logout' }], 'add Done when to each', [], { name: 'Sprint 1', goal: 'Auth' });
+  assert.match(text, /every not-started task of Sprint 1 \(goal: Auth\)/);
+  assert.match(text, /\[a\] Login\n\[b\] Logout/);
+  assert.doesNotMatch(plannerFirst([], 'x'), /Scope/);
 });
