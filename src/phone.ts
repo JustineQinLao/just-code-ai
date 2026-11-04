@@ -10,6 +10,10 @@ export interface PhoneDeps {
 // Actions a phone may send. Anything else is refused, so a leaked token cannot open files, change settings, etc.
 export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge'] as const;
 
+// One rule for showing the Merge button and for accepting a phone merge; never looser than the board's bulk merge.
+export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>
+  !!t.worktree && t.where !== 'root' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical';
+
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Server> {

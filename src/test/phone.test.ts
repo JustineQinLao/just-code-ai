@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { startPhoneServer } from '../phone';
+import { startPhoneServer, canPhoneMerge } from '../phone';
 
 test('phone server: token required, only whitelisted actions', async () => {
   const acts: any[] = [];
@@ -15,4 +15,14 @@ test('phone server: token required, only whitelisted actions', async () => {
     assert.equal((await post({ type: 'run' }, 'nope')).status, 401);
     assert.deepEqual(acts.map(a => a.type), ['run']);
   } finally { srv.close(); }
+});
+
+test('phone merge is never looser than bulk merge', () => {
+  const ok = { worktree: '/w', status: 'review', review: { state: 'pass', risk: 'low' } };
+  assert.equal(canPhoneMerge(ok), true);
+  assert.equal(canPhoneMerge({ ...ok, review: { state: 'pass', risk: 'critical' } }), false);
+  assert.equal(canPhoneMerge({ ...ok, status: 'doing' }), false);
+  assert.equal(canPhoneMerge({ ...ok, where: 'root' }), false);
+  assert.equal(canPhoneMerge({ ...ok, worktree: undefined }), false);
+  assert.equal(canPhoneMerge({ ...ok, review: { state: 'fail' } }), false);
 });

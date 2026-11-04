@@ -13,7 +13,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer } from './phone';
+import { startPhoneServer, canPhoneMerge } from './phone';
 import type * as http from 'http';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
@@ -222,7 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
     return { tasks: (r?.store.data.tasks ?? []).filter(t => !t.archived).map(t => {
       const l = r!.live(t.id);
       return { id: t.id, title: t.title, status: t.status, busy: l.busy, asks: l.asks, review: t.review?.state,
-        canMerge: !!t.worktree && t.where !== 'root' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical' };
+        canMerge: canPhoneMerge(t) };
     }) };
   };
   async function phoneAct(m: any): Promise<string | void> {
@@ -242,7 +242,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (m.choice !== 'allow' && m.choice !== 'deny') return 'phone can only allow or deny';
         return r.answer(m.id, { id: m.ask, choice: m.choice }) ? undefined : 'request no longer open';
       case 'merge':
-        if (!t || t.review?.state !== 'pass') return 'only reviewed (passing) tasks can be merged from the phone';
+        if (!t || !canPhoneMerge(t)) return 'only tasks that passed review (and are not flagged critical) can be merged from the phone';
         await r.merge(t.id); return;
     }
   }
