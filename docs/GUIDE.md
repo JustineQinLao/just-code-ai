@@ -264,6 +264,8 @@ admin must turn Remote Control on.
 
 ## 11. Phone and Android app access (local server)
 
+> **Status:** not available in this checkout. There is no `justCode.phoneServer` setting in `package.json`/`src` and no `android/` app, so the steps below cannot be followed yet. See docs/FOLLOWUPS.md.
+
 JustCode can serve the board to your phone over your own network. This is separate from *Continue on phone* above.
 
 - **Turn it on:** it is off by default. Enable the phone server in settings (`justCode.phoneServer`). While it is on,

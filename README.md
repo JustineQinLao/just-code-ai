@@ -203,7 +203,7 @@ git tag v1.0.0 && git push origin v1.0.0
 
 ## Phone and Android app
 
-Off by default. Enable the phone server (`justCode.phoneServer`) to open the board from your phone or the Android app
+**Not available in this checkout yet** (no `justCode.phoneServer` setting or `android/` app; see [docs/FOLLOWUPS.md](docs/FOLLOWUPS.md)). Planned behaviour: off by default. Enable the phone server (`justCode.phoneServer`) to open the board from your phone or the Android app
 on the **same network**; the computer must stay awake. Access needs a token, so keep it private. With Bypass
 permissions or `justCode.bypassAll`, anyone with the token can run unapproved commands. This differs from *Continue on
 phone*, which uses Remote Control. Build, install and pairing steps: [docs/GUIDE.md](docs/GUIDE.md) (section 11).

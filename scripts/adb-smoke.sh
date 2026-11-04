@@ -10,7 +10,8 @@ $A get-state
 shot 00-device "device awake, unlocked"
 [ -f "$APK" ] || { echo "APK missing: build with (cd android && ./gradlew assembleDebug)"; exit 1; }
 $A install -r "$APK"
-PKG=$(aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")
+PKG=${PKG:-$(command -v aapt >/dev/null && aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")}
+[ -n "$PKG" ] || { echo "Set PKG=<app package id> (aapt not found)"; exit 1; }
 $A shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null
 sleep 3; shot 01-app-open "pairing screen"
 echo "Manual: enter address + token from VS Code (or scan QR), then tap through:"
