@@ -154,6 +154,37 @@ export const OUTPUT_CAPS = { BASH_MAX_OUTPUT_LENGTH: '20000' };
 const transcript = (cwd: string, id: string) =>
   path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl');
 export const sessionExists = (cwd: string, id: string) => fs.existsSync(transcript(cwd, id));
+
+// The first claude.ai artifact link in a session's transcript (the publish step's result), if any.
+export const ARTIFACT_URL = /https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9-]+/;
+export function artifactUrlIn(cwd: string, id: string) {
+  try { return ARTIFACT_URL.exec(fs.readFileSync(transcript(cwd, id), 'utf8'))?.[0]; } catch { return undefined; }
+}
+
+// The frontend-design plugin, if Claude Code has it installed (/plugin install frontend-design@claude-plugins-official).
+// Lean task sessions do not load your plugins, so artifact tasks are given this one by path.
+export function frontendDesignPlugin(file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'plugins', 'installed_plugins.json')) {
+  try {
+    const all = JSON.parse(fs.readFileSync(file, 'utf8'))?.plugins ?? {};
+    const key = Object.keys(all).find(k => /^frontend-design@/.test(k));
+    const entries: { scope?: string; installPath?: string }[] = key ? all[key] : [];
+    const ok = (e: { installPath?: string }) => !!e.installPath && fs.existsSync(path.join(e.installPath, 'skills'));
+    return (entries.find(e => e.scope === 'user' && ok(e)) ?? entries.find(ok))?.installPath;
+  } catch { return undefined; }
+}
+
+// What an artifact task is told: build one page with the design skill, in the shape claude.ai artifacts accept.
+export function artifactBrief(file: string, design: boolean) {
+  return [`## Result: a page, published as a claude.ai artifact`,
+    `This task's result is one web page, not a code change. Write it as a single self-contained HTML file at ${file} (create or overwrite it).`,
+    design ? 'Use the frontend-design skill (/frontend-design:frontend-design) for the visual design: a deliberate palette, typography and layout, not a generic template.' :
+      'Give it a deliberate visual design: a clear palette, typography and layout, not a generic template.',
+    'The page must follow the artifact rules: a <title> of two to four words; all CSS and JavaScript inline; images as inline SVG or data URIs; ' +
+      'scripts only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm, unpkg.com, cdn.tailwindcss.com or code.jquery.com with an exact version; fonts only from Google Fonts; ' +
+      'no fetch to other hosts; no relative links; colors as CSS variables with a dark mode (prefers-color-scheme); works at phone width; under 16 MB.',
+    'Build the content from the project and the task (read the code or data you need). Do not publish it yourself: when you finish, JustCode publishes the file and puts the link on the card. ' +
+      'If the user asks for changes later, edit the same file.'].join('\n');
+}
 export const sessionSize = (cwd: string, id: string) => { try { return fs.statSync(transcript(cwd, id)).size; } catch { return 0; } };
 
 export interface LogStep { kind: 'user' | 'say' | 'tool' | 'result' | 'error' | 'info'; text: string; time?: string }

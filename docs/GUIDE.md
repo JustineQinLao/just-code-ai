@@ -115,6 +115,29 @@ Type what you want in the box at the top:
 
 A good task is one change that can be built, reviewed and merged on its own, with a *Done when* a reviewer can check.
 
+### Artifact pages: a task whose result is a link
+
+A task can produce a web page instead of a code change, such as a dashboard of the project's test results, a walkthrough
+of a design, or a comparison of options. Say *artifact* in the task ("Make an artifact that compares the three
+pricing layouts"), or choose **Advanced → Result → Artifact page (link)**. The card then shows **⧉ artifact**.
+
+1. **Claude designs the page** in the project folder, with the
+   [frontend-design](https://github.com/anthropics/claude-plugins-official) skill when it is installed
+   (`/plugin install frontend-design@claude-plugins-official` in Claude Code). It writes one self-contained HTML file
+   that follows the artifact rules: inline CSS and JavaScript, libraries only from the allowed CDNs, a dark mode, and
+   phone width.
+2. **JustCode publishes it.** A **⧉** terminal opens and an interactive Claude Code session publishes the file to
+   claude.ai. The Agent SDK that runs the board's sessions cannot publish artifacts, so this step needs the terminal.
+   The card says *Publishing the page to claude.ai…*.
+3. **The link lands on the card**: **⧉ Open artifact**, and in *Details* the link with **Copy link**. A notification
+   offers the same. The terminal closes by itself.
+4. **To change the page**, message Claude in the task panel. When it finishes, the same link updates.
+
+The artifact is private to you until you share it from its page on claude.ai. Publishing needs Claude Code signed in
+with a Claude account (Pro, Max, Ultra, Team or Enterprise), not an API key; with an API key, the card offers to open
+the page file instead. If no link comes back within five minutes, the ⧉ terminal stays open so you can see why, and
+**Publish** on the card tries again.
+
 ## 4. Plan with Claude
 
 **✦ Plan** (toolbar) turns a goal into tasks, or reworks the To do list. It is the only planning entry; while a
@@ -394,5 +417,6 @@ where they stopped. **Try now** skips the wait.
 | "…/.justcode/worktrees/<id>' already exists" | Press **Resume**: the leftover folder is cleared. (Fixed in this version: a merge no longer happens while checks run.) |
 | The reviewer says it couldn't run a command | Add the command's prefix to `justCode.reviewCommands`, e.g. `make check`. |
 | Tests in the task's copy miss a config file | Add the file to `justCode.worktreeCopy`. Only committed files are in the copy otherwise. |
+| An artifact task shows no link | Check the ⧉ terminal: artifacts need a Claude account login, and your organization must allow them. Press **Publish** on the card to try again. |
 | Too many or too few notifications | ⚙ Settings → *Notifications* (section 12). |
 | Something looks stuck | Open **Output → JustCode** for a log of what happened. Then use **Stop** and **Resume** on the task. |

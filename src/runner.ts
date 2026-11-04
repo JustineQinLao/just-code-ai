@@ -7,7 +7,7 @@ import { Store, Task } from './store';
 import * as g from './git';
 import { syncSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
-import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult } from './claude';
+import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, frontendDesignPlugin } from './claude';
 import * as A from './artifacts';
 import * as C from './checks';
 import { Limits, isLimitError } from './limits';
@@ -50,6 +50,8 @@ export interface RunnerDeps {
   // A modal question; resolves to the chosen button, or undefined when dismissed.
   choose(text: string, ...buttons: string[]): Promise<string | undefined>;
   cli: string; // out/cli.js, for the reviewer's screenshot command
+  // Publishes an artifact task's page (needs an interactive claude: the Agent SDK cannot publish artifacts).
+  publish?(id: string): void;
 }
 
 // What a card shows about its live work, beyond what board.json keeps.
@@ -208,7 +210,7 @@ export class Runner {
     // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
     const sources = A.loadSources(this.root);
-    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), t.init ? syncSkillBody(this.d.cli) : '', prompt].filter(Boolean).join('\n\n');
+    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), t.init ? syncSkillBody(this.d.cli) : '', t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!frontendDesignPlugin()) : '', prompt].filter(Boolean).join('\n\n');
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
     const carry = carryOver(this.root, cwd);
@@ -216,6 +218,7 @@ export class Runner {
     const s = new Session({
       bin, cwd, sessionId, resume, mode: task.mode, model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
+      plugins: task.output === 'artifact' && !set.personalSetup ? [frontendDesignPlugin()].filter((p): p is string => !!p) : undefined,
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
       allowed: [...new Set([...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
@@ -332,6 +335,8 @@ export class Runner {
     this.changed();
     this.pump();
     const cur = this.store.task(id);
+    // An artifact task's page is published (again, after a change) once Claude has written it.
+    if (cur?.output === 'artifact' && fs.existsSync(A.artifactFile(this.root, id))) { this.d.publish?.(id); return; }
     if (cur?.status !== 'review' || !cur.branch || this.emptyAt.has(id)) return;
     if (await this.check(id) === 'fail') return;
     if (this.d.settings().review.auto) await this.review(id);

@@ -99,6 +99,11 @@
     if (t.status === 'review' && t.checks?.state === 'fail') return { text: `Checks still fail: ${t.checks.results.filter(r => !r.ok && !r.preexisting).map(r => r.name).join(', ')}`, tone: 'err', action: ['Send to Claude', () => post('sendChecks', { id: t.id })] };
     if (t.reviewing) return { text: `AI reviewer is testing it · ${dur(t.reviewing)}`, tone: 'run' };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Fixing review issues (round ${r.attempts} of ${max})`, tone: 'run' } : { text: 'Paused', tone: 'muted', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
+    if (t.output === 'artifact') {
+      if (t.publishing) return { text: 'Publishing the page to claude.ai…', tone: 'run' };
+      if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', action: ['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], extra: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
+      if (t.status !== 'todo') return { text: 'Finished without a published page.', tone: 'warn', action: ['Publish', () => post('publishArtifact', { id: t.id })], extra: ['Reply', () => openTask(t.id, 'activity')] };
+    }
     if (t.where === 'root') return { text: 'Finished. Check the result, then mark it done.', tone: 'ok', action: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
     if (r?.state === 'pass') return { text: r.risk === 'critical' ? 'Review passed, flagged critical: look before merging' : 'Review passed. Ready to merge.', tone: r.risk === 'critical' ? 'warn' : 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
     if (r?.state === 'fail' && r.attempts >= max) return { text: `Review still finds ${r.issues?.length ?? 0} issue(s) after ${r.attempts} rounds`, tone: 'err', action: ['Send to Claude', () => post('sendIssues', { id: t.id })] };
@@ -139,6 +144,8 @@
           h('div', { class: 'row' },
             h('label', {}, 'Agent ', h('select', { id: 'agent' })),
             h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
+            h('label', { title: 'Code change: Claude edits the project. Artifact page: Claude designs one web page (with the frontend-design skill) and JustCode publishes it to claude.ai and puts the link on the card. Tasks that say "artifact" pick this by themselves.' }, 'Result ',
+              h('select', { id: 'output' }, h('option', { value: '' }, 'Code change'), h('option', { value: 'artifact' }, 'Artifact page (link)'))),
             h('label', { title: 'Own branch: an isolated copy you review and merge. Project folder: runs in the project itself (deploys, syncs, releases).' }, 'Runs in ',
               h('select', { id: 'where' }, h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'root' }, 'Project folder'))))))),
     h('div', { id: 'toolbar', class: 'toolbar' }),
@@ -172,9 +179,11 @@
     const sprint = $('#sprintSel').value;
     const done = $('#done').value.split('\n').map(x => x.trim().replace(/^[-*]\s*/, '')).filter(Boolean);
     const description = [$('#desc').value.trim(), done.length ? `Done when:\n${done.map(d => `- ${d}`).join('\n')}` : ''].filter(Boolean).join('\n');
-    post('addTask', { title, description, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
+    // "make an artifact…", "artifact of the API": the result is a published page, not a code change.
+    const output = $('#output').value || (/\bartifacts?\b/i.test(`${title}\n${description}`) ? 'artifact' : '');
+    post('addTask', { title, description, output, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
       sprintId: sprint || undefined, images, files, sources: (S.sources || []).map(s => s.id).filter(id => !srcOff.has(id)), start });
-    $('#title').value = ''; $('#desc').value = ''; $('#done').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
+    $('#title').value = ''; $('#desc').value = ''; $('#done').value = ''; $('#output').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
   }
 
   /* ---------- render ---------- */
@@ -333,7 +342,7 @@
       h('div', { class: 'meta' },
         t.agent ? h('span', { class: 'tag' }, t.agent) : '',
         h('span', { class: `tag mode-${t.mode}` }, modeName(t.mode)),
-        t.where === 'root' ? h('span', { class: 'tag' }, 'project folder') : '',
+        t.output === 'artifact' ? h('span', { class: 'tag', title: 'Result: a page published as a claude.ai artifact' }, '⧉ artifact') : t.where === 'root' ? h('span', { class: 'tag' }, 'project folder') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
@@ -499,6 +508,10 @@
           h('ul', { class: 'checks' }, t.checks.results.map(r => h('li', { class: r.ok ? 'ok' : r.preexisting ? 'pre' : 'bad' },
             h('span', { class: 'dot' }, r.ok ? '✓' : r.preexisting ? '○' : '✗'), h('code', {}, r.cmd), h('span', { class: 'muted small' }, ` ${Math.round(r.ms / 1000)}s${r.preexisting ? ' · fails on the base branch too: ignored' : ''}${r.timedOut ? ' · timed out' : ''}`)))),
           btn('Open log', () => post('openArtifact', { id: t.id, which: 'checks' }), 'ghost')) : '',
+        t.output === 'artifact' ? h('div', { class: 'row small' }, h('b', {}, 'Artifact '), t.artifactUrl
+          ? [h('a', { onclick: () => post('openUrl', { url: t.artifactUrl }), title: 'Open in your browser' }, t.artifactUrl), btn('Copy link', () => post('copy', { text: t.artifactUrl }), 'ghost')]
+          : h('span', { class: 'muted' }, t.publishing ? 'publishing…' : 'not published yet'),
+          t.status !== 'todo' ? btn(t.artifactUrl ? 'Publish again' : 'Publish', () => post('publishArtifact', { id: t.id }), 'ghost') : '') : '',
         t.files?.length ? h('p', { class: 'small' }, 'Attached: ', t.files.map(base).join(', ')) : '',
         t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
         h('details', { class: 'adv' }, h('summary', {}, 'Files Claude wrote, logs and tokens'),

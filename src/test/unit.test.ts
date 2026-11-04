@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst } from '../claude';
+import { parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store } from '../store';
 import { parseTasks, syncTasks } from '../tasksmd';
@@ -428,4 +428,20 @@ test('queue: Run all continues when a task is merged with no Claude process open
   assert.deepEqual(started, [b.id]);
   assert.deepEqual(store.queue, []);
   r.dispose(); store.dispose();
+});
+
+test('artifact tasks: frontend-design is found by path, the brief sets the rules, the link is read', () => {
+  const dir = tmp(), install = path.join(dir, 'fd', '1.1.1');
+  fs.mkdirSync(path.join(install, 'skills', 'frontend-design'), { recursive: true });
+  const file = path.join(dir, 'installed_plugins.json');
+  fs.writeFileSync(file, JSON.stringify({ version: 2, plugins: { 'frontend-design@claude-plugins-official': [
+    { scope: 'project', installPath: path.join(dir, 'missing') }, { scope: 'user', installPath: install }] } }));
+  assert.equal(frontendDesignPlugin(file), install);
+  assert.equal(frontendDesignPlugin(path.join(dir, 'none.json')), undefined);
+  const brief = artifactBrief('/p/.justcode/tasks/t1/artifact.html', true);
+  assert.match(brief, /\/p\/\.justcode\/tasks\/t1\/artifact\.html/);
+  assert.match(brief, /frontend-design/);
+  assert.match(brief, /Do not publish it yourself/);
+  assert.equal(ARTIFACT_URL.exec('{"text":"Published: https://claude.ai/code/artifact/5fbea6f3-aa11-4c2d-9e7a-0b1c2d3e4f50 ok"}')?.[0], 'https://claude.ai/code/artifact/5fbea6f3-aa11-4c2d-9e7a-0b1c2d3e4f50');
+  assert.equal(ARTIFACT_URL.exec('see https://claude.ai/artifact/abc123')?.[0], 'https://claude.ai/artifact/abc123');
 });
