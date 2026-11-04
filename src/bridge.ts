@@ -65,3 +65,30 @@ export async function remotePaths(hub: DialogHub, root: string, label: string): 
   const v = (await hub.ask({ title: label, text: 'One file or folder path per line (inside the project).', buttons: ['OK'], input: { label: 'Paths', multiline: true } }))?.value;
   return (v ?? '').split('\n').map(x => x.trim()).filter(Boolean).flatMap(x => confinePath(root, x) ?? []);
 }
+
+/** A remote caller can never approve its own bypass: the answer would come from the same token. */
+export const confirmBypassFor = (remote: boolean, confirm: () => Promise<boolean>) => remote ? Promise.resolve(false) : confirm();
+
+/** Board messages from a phone: dialog replies, and merge of a reviewed task after a confirm. The task is re-checked after the confirm,
+ *  and a second merge for a task that already has a confirm open is ignored. */
+export function makePhoneBoard<T extends { id: string; title: string; base?: string }>(d: {
+  hub: DialogHub; task(id: string): T | undefined; canMerge(t: T): boolean; merge(id: string): Promise<unknown>;
+}) {
+  const busy = new Set<string>();
+  const refuse = () => new Error('only tasks that passed review (and are not flagged critical) can be merged from the phone');
+  return async (m: any): Promise<void> => {
+    if (m.type === 'dialogReply') { d.hub.reply(m); return; }
+    if (m.type !== 'merge') return;
+    const id = String(m.id ?? '');
+    const t = d.task(id);
+    if (!t || !d.canMerge(t)) throw refuse();
+    if (busy.has(id)) return;
+    busy.add(id);
+    try {
+      if (!await remoteConfirm(d.hub, `Merge "${t.title}"${t.base ? ` into ${t.base}` : ''}?`, 'Merge')) return;
+      const now = d.task(id);
+      if (!now || !d.canMerge(now)) throw refuse();
+      await d.merge(id);
+    } finally { busy.delete(id); }
+  };
+}

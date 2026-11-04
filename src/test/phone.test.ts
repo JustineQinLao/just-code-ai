@@ -209,3 +209,36 @@ test('phone server: /api/board refuses everything but dialogReply and merge', as
       assert.equal((await fetch(base + '/api/board', { method: 'POST', headers: { 'x-token': 's' }, body: JSON.stringify({ type, mode: 'bypassPermissions' }) })).status, 400, type);
   } finally { srv.close(); }
 });
+
+import { makePhoneBoard, confirmBypassFor } from '../bridge';
+const replyNext = (h: DialogHub, x: object) => setImmediate(() => { const e = h.events(0).events.find((m: any) => m.type === 'dialog') as any; h.reply({ id: e.id, ...x }); });
+
+test('remote bypass is refused without asking; desktop still asks', async () => {
+  let asked = 0;
+  assert.equal(await confirmBypassFor(true, async () => { asked++; return true; }), false);
+  assert.equal(asked, 0);
+  assert.equal(await confirmBypassFor(false, async () => { asked++; return true; }), true);
+});
+
+test('phoneBoard: merge needs a confirm, re-checks after it, ignores a second tap, refuses other types', async () => {
+  let ok = true; const merged: string[] = [];
+  const mk = (h: DialogHub) => makePhoneBoard({ hub: h, task: id => id === 'a' ? { id, title: 'A', base: 'main' } : undefined, canMerge: () => ok, merge: async id => { merged.push(id); } });
+  let h = new DialogHub(50), board = mk(h);
+  replyNext(h, { cancelled: true }); await board({ type: 'merge', id: 'a' });
+  assert.deepEqual(merged, []);                                   // declined
+  await board({ type: 'merge', id: 'a' }); assert.deepEqual(merged, []); // timed out
+  replyNext(h, { button: 'Merge' }); await board({ type: 'merge', id: 'a' });
+  assert.deepEqual(merged, ['a']);
+  await assert.rejects(board({ type: 'merge', id: 'zzz' }));      // unknown task
+  ok = false; await assert.rejects(board({ type: 'merge', id: 'a' })); // not mergeable
+  await board({ type: 'setMode', id: 'a' }); assert.deepEqual(merged, ['a']);
+  // review flips to not-mergeable while the dialog is open
+  ok = true; h = new DialogHub(500); board = mk(h); merged.length = 0;
+  setImmediate(() => { ok = false; const e = h.events(0).events[0] as any; h.reply({ id: e.id, button: 'Merge' }); });
+  await assert.rejects(board({ type: 'merge', id: 'a' })); assert.deepEqual(merged, []);
+  // double tap: second request while the first dialog is open opens no second dialog and does not merge twice
+  ok = true; h = new DialogHub(500); board = mk(h);
+  const first = board({ type: 'merge', id: 'a' }); await board({ type: 'merge', id: 'a' });
+  assert.equal(h.events(0).events.length, 1);
+  replyNext(h, { button: 'Merge' }); await first; assert.deepEqual(merged, ['a']);
+});

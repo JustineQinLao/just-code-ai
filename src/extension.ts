@@ -1,4 +1,4 @@
-import { DialogHub, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
+import { DialogHub, makePhoneBoard, confirmBypassFor, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -248,13 +248,8 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
   // Only a reply to a pending dialog, or a merge of a task that passed review (same rule as /api/act), may come from a phone.
-  async function phoneBoard(m: any): Promise<void> {
-    if (m.type === 'dialogReply') { hub.reply(m); return; }
-    if (m.type !== 'merge') return;
-    const r = runner(), t = r && m.id ? r.store.task(m.id) : undefined;
-    if (!r || !t || !canPhoneMerge(t)) throw new Error('only tasks that passed review (and are not flagged critical) can be merged from the phone');
-    await handle({ type: 'merge', id: t.id, root: r.root }, true);
-  }
+  const hub = new DialogHub();
+  const phoneBoard = makePhoneBoard<Task>({ hub, task: id => runner()?.store.task(id), canMerge: canPhoneMerge, merge: id => runner()!.merge(id) });
   async function syncPhone() {
     const on = setting('phoneServer', false);
     if (!on) { phone?.close(); phone = undefined; return; }
@@ -300,7 +295,6 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Remote clients (phone) cannot see VS Code's modal dialogs, so these go over the bridge: the host posts a 'dialog'
   // request, board.js shows it in #dlg, and the answer returns as 'dialogReply'. Desktop keeps the native dialogs.
-  const hub = new DialogHub();
   const confirmFor = (remote: boolean) => async (text: string, action: string) => remote
     ? remoteConfirm(hub, text, action)
     : await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
@@ -312,7 +306,7 @@ export function activate(context: vscode.ExtensionContext) {
   async function handle(m: any, remote = false) {
     const confirm = confirmFor(remote);
     // A remote caller must not approve its own bypass: the answer would come from the same token. Desktop only.
-    const confirmBypass = async () => !remote && confirm(BYPASS_TEXT, 'Bypass permissions');
+    const confirmBypass = () => confirmBypassFor(remote, () => confirm(BYPASS_TEXT, 'Bypass permissions'));
     const say = (text: string) => remote ? hub.emit({ type: 'toast', text }) : void vscode.window.showInformationMessage(text);
     const input = async (o: vscode.InputBoxOptions & { multiline?: boolean }) => remote ? remoteInput(hub, { ...o, validateInput: v => { const e = o.validateInput?.(v); return typeof e === 'string' ? e : undefined; } }) : vscode.window.showInputBox(o);
     switch (m.type) {

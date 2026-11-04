@@ -90,7 +90,7 @@ d.textContent='';d.append(el('b',{},m.title),el('p',{},m.text||''));
 for(const b of m.buttons||['OK'])d.append(el('button',{onclick:()=>fin({button:b})},b));
 d.append(el('button',{className:'n',onclick:()=>fin({cancelled:true})},'Cancel'));
 d.onclose=()=>fin({cancelled:true});if(!d.open)d.showModal()}
-async function poll(){try{const r=await fetch('/api/events?since='+evN,{headers:H()});if(r.ok){const j=await r.json();evN=j.last;for(const e of j.events)if(e.type==='dialog')showDialog(e);else if(e.type==='toast')alert(e.text)}}catch(e){}}
+async function poll(){try{const r=await fetch('/api/events?since='+evN,{headers:H()});if(r.ok){const j=await r.json();if(j.last<evN){evN=0;return poll()}evN=j.last;for(const e of j.events)if(e.type==='dialog')showDialog(e);else if(e.type==='toast')alert(e.text)}}catch(e){}}
 function el(t,p,...k){const e=document.createElement(t);Object.assign(e,p);e.append(...k);return e}
 let fails=0,timer,seen=new Set(),first=true,busy=false;
 function sched(){clearTimeout(timer);timer=setTimeout(load,Math.min(3000*2**fails,30000))}
