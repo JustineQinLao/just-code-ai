@@ -11,8 +11,8 @@ export interface PhoneDeps {
 }
 
 // Actions a phone may send. Anything else is refused, so a leaked token cannot open files, change settings, etc.
-// Board messages a remote page may relay: those that raise dialogs, plus the replies. All other board messages are refused.
-export const BOARD_ACTIONS = ['dialogReply', 'merge', 'mergeReady', 'discard', 'delete', 'addTask', 'editTask', 'setMode', 'closeSprint', 'copy', 'openUrl', 'pickFiles', 'addSource', 'openArtifact'] as const;
+// Board messages a remote page may relay: answers to dialogs, and merge (which the host checks and confirms). Nothing else.
+export const BOARD_ACTIONS = ['dialogReply', 'merge'] as const;
 
 export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge'] as const;
 
@@ -77,11 +77,20 @@ button.n{background:#444}input{box-sizing:border-box;font:inherit;padding:8px;wi
 .a{border:1px solid #f59e0b;padding:8px;margin-top:8px;border-radius:6px;word-break:break-all}
 </style></head><body><header>JustCode</header>
 <input id="t" placeholder="Token (from VS Code: JustCode: Show Phone Pairing)"><input id="n" placeholder="New task title">
-<button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="l"></div>
+<dialog id="dg" style="background:#222;color:#eee;border:1px solid #555;border-radius:8px;max-width:90vw"></dialog><button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="l"></div>
 <script>
 const $=id=>document.getElementById(id);$('t').value=localStorage.tok||new URLSearchParams(location.search).get('token')||'';
 const H=()=>({'x-token':$('t').value,'content-type':'application/json'});
 async function act(m){const r=await fetch('/api/act',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();if(j.error)alert(j.error);load()}
+async function board(m){const r=await fetch('/api/board',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();if(j.error)alert(j.error);load()}
+let evN=0,shown=new Set();
+function showDialog(m){if(shown.has(m.id))return;shown.add(m.id);const d=$('dg');let done=false;
+const fin=x=>{if(done)return;done=true;board(Object.assign({type:'dialogReply',id:m.id},x));d.close()};
+d.textContent='';d.append(el('b',{},m.title),el('p',{},m.text||''));
+for(const b of m.buttons||['OK'])d.append(el('button',{onclick:()=>fin({button:b})},b));
+d.append(el('button',{className:'n',onclick:()=>fin({cancelled:true})},'Cancel'));
+d.onclose=()=>fin({cancelled:true});if(!d.open)d.showModal()}
+async function poll(){try{const r=await fetch('/api/events?since='+evN,{headers:H()});if(r.ok){const j=await r.json();evN=j.last;for(const e of j.events)if(e.type==='dialog')showDialog(e);else if(e.type==='toast')alert(e.text)}}catch(e){}}
 function el(t,p,...k){const e=document.createElement(t);Object.assign(e,p);e.append(...k);return e}
 let fails=0,timer,seen=new Set(),first=true,busy=false;
 function sched(){clearTimeout(timer);timer=setTimeout(load,Math.min(3000*2**fails,30000))}
@@ -98,7 +107,7 @@ if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
 for(const a of t.asks){const d=el('div',{className:'a'},a.tool+': '+a.detail,el('br'));
 if(a.kind==='permission'){d.append(el('button',{onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'allow'})},'Approve'),el('button',{className:'n',onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'deny'})},'Deny'))}else d.append(el('i',{},'Answer this one in VS Code'));c.append(d)}
-if(t.canMerge)c.append(el('button',{onclick:()=>confirm('Merge '+t.title+'?')&&act({type:'merge',id:t.id})},'Merge'));l.append(c);
+if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));l.append(c);
 for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}}
 first=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);notifState()}
 catch(e){fails++;$('st').textContent='Offline, retrying in '+Math.min(3000*2**fails,30000)/1000+'s'}
@@ -112,7 +121,7 @@ if(!window.Notification||!navigator.serviceWorker||!window.isSecureContext){n.te
 if(Notification.permission==='default')n.append(el('button',{className:'n',onclick:()=>Notification.requestPermission().then(notifState)},'Enable approval notifications'));
 else if(Notification.permission==='denied')n.textContent='Notifications are blocked in browser settings.'}
 $('add').onclick=()=>{if($('n').value){act({type:'addTask',title:$('n').value,start:true});$('n').value=''}};
-load();
+load();if(typeof setInterval==='function')setInterval(poll,2000);
 </script></body></html>`;
 
 /** The link the Android app pairs with (also what the QR encodes). */

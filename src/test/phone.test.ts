@@ -175,3 +175,37 @@ test('phone server: /api/board strips client remote flag and whitelists types', 
     assert.equal((await fetch(base + '/api/events?since=3', { headers: { 'x-token': 's' } })).status, 200);
   } finally { srv.close(); }
 });
+
+import { remoteConfirm, remoteInput, remotePaths } from '../bridge';
+const answer = (h: DialogHub, x: object) => setImmediate(() => { const e = h.events(0).events.find((m: any) => m.type === 'dialog') as any; h.reply({ id: e.id, ...x }); });
+
+test('remote confirm: only the offered button proceeds; decline, cancel and timeout do not', async () => {
+  let h = new DialogHub(50); answer(h, { button: 'Bypass permissions' });
+  assert.equal(await remoteConfirm(h, 't', 'Bypass permissions'), true);
+  h = new DialogHub(50); answer(h, { button: 'Other' });
+  assert.equal(await remoteConfirm(h, 't', 'Bypass permissions'), false);
+  h = new DialogHub(50); answer(h, { cancelled: true });
+  assert.equal(await remoteConfirm(h, 't', 'Merge'), false);
+  assert.equal(await remoteConfirm(new DialogHub(30), 't', 'Merge'), false); // no reply: declined
+});
+
+test('remote input revalidates; remotePaths confines; answered dialogs leave the event log', async () => {
+  const v = (x: string) => validLink(x) ? undefined : 'bad';
+  let h = new DialogHub(50); answer(h, { button: 'OK', value: 'file:///etc/passwd' });
+  assert.equal(await remoteInput(h, { title: 'l', validateInput: v }), undefined);
+  h = new DialogHub(50); answer(h, { button: 'OK', value: 'https://a.dev' });
+  assert.equal(await remoteInput(h, { title: 'l', validateInput: v }), 'https://a.dev');
+  assert.deepEqual(h.events(0).events, []); // stale dialog is gone
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-r-')); fs.writeFileSync(path.join(root, 'f'), '');
+  h = new DialogHub(50); answer(h, { button: 'OK', value: 'f\n/etc/hosts\n../x' });
+  assert.deepEqual(await remotePaths(h, root, 'Attach'), [path.join(fs.realpathSync(root), 'f')]);
+});
+
+test('phone server: /api/board refuses everything but dialogReply and merge', async () => {
+  const srv = await startPhoneServer(0, { token: 's', state: () => ({}), act: async () => {}, board: async () => {} });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    for (const type of ['setMode', 'addTask', 'editTask', 'delete', 'addSource', 'pickFiles', 'discard'])
+      assert.equal((await fetch(base + '/api/board', { method: 'POST', headers: { 'x-token': 's' }, body: JSON.stringify({ type, mode: 'bypassPermissions' }) })).status, 400, type);
+  } finally { srv.close(); }
+});

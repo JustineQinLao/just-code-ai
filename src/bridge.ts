@@ -8,19 +8,20 @@ export interface DialogReq { title: string; text?: string; buttons?: string[]; i
 /** Request/response dialogs for remote clients. Events are queued so a polling client can fetch them. */
 export class DialogHub {
   private pending = new Map<string, { res: (v: DialogReply) => void; timer: NodeJS.Timeout }>();
-  private log: { n: number; msg: any }[] = [];
+  private log: { n: number; msg: any; dialog?: string }[] = [];
   private n = 0;
   constructor(private timeoutMs = 120_000) {}
 
   /** Any message for the remote client (dialog, toast, copy, open). */
-  emit(msg: Record<string, unknown>) { this.log.push({ n: ++this.n, msg }); if (this.log.length > 100) this.log.shift(); }
+  emit(msg: Record<string, unknown>) { this.log.push({ n: ++this.n, msg, dialog: msg.type === 'dialog' ? String(msg.id) : undefined }); if (this.log.length > 100) this.log.shift(); }
+  private drop(id: string) { this.log = this.log.filter(e => e.dialog !== id); }
   events(since: number) { return { last: this.n, events: this.log.filter(e => e.n > since).map(e => e.msg) }; }
 
   /** Resolves with the answer, or undefined (decline) on cancel or timeout. */
   ask(req: DialogReq): Promise<DialogReply> {
     const id = randomUUID();
     return new Promise(res => {
-      const timer = setTimeout(() => { this.pending.delete(id); res(undefined); }, this.timeoutMs);
+      const timer = setTimeout(() => { this.pending.delete(id); this.drop(id); res(undefined); }, this.timeoutMs);
       this.pending.set(id, { res, timer });
       this.emit({ type: 'dialog', id, ...req });
     });
@@ -30,7 +31,7 @@ export class DialogHub {
   reply(m: { id?: unknown; cancelled?: unknown; button?: unknown; value?: unknown }): boolean {
     const p = typeof m.id === 'string' ? this.pending.get(m.id) : undefined;
     if (!p) return false;
-    clearTimeout(p.timer); this.pending.delete(String(m.id));
+    clearTimeout(p.timer); this.pending.delete(String(m.id)); this.drop(String(m.id));
     p.res(m.cancelled ? undefined : { button: typeof m.button === 'string' ? m.button : undefined, value: typeof m.value === 'string' ? m.value : undefined });
     return true;
   }
@@ -48,3 +49,19 @@ export function confinePath(root: string, p: string): string | undefined {
 }
 
 export const validLink = (v: string) => /^https?:\/\/\S+$/.test(v.trim());
+
+/** Remote confirm: true only when the client answers with the offered button. */
+export const remoteConfirm = (hub: DialogHub, text: string, action: string) =>
+  hub.ask({ title: 'Please confirm', text, buttons: [action] }).then(r => r?.button === action);
+
+/** Remote text input, validated like the native box: an invalid value counts as no answer. */
+export async function remoteInput(hub: DialogHub, o: { title?: string; prompt?: string; multiline?: boolean; validateInput?: (v: string) => string | undefined | null }) {
+  const v = (await hub.ask({ title: o.title ?? '', text: o.prompt, buttons: ['OK'], input: { label: o.title ?? '', multiline: o.multiline } }))?.value;
+  return v !== undefined && o.validateInput?.(v) ? undefined : v;
+}
+
+/** Remote file picking: typed paths, confined to the project. */
+export async function remotePaths(hub: DialogHub, root: string, label: string): Promise<string[]> {
+  const v = (await hub.ask({ title: label, text: 'One file or folder path per line (inside the project).', buttons: ['OK'], input: { label: 'Paths', multiline: true } }))?.value;
+  return (v ?? '').split('\n').map(x => x.trim()).filter(Boolean).flatMap(x => confinePath(root, x) ?? []);
+}
