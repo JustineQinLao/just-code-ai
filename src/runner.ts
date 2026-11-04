@@ -80,6 +80,10 @@ export class Runner {
         if (!t || t.status === 'done' || t.archived) this.stop(id);
       }
       this.sweepSoon();
+      // A slot may have opened (merged, done, archived, deleted, discarded), however it happened: Run all continues.
+      // Before, the queue only moved when the merged task's Claude process exited, so a task whose process had
+      // already closed (idle during a long review) left the queue stuck.
+      this.pumpSoon();
     });
     // A review that was running when the window closed never finished.
     for (const t of store.data.tasks) if (t.review?.state === 'running') store.updateTask(t.id, { review: undefined });
@@ -489,6 +493,14 @@ export class Runner {
     return { queued: this.store.queue, blocker: { id: b.id, title: b.title, why } };
   }
 
+  private pumpTimer?: NodeJS.Timeout;
+  private pumpSoon(ms = 300) {
+    if (!this.store.queue.length) return;
+    clearTimeout(this.pumpTimer);
+    this.pumpTimer = setTimeout(() => this.pump(), ms);
+    this.pumpTimer.unref?.();
+  }
+
   private pump() {
     if (this.disposed || this.d.limits.held()) return;
     const q = [...this.store.queue];
@@ -726,6 +738,7 @@ export class Runner {
       await this.cleanup(t);
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
+      this.pump();  // its slot is free: the next queued task starts on top of this merge
     });
   }
 
@@ -890,6 +903,7 @@ export class Runner {
     this.disposed = true;
     this.unsub.dispose();
     clearTimeout(this.sweepTimer);
+    clearTimeout(this.pumpTimer);
     this.planner?.kill();
     for (const s of this.sessions.values()) s.kill();
     this.sessions.clear();

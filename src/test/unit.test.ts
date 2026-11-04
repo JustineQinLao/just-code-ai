@@ -407,3 +407,25 @@ test('runner: a task merged while its checks run is not sent back; Resume clears
   assert.ok(fs.existsSync(path.join(wt, '.git')));
   r.dispose();
 });
+
+test('queue: Run all continues when a task is merged with no Claude process open', async () => {
+  const root = tmp();
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  const store = new Store(root);
+  const settings: any = { maxParallel: 1, taskModel: '', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, freshAfterTokens: 0, checks: '', setup: '', maxCheckRounds: 2, checkTimeoutMinutes: 1,
+    review: { auto: false, model: '', lightModel: '', triage: true, maxAttempts: 3, autoMerge: false, mergeIfCannotRun: false, commands: [], timeoutMinutes: 1 } };
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  const started: string[] = [];
+  r.run = async (id: string) => { started.push(id); };
+  // A is in review (its process closed long ago); B waits in the queue behind it.
+  const a = store.addTask({ title: 'A', mode: 'auto' });
+  store.updateTask(a.id, { status: 'review', worktree: path.join(root, 'wt-a'), branch: 'jc/a' });
+  const b = store.addTask({ title: 'B', mode: 'auto' });
+  r.runAll([b.id]);
+  assert.deepEqual(started, []);                    // no free slot while A is in flight
+  store.updateTask(a.id, { status: 'done', worktree: undefined });  // merged
+  await new Promise(res => setTimeout(res, 400));
+  assert.deepEqual(started, [b.id]);
+  assert.deepEqual(store.queue, []);
+  r.dispose(); store.dispose();
+});
