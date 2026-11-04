@@ -276,7 +276,7 @@ export function activate(context: vscode.ExtensionContext) {
       panel.iconPath = vscode.Uri.joinPath(media, 'icon.svg');
       const w = panel.webview, nonce = randomUUID().replace(/-/g, '');
       const u = (...p: string[]) => w.asWebviewUri(vscode.Uri.joinPath(media, ...p));
-      w.html = `<!doctype html><html><head><meta charset="utf-8">
+      w.html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${w.cspSource} data:; style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${u('board.css')}"></head>
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
