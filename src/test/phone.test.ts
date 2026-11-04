@@ -128,3 +128,117 @@ test('phoneLinkUrl and qrSvg', () => {
   assert.match(svg, /^<svg/);
   assert.ok(svg.length > 500);
 });
+
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { DialogHub, confinePath, validLink } from '../bridge';
+
+test('DialogHub: accept, cancel, unknown id, timeout', async () => {
+  const h = new DialogHub(50);
+  const a = h.ask({ title: 't', buttons: ['Merge'] });
+  const id = (h.events(0).events[0] as any).id;
+  assert.equal(h.reply({ id: 'nope' }), false);
+  assert.equal(h.reply({ id, button: 'Merge' }), true);
+  assert.deepEqual(await a, { button: 'Merge', value: undefined });
+  assert.equal(h.reply({ id, button: 'Merge' }), false); // already answered
+  const b = h.ask({ title: 't' });
+  h.reply({ id: (h.events(1).events[0] as any).id, cancelled: true });
+  assert.equal(await b, undefined);
+  assert.equal(await h.ask({ title: 'slow' }), undefined); // times out as a decline
+  assert.equal(h.size, 0);
+});
+
+test('confinePath and validLink', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-root-'));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-out-'));
+  fs.writeFileSync(path.join(root, 'a.txt'), ''); fs.writeFileSync(path.join(out, 'secret'), '');
+  fs.symlinkSync(out, path.join(root, 'link'));
+  const real = fs.realpathSync(root);
+  assert.equal(confinePath(root, 'a.txt'), path.join(real, 'a.txt'));
+  assert.equal(confinePath(root, path.join(out, 'secret')), undefined);
+  assert.equal(confinePath(root, '../' + path.basename(out) + '/secret'), undefined);
+  assert.equal(confinePath(root, 'link/secret'), undefined);
+  assert.equal(confinePath(root, 'missing'), undefined);
+  assert.ok(validLink('https://x.dev/a') && !validLink('file:///etc/passwd') && !validLink('javascript:alert(1)'));
+});
+
+test('phone server: /api/board strips client remote flag and whitelists types', async () => {
+  const got: any[] = [];
+  const srv = await startPhoneServer(0, { token: 's', state: () => ({}), act: async () => {}, board: async m => { got.push(m); }, events: n => ({ n }) });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const post = (b: object) => fetch(base + '/api/board', { method: 'POST', headers: { 'x-token': 's' }, body: JSON.stringify(b) });
+    assert.equal((await post({ type: 'merge', id: 'a', remote: false })).status, 200);
+    assert.equal((await post({ type: 'openFile' })).status, 400);
+    assert.equal('remote' in got[0], false);
+    assert.equal((await fetch(base + '/api/events?since=3', { headers: { 'x-token': 's' } })).status, 200);
+  } finally { srv.close(); }
+});
+
+import { remoteConfirm, remoteInput, remotePaths } from '../bridge';
+const answer = (h: DialogHub, x: object) => setImmediate(() => { const e = h.events(0).events.find((m: any) => m.type === 'dialog') as any; h.reply({ id: e.id, ...x }); });
+
+test('remote confirm: only the offered button proceeds; decline, cancel and timeout do not', async () => {
+  let h = new DialogHub(50); answer(h, { button: 'Bypass permissions' });
+  assert.equal(await remoteConfirm(h, 't', 'Bypass permissions'), true);
+  h = new DialogHub(50); answer(h, { button: 'Other' });
+  assert.equal(await remoteConfirm(h, 't', 'Bypass permissions'), false);
+  h = new DialogHub(50); answer(h, { cancelled: true });
+  assert.equal(await remoteConfirm(h, 't', 'Merge'), false);
+  assert.equal(await remoteConfirm(new DialogHub(30), 't', 'Merge'), false); // no reply: declined
+});
+
+test('remote input revalidates; remotePaths confines; answered dialogs leave the event log', async () => {
+  const v = (x: string) => validLink(x) ? undefined : 'bad';
+  let h = new DialogHub(50); answer(h, { button: 'OK', value: 'file:///etc/passwd' });
+  assert.equal(await remoteInput(h, { title: 'l', validateInput: v }), undefined);
+  h = new DialogHub(50); answer(h, { button: 'OK', value: 'https://a.dev' });
+  assert.equal(await remoteInput(h, { title: 'l', validateInput: v }), 'https://a.dev');
+  assert.deepEqual(h.events(0).events, []); // stale dialog is gone
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-r-')); fs.writeFileSync(path.join(root, 'f'), '');
+  h = new DialogHub(50); answer(h, { button: 'OK', value: 'f\n/etc/hosts\n../x' });
+  assert.deepEqual(await remotePaths(h, root, 'Attach'), [path.join(fs.realpathSync(root), 'f')]);
+});
+
+test('phone server: /api/board refuses everything but dialogReply and merge', async () => {
+  const srv = await startPhoneServer(0, { token: 's', state: () => ({}), act: async () => {}, board: async () => {} });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    for (const type of ['setMode', 'addTask', 'editTask', 'delete', 'addSource', 'pickFiles', 'discard'])
+      assert.equal((await fetch(base + '/api/board', { method: 'POST', headers: { 'x-token': 's' }, body: JSON.stringify({ type, mode: 'bypassPermissions' }) })).status, 400, type);
+  } finally { srv.close(); }
+});
+
+import { makePhoneBoard, confirmBypassFor } from '../bridge';
+const replyNext = (h: DialogHub, x: object) => setImmediate(() => { const e = h.events(0).events.find((m: any) => m.type === 'dialog') as any; h.reply({ id: e.id, ...x }); });
+
+test('remote bypass is refused without asking; desktop still asks', async () => {
+  let asked = 0;
+  assert.equal(await confirmBypassFor(true, async () => { asked++; return true; }), false);
+  assert.equal(asked, 0);
+  assert.equal(await confirmBypassFor(false, async () => { asked++; return true; }), true);
+});
+
+test('phoneBoard: merge needs a confirm, re-checks after it, ignores a second tap, refuses other types', async () => {
+  let ok = true; const merged: string[] = [];
+  const mk = (h: DialogHub) => makePhoneBoard({ hub: h, task: id => id === 'a' ? { id, title: 'A', base: 'main' } : undefined, canMerge: () => ok, merge: async id => { merged.push(id); } });
+  let h = new DialogHub(50), board = mk(h);
+  replyNext(h, { cancelled: true }); await board({ type: 'merge', id: 'a' });
+  assert.deepEqual(merged, []);                                   // declined
+  await board({ type: 'merge', id: 'a' }); assert.deepEqual(merged, []); // timed out
+  replyNext(h, { button: 'Merge' }); await board({ type: 'merge', id: 'a' });
+  assert.deepEqual(merged, ['a']);
+  await assert.rejects(board({ type: 'merge', id: 'zzz' }));      // unknown task
+  ok = false; await assert.rejects(board({ type: 'merge', id: 'a' })); // not mergeable
+  await board({ type: 'setMode', id: 'a' }); assert.deepEqual(merged, ['a']);
+  // review flips to not-mergeable while the dialog is open
+  ok = true; h = new DialogHub(500); board = mk(h); merged.length = 0;
+  setImmediate(() => { ok = false; const e = h.events(0).events[0] as any; h.reply({ id: e.id, button: 'Merge' }); });
+  await assert.rejects(board({ type: 'merge', id: 'a' })); assert.deepEqual(merged, []);
+  // double tap: second request while the first dialog is open opens no second dialog and does not merge twice
+  ok = true; h = new DialogHub(500); board = mk(h);
+  const first = board({ type: 'merge', id: 'a' }); await board({ type: 'merge', id: 'a' });
+  assert.equal(h.events(0).events.length, 1);
+  replyNext(h, { button: 'Merge' }); await first; assert.deepEqual(merged, ['a']);
+});
