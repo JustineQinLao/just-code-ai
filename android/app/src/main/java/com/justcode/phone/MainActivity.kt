@@ -1,0 +1,127 @@
+package com.justcode.phone
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.view.Menu
+import android.view.MenuItem
+import android.view.View
+import android.webkit.WebView
+import android.widget.*
+import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.*
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
+import java.util.concurrent.Executors
+
+class MainActivity : AppCompatActivity() {
+    private lateinit var root: FrameLayout
+    private var scanning = false
+
+    override fun onCreate(b: Bundle?) {
+        super.onCreate(b)
+        root = FrameLayout(this); setContentView(root)
+        connect()
+    }
+
+    override fun onCreateOptionsMenu(m: Menu): Boolean { m.add(0, 1, 0, "Forget / re-pair"); return true }
+    override fun onOptionsItemSelected(i: MenuItem): Boolean {
+        if (i.itemId == 1) { Pairing.forget(this); showPairing(null); return true }
+        return super.onOptionsItemSelected(i)
+    }
+
+    /** Reconnect with the saved link, or show the pairing screen. */
+    private fun connect() {
+        val link = Pairing.load(this) ?: return showPairing(null)
+        showMessage("Connecting…", null)
+        Executors.newSingleThreadExecutor().execute {
+            val r = Pairing.check(link)
+            runOnUiThread {
+                when (r) {
+                    is Pairing.Check.Ok -> showBoard(link)
+                    is Pairing.Check.Unauthorized -> { Pairing.forget(this); showPairing("The pairing token is no longer valid (it was regenerated). Pair again.") }
+                    is Pairing.Check.Unreachable -> showMessage("Can't reach the server: ${r.why}", "Retry") { connect() }
+                }
+            }
+        }
+    }
+
+    private fun showMessage(text: String, button: String?, onClick: (() -> Unit)? = null) {
+        scanning = false
+        root.removeAllViews()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 96, 48, 48) }
+        col.addView(TextView(this).apply { this.text = text; textSize = 16f })
+        if (button != null) col.addView(Button(this).apply { this.text = button; setOnClickListener { onClick?.invoke() } })
+        root.addView(col)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showBoard(link: String) {
+        root.removeAllViews()
+        root.addView(WebView(this).apply { settings.javaScriptEnabled = true; settings.domStorageEnabled = true; loadUrl(link) })
+    }
+
+    private fun showPairing(error: String?) {
+        root.removeAllViews()
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 48, 32, 32) }
+        val msg = TextView(this).apply { text = error ?: "Scan the QR from “JustCode: Show Phone Pairing”, or paste the link."; textSize = 15f }
+        val input = EditText(this).apply { hint = "http://host:7878/?token=…"; setSingleLine() }
+        val go = Button(this).apply { text = "Pair" }
+        val scan = Button(this).apply { text = "Scan QR" }
+        val preview = PreviewView(this).apply { layoutParams = LinearLayout.LayoutParams(-1, 0, 1f); visibility = View.GONE }
+        col.addView(msg); col.addView(input); col.addView(go); col.addView(scan); col.addView(preview)
+        root.addView(col)
+        fun submit(raw: String) {
+            val link = Pairing.parse(raw) ?: run { msg.text = "That isn't a valid link (needs http://…/?token=…)."; return }
+            msg.text = "Checking…"
+            Executors.newSingleThreadExecutor().execute {
+                val r = Pairing.check(link)
+                runOnUiThread {
+                    when (r) {
+                        is Pairing.Check.Ok -> { Pairing.save(this, link); showBoard(link) }
+                        is Pairing.Check.Unauthorized -> msg.text = "The server rejected the token (401). Generate a fresh link and try again."
+                        is Pairing.Check.Unreachable -> msg.text = "Can't reach the server: ${r.why}. Check Wi-Fi and try again."
+                    }
+                }
+            }
+        }
+        go.setOnClickListener { submit(input.text.toString()) }
+        scan.setOnClickListener {
+            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startScan(preview) { submit(it) }
+            else { pendingStart = { startScan(preview) { s -> submit(s) } }; requestPermissions(arrayOf(Manifest.permission.CAMERA), 7) }
+        }
+    }
+
+    private var pendingStart: (() -> Unit)? = null
+    override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
+        super.onRequestPermissionsResult(code, p, r)
+        if (code == 7 && r.firstOrNull() == PackageManager.PERMISSION_GRANTED) pendingStart?.invoke()
+        else Toast.makeText(this, "Camera denied — paste the link instead.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun startScan(preview: PreviewView, onCode: (String) -> Unit) {
+        preview.visibility = View.VISIBLE; scanning = true
+        val fut = ProcessCameraProvider.getInstance(this)
+        fut.addListener({
+            val scanner = BarcodeScanning.getClient()
+            val analysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
+            analysis.setAnalyzer(Executors.newSingleThreadExecutor()) { proxy ->
+                val media = proxy.image
+                if (media == null || !scanning) { proxy.close(); return@setAnalyzer }
+                scanner.process(InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees))
+                    .addOnSuccessListener { codes ->
+                        val v = codes.firstOrNull { it.format == Barcode.FORMAT_QR_CODE }?.rawValue
+                        if (v != null && scanning) { scanning = false; runOnUiThread { fut.get().unbindAll(); onCode(v) } }
+                    }.addOnCompleteListener { proxy.close() }
+            }
+            val prev = Preview.Builder().build().also { it.setSurfaceProvider(preview.surfaceProvider) }
+            fut.get().unbindAll()
+            fut.get().bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, prev, analysis)
+        }, ContextCompat.getMainExecutor(this))
+    }
+}
