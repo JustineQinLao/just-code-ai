@@ -26,6 +26,7 @@ class MainActivity : AppCompatActivity() {
     private var scanPreview: PreviewView? = null
     private var scanCb: ((String) -> Unit)? = null
     private var firstResume = true
+    private var web: WebView? = null
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -33,6 +34,12 @@ class MainActivity : AppCompatActivity() {
         root = FrameLayout(this)
         setContentView(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(bar, LinearLayout.LayoutParams(-1, -2)); addView(root, LinearLayout.LayoutParams(-1, 0, 1f)) })
         setSupportActionBar(bar)
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val w = web
+                if (w != null && w.canGoBack()) w.goBack() else { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
+            }
+        })
         connect()
     }
 
@@ -59,7 +66,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showMessage(text: String, button: String?, onClick: (() -> Unit)? = null) {
-        scanning = false; boardShown = false; scanPreview = null
+        web = null; scanning = false; boardShown = false; scanPreview = null
         root.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 96, 48, 48) }
         col.addView(TextView(this).apply { this.text = text; textSize = 16f })
@@ -72,6 +79,7 @@ class MainActivity : AppCompatActivity() {
         scanPreview = null; boardShown = true
         root.removeAllViews()
         root.addView(WebView(this).apply {
+            web = this
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             webViewClient = object : android.webkit.WebViewClient() {
                 override fun onReceivedHttpError(v: WebView, r: android.webkit.WebResourceRequest, e: android.webkit.WebResourceResponse) {
@@ -83,7 +91,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showPairing(error: String?) {
-        boardShown = false; scanPreview = null; scanning = false
+        web = null; boardShown = false; scanPreview = null; scanning = false
         root.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 48, 32, 32) }
         val msg = TextView(this).apply { text = error ?: "Scan the QR from “JustCode: Show Phone Pairing”, or paste the link."; textSize = 15f }
