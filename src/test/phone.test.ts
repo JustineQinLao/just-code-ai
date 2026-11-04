@@ -128,3 +128,50 @@ test('phoneLinkUrl and qrSvg', () => {
   assert.match(svg, /^<svg/);
   assert.ok(svg.length > 500);
 });
+
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { DialogHub, confinePath, validLink } from '../bridge';
+
+test('DialogHub: accept, cancel, unknown id, timeout', async () => {
+  const h = new DialogHub(50);
+  const a = h.ask({ title: 't', buttons: ['Merge'] });
+  const id = (h.events(0).events[0] as any).id;
+  assert.equal(h.reply({ id: 'nope' }), false);
+  assert.equal(h.reply({ id, button: 'Merge' }), true);
+  assert.deepEqual(await a, { button: 'Merge', value: undefined });
+  assert.equal(h.reply({ id, button: 'Merge' }), false); // already answered
+  const b = h.ask({ title: 't' });
+  h.reply({ id: (h.events(1).events[0] as any).id, cancelled: true });
+  assert.equal(await b, undefined);
+  assert.equal(await h.ask({ title: 'slow' }), undefined); // times out as a decline
+  assert.equal(h.size, 0);
+});
+
+test('confinePath and validLink', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-root-'));
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-out-'));
+  fs.writeFileSync(path.join(root, 'a.txt'), ''); fs.writeFileSync(path.join(out, 'secret'), '');
+  fs.symlinkSync(out, path.join(root, 'link'));
+  const real = fs.realpathSync(root);
+  assert.equal(confinePath(root, 'a.txt'), path.join(real, 'a.txt'));
+  assert.equal(confinePath(root, path.join(out, 'secret')), undefined);
+  assert.equal(confinePath(root, '../' + path.basename(out) + '/secret'), undefined);
+  assert.equal(confinePath(root, 'link/secret'), undefined);
+  assert.equal(confinePath(root, 'missing'), undefined);
+  assert.ok(validLink('https://x.dev/a') && !validLink('file:///etc/passwd') && !validLink('javascript:alert(1)'));
+});
+
+test('phone server: /api/board strips client remote flag and whitelists types', async () => {
+  const got: any[] = [];
+  const srv = await startPhoneServer(0, { token: 's', state: () => ({}), act: async () => {}, board: async m => { got.push(m); }, events: n => ({ n }) });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const post = (b: object) => fetch(base + '/api/board', { method: 'POST', headers: { 'x-token': 's' }, body: JSON.stringify(b) });
+    assert.equal((await post({ type: 'merge', id: 'a', remote: false })).status, 200);
+    assert.equal((await post({ type: 'openFile' })).status, 400);
+    assert.equal('remote' in got[0], false);
+    assert.equal((await fetch(base + '/api/events?since=3', { headers: { 'x-token': 's' } })).status, 200);
+  } finally { srv.close(); }
+});

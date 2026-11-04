@@ -5,9 +5,15 @@ export interface PhoneDeps {
   token: string;
   state(): unknown;
   act(m: Record<string, unknown>): Promise<string | void>;
+  /** Board messages relayed from a remote page; the host always handles them as remote. */
+  board?(m: Record<string, unknown>): Promise<void>;
+  events?(since: number): unknown;
 }
 
 // Actions a phone may send. Anything else is refused, so a leaked token cannot open files, change settings, etc.
+// Board messages a remote page may relay: those that raise dialogs, plus the replies. All other board messages are refused.
+export const BOARD_ACTIONS = ['dialogReply', 'merge', 'mergeReady', 'discard', 'delete', 'addTask', 'editTask', 'setMode', 'closeSprint', 'copy', 'openUrl', 'pickFiles', 'addSource', 'openArtifact'] as const;
+
 export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge'] as const;
 
 // One rule for showing the Merge button and for accepting a phone merge; never looser than the board's bulk merge.
@@ -25,6 +31,21 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
     const tok = String(req.headers['x-token'] ?? url.searchParams.get('token') ?? '');
     if (!same(tok, d.token)) return send(401, '{"error":"bad token"}');
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
+    if (url.pathname === '/api/events' && req.method === 'GET' && d.events) return send(200, JSON.stringify(d.events(Number(url.searchParams.get('since')) || 0)));
+    if (url.pathname === '/api/board' && req.method === 'POST' && d.board) {
+      let body = '';
+      req.on('data', c => { body += c; if (body.length > 100_000) req.destroy(); });
+      req.on('end', async () => {
+        try {
+          const m = JSON.parse(body);
+          if (!(BOARD_ACTIONS as readonly string[]).includes(m.type)) return send(400, '{"error":"action not allowed"}');
+          const { remote: _ignored, ...clean } = m; // the server, not the client, decides this is remote
+          await d.board!(clean);
+          send(200, '{"ok":true}');
+        } catch (e: any) { send(500, JSON.stringify({ error: String(e?.message ?? e) })); }
+      });
+      return;
+    }
     if (url.pathname === '/api/act' && req.method === 'POST') {
       let body = '';
       req.on('data', c => { body += c; if (body.length > 100_000) req.destroy(); });
