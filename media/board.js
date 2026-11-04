@@ -2,8 +2,11 @@
 // and sends the user's actions back. Inputs (new task, message box) live outside the re-rendered regions, so a
 // state update never eats what you are typing.
 (() => {
-  const vscode = acquireVsCodeApi();
-  const post = (type, extra = {}) => vscode.postMessage({ type, root: S?.root, ...extra });
+  // Inside VS Code the host shows native dialogs. A remote client (phone) supplies window.JC_BRIDGE with
+  // postMessage/getState/setState; the host then asks for dialogs over the bridge and this file shows them in #dlg.
+  const REMOTE = typeof acquireVsCodeApi !== 'function';
+  const vscode = REMOTE ? (window.JC_BRIDGE || { postMessage() {}, getState() {}, setState() {} }) : acquireVsCodeApi();
+  const post = (type, extra = {}) => vscode.postMessage({ type, root: S?.root, ...(REMOTE ? { remote: true } : {}), ...extra });
   const saved = vscode.getState() || {};
   let S;                                   // last state from the host
   let view = saved.view ?? 'all';          // all | backlog | sprint id
@@ -619,6 +622,22 @@
   }
 
   /* ---------- dialogs ---------- */
+  function toast(text) {
+    const t = h('div', { class: 'toast', role: 'status', style: 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#333;color:#fff;padding:10px 16px;border-radius:8px;z-index:9999' }, text);
+    document.body.append(t); setTimeout(() => t.remove(), 2500);
+  }
+  // A dialog the host asked for (merge, bypass, discard, pick files, text input). Closing it any other way is a decline.
+  function bridged(m) {
+    const d = $('#dlg');
+    let done = false;
+    const reply = (extra) => { if (done) return; done = true; post('dialogReply', { id: m.id, ...extra }); };
+    const field = m.input ? h(m.input.multiline ? 'textarea' : 'input', { 'aria-label': m.input.label, rows: 4, style: 'width:100%;box-sizing:border-box' }) : null;
+    const finish = (extra) => { reply(extra); d.close(); };
+    dialog(m.title, h('p', {}, m.text || ''), field || '',
+      h('div', { class: 'acts' }, btn('Cancel', () => finish({ cancelled: true }), 'ghost'),
+        ...(m.buttons || ['OK']).map(b => btn(b, () => finish({ button: b, value: field ? field.value : undefined }), 'primary'))));
+    d.addEventListener('close', () => reply({ cancelled: true }), { once: true });
+  }
   function dialog(title, ...content) {
     const d = $('#dlg');
     d.replaceChildren(h('div', { class: 'dlghead' }, h('h3', {}, title), btn('×', () => d.close(), 'ghost icon', 'Close')), h('div', { class: 'dlgbody' }, content));
@@ -816,6 +835,10 @@
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
     else if (m.type === 'focus') openTask(m.id);
     else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); toggleMore(true); drawFiles(); }
+    else if (m.type === 'dialog') bridged(m);
+    else if (m.type === 'toast') toast(m.text);
+    else if (m.type === 'open') window.open(m.url, '_blank', 'noopener');
+    else if (m.type === 'copy') { (navigator.clipboard?.writeText(m.text) ?? Promise.reject()).then(() => toast('Copied.'), () => toast('Could not copy.')); }
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.

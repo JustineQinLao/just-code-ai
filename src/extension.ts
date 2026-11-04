@@ -289,18 +289,41 @@ export function activate(context: vscode.ExtensionContext) {
     push();
   };
 
-  const confirm = async (text: string, action: string) => await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
-  const confirmBypass = () => confirm('Bypass permissions: this task runs with NO approvals. It can run any command and change any file it can reach, including outside its folder. Use it only for work you trust.', 'Bypass permissions');
+  // Remote clients (phone) cannot see VS Code's modal dialogs, so these go over the bridge: the host posts a 'dialog'
+  // request, board.js shows it in #dlg, and the answer returns as 'dialogReply'. Desktop keeps the native dialogs.
+  const pendingDialogs = new Map<string, (v: { button?: string; value?: string } | undefined) => void>();
+  const bridgeDialog = (req: { title: string; text?: string; buttons?: string[]; input?: { label: string; multiline?: boolean } }) => {
+    if (!panel) return Promise.resolve(undefined);
+    const id = randomUUID();
+    return new Promise<{ button?: string; value?: string } | undefined>(res => {
+      pendingDialogs.set(id, res);
+      void panel!.webview.postMessage({ type: 'dialog', id, ...req });
+    });
+  };
+  const confirmFor = (remote: boolean) => async (text: string, action: string) => remote
+    ? (await bridgeDialog({ title: 'Please confirm', text, buttons: [action] }))?.button === action
+    : await vscode.window.showWarningMessage(text, { modal: true }, action) === action;
+  const confirm = confirmFor(false);
+  const BYPASS_TEXT = 'Bypass permissions: this task runs with NO approvals. It can run any command and change any file it can reach, including outside its folder. Use it only for work you trust.';
+  const confirmBypass = () => confirm(BYPASS_TEXT, 'Bypass permissions');
 
   async function handle(m: any) {
+    const remote = m.remote === true;
+    const confirm = confirmFor(remote);
+    const confirmBypass = () => confirm(BYPASS_TEXT, 'Bypass permissions');
+    const say = (text: string) => remote ? void panel?.webview.postMessage({ type: 'toast', text }) : void vscode.window.showInformationMessage(text);
+    const input = async (o: vscode.InputBoxOptions & { multiline?: boolean }) => remote
+      ? (await bridgeDialog({ title: String(o.title ?? ''), text: o.prompt, buttons: ['OK'], input: { label: String(o.title ?? ''), multiline: o.multiline } }))?.value
+      : await vscode.window.showInputBox(o);
     switch (m.type) {
+      case 'dialogReply': { const f = pendingDialogs.get(m.id); pendingDialogs.delete(m.id); f?.(m.cancelled ? undefined : { button: m.button, value: m.value }); return; }
       case 'ready': return push();
       case 'root': if (roots().includes(m.root)) { setCurrent(m.root); watching = undefined; void recheck(); } return push();
       case 'addProject': return addProject();
       case 'removeProject': return removeProject(m.root);
       case 'fix': return fix(m.action);
       case 'guideSeen': await context.globalState.update('guideSeen', true); return;
-      case 'openUrl': if (/^https:\/\//.test(m.url)) void vscode.env.openExternal(vscode.Uri.parse(m.url)); return;
+      case 'openUrl': if (/^https:\/\//.test(m.url)) { if (remote) void panel?.webview.postMessage({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
       case 'settings':
         await context.globalState.update('settings', { ...overrides(), ...m.values });
         for (const [k, v] of Object.entries(m.values)) {
@@ -390,7 +413,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'cancelReview': r.cancelReview(m.id); return;
       case 'sendIssues': await r.sendIssues(m.id); return;
       case 'sendChecks': await r.sendChecks(m.id); return;
-      case 'copy': await vscode.env.clipboard.writeText(String(m.text ?? '')); vscode.window.showInformationMessage('Copied.'); return;
+      case 'copy': if (remote) void panel?.webview.postMessage({ type: 'copy', text: String(m.text ?? '') }); else { await vscode.env.clipboard.writeText(String(m.text ?? '')); say('Copied.'); } return;
       case 'discard':
         if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);
         return;
@@ -406,21 +429,21 @@ export function activate(context: vscode.ExtensionContext) {
       case 'stopPlanner': r.stopPlanner(); return;
       case 'applyProposals': r.defaultMode = setting('defaultMode', 'auto'); r.applyProposals(m.changes, m.removes); return;
       case 'pickFiles': {
-        const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: true, defaultUri: vscode.Uri.file(r.root), openLabel: 'Attach' });
-        if (picked?.length) void panel?.webview.postMessage({ type: 'picked', files: picked.map(u => u.fsPath) });
+        const files = await pickPaths(r.root, 'Attach', remote);
+        if (files.length) void panel?.webview.postMessage({ type: 'picked', files });
         return;
       }
       case 'addSource': {
         let add: A.Source[] = [];
         if (m.kind === 'url') {
-          const url = await vscode.window.showInputBox({ title: 'Add a link as a source', prompt: 'A spec, design, ticket or doc Claude should use as the basis (https://…)', validateInput: v => /^https?:\/\/\S+$/.test(v.trim()) ? undefined : 'Enter a full http(s) link' });
+          const url = await input({ title: 'Add a link as a source', prompt: 'A spec, design, ticket or doc Claude should use as the basis (https://…)', validateInput: v => /^https?:\/\/\S+$/.test(v.trim()) ? undefined : 'Enter a full http(s) link' });
           if (url) add = [{ id: randomUUID().slice(0, 8), kind: 'url', ref: url.trim() }];
         } else {
-          const picked = await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: true, defaultUri: vscode.Uri.file(r.root), openLabel: 'Add as source' });
-          add = (picked ?? []).map(u => ({ id: randomUUID().slice(0, 8), kind: fs.statSync(u.fsPath).isDirectory() ? 'folder' : 'file', ref: u.fsPath }));
+          const picked = await pickPaths(r.root, 'Add as source', remote);
+          add = picked.map(f => ({ id: randomUUID().slice(0, 8), kind: fs.statSync(f).isDirectory() ? 'folder' as const : 'file' as const, ref: f }));
         }
         if (!add.length) return;
-        const note = await vscode.window.showInputBox({ title: 'What is it? (optional)', prompt: 'One line Claude reads before deciding to open it, e.g. "Product spec for v2: roles and permissions"' });
+        const note = await input({ title: 'What is it? (optional)', prompt: 'One line Claude reads before deciding to open it, e.g. "Product spec for v2: roles and permissions"' });
         A.saveSources(r.root, [...A.loadSources(r.root), ...add.map(a => ({ ...a, note: note?.trim() || undefined }))]);
         return push();
       }
@@ -437,11 +460,18 @@ export function activate(context: vscode.ExtensionContext) {
         const f = { brief: A.briefFile, handoff: A.handoffFile, review: A.reviewFile, plan: A.planFile, checks: A.checksLog,
           setup: (root: string, id: string) => path.join(A.taskDir(root, id), 'setup.log') }[m.which as 'brief' | 'handoff' | 'review' | 'plan' | 'checks' | 'setup']?.(r.root, m.id) ?? (m.which === 'progress' ? A.progressFile(r.root) : undefined);
         if (f && fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f), { preview: true });
-        else vscode.window.showInformationMessage('Not written yet.');
+        else say('Not written yet.');
         return;
       }
       case 'initialize': return initialize(r);
     }
+  }
+
+  // Files for a remote client are typed as paths (relative to the project) in a bridged dialog; only existing paths are kept.
+  async function pickPaths(root: string, label: string, remote: boolean): Promise<string[]> {
+    if (!remote) return ((await vscode.window.showOpenDialog({ canSelectFiles: true, canSelectFolders: true, canSelectMany: true, defaultUri: vscode.Uri.file(root), openLabel: label })) ?? []).map(u => u.fsPath);
+    const v = (await bridgeDialog({ title: label, text: 'One file or folder path per line (relative to the project).', buttons: ['OK'], input: { label: 'Paths', multiline: true } }))?.value;
+    return (v ?? '').split('\n').map(x => x.trim()).filter(Boolean).map(x => path.resolve(root, x)).filter(x => fs.existsSync(x));
   }
 
   async function addProject() {
