@@ -17,6 +17,8 @@ project. Claude asks for approval right on the card, and an AI reviewer tests th
 - **Sprints with progress:** each sprint has a goal and a progress bar (done, in review, working, needs you, to do).
   **✦ Edit sprint** reworks every not-started task in a sprint with one prompt. The planning panel shows its own
   progress: reading the code, writing the proposal, waiting for you, ready.
+- **Artifact pages:** a task that says *artifact* designs a web page with the frontend-design skill, publishes it to
+  claude.ai and puts the link on the card. Messages to Claude update the same link.
 - **Quiet notifications:** a notification appears only when a task needs you, is ready to merge, or failed, with an
   **Open task** and **Don't show again**. Everything else goes to the JustCode output log.
 - **Sources and artifacts:** tasks rest on your specs, designs, docs and links (**📎 Sources**). Each task keeps a
@@ -48,11 +50,29 @@ From source:
 
 ```sh
 npm install
-npm run package          # type-checks, bundles to out/, writes just-code-1.0.0.vsix
-code --install-extension just-code-1.0.0.vsix
+npm run package          # type-checks, bundles to out/, writes just-code-<version>.vsix
+code --install-extension just-code-<version>.vsix --force
 ```
 
 You can also open this folder in VS Code and press F5 (run `npm run compile` first).
+
+### Other editors (Devin, Cursor, Windsurf)
+
+Editors built on VS Code keep their own extensions, so install the VSIX with that editor's command, not `code`. On a
+Mac, Devin's command is inside the app:
+
+```sh
+"/Applications/Devin.app/Contents/Resources/app/bin/devin-desktop" --install-extension just-code-<version>.vsix --force
+```
+
+For VS Code itself, if the `code` command is not on your PATH, use the full path:
+
+```sh
+"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension just-code-<version>.vsix --force
+```
+
+Or, in any of these editors: open the Extensions view (**⌘⇧X**), click **⋯**, choose **Install from VSIX…** and pick
+the file. Then run **Developer: Reload Window** (⌘⇧P) to load the new version.
 
 ## Quick start
 

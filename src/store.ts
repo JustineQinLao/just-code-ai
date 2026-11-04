@@ -41,6 +41,9 @@ export interface Task {
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
   error?: string;             // the last run failed to start or ended on an error
   costUsd?: number;           // estimated cost of the task's sessions so far (API pricing; plans are not billed per task)
+  output?: 'artifact';        // the result is a page published as a claude.ai artifact (not a code change)
+  artifactUrl?: string;       // its link, once published
+  publishing?: boolean;       // JustCode is publishing the page now (interactive claude in a terminal)
   archived?: boolean;
   created: number;
 }

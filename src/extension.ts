@@ -8,7 +8,7 @@ import { execFile } from 'child_process';
 import { Store, Task } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
-import { claudeBin, claudeEnv, discoverAgents, discoverSkills, sessionLog } from './claude';
+import { artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, sessionLog } from './claude';
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
@@ -84,6 +84,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
       },
       choose: async (text, ...buttons) => vscode.window.showWarningMessage(text, { modal: true }, ...buttons),
+      publish: id => publishArtifact(root, id),
     });
     r.onChange(push);
     r.store.onChange(push);
@@ -346,7 +347,8 @@ export function activate(context: vscode.ExtensionContext) {
         const all = A.loadSources(r.root).map(x => x.id);
         const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
         const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'root' ? 'root' : undefined,
+          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'root' || m.output === 'artifact' ? 'root' : undefined,
+          output: m.output === 'artifact' ? 'artifact' : undefined,
           files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
         if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
         if (m.start) await r.run(task.id);
@@ -420,6 +422,10 @@ export function activate(context: vscode.ExtensionContext) {
       case 'remotePr': await r.remotePr(m.id); return;
       case 'remote': return handoff(r, t);
       case 'claudeCode': return openInTerminal(r, t, false);
+      case 'publishArtifact':
+        if (!t) return;
+        if (!fs.existsSync(A.artifactFile(r.root, t.id))) { vscode.window.showWarningMessage(`"${t.title}" has no page yet. Message Claude to build it.`); return; }
+        return publishArtifact(r.root, t.id);
       case 'shots': void panel?.webview.postMessage({ type: 'shots', id: m.id, images: (t?.review?.screenshots ?? []).flatMap(f => {
         try { return [{ name: path.basename(f), data: `data:image/${f.endsWith('.png') ? 'png' : 'jpeg'};base64,${fs.readFileSync(f).toString('base64')}` }]; } catch { return []; }
       }) }); return;
@@ -543,6 +549,49 @@ export function activate(context: vscode.ExtensionContext) {
     term.sendText(`${args.map(q).join(' ')}; exit`);
     term.show();
     if (remote) vscode.window.showInformationMessage(`"${t.title}" is now in Remote Control: open the Claude app or claude.ai/code. Press space in the terminal for a QR code. Close the terminal to bring it back to the board.`);
+  }
+
+  // An artifact task's page goes to claude.ai through an interactive claude in a terminal: the Agent SDK, which runs
+  // the board's sessions, cannot publish artifacts (code.claude.com/docs/en/artifacts#availability). JustCode reads
+  // the link from that session's transcript, puts it on the card and closes the terminal. A later change republishes
+  // to the same link.
+  const publishing = new Map<string, vscode.Terminal>();
+  function publishArtifact(root: string, id: string) {
+    const r = runners.get(root), t = r?.store.task(id), b = bin();
+    if (!r || !t || !b) return;
+    const file = A.artifactFile(root, id), key = `${root}\n${id}`;
+    if (publishing.has(key)) return;
+    if (!setup?.remote) {
+      r.store.updateTask(id, { publishing: undefined });
+      void vscode.window.showWarningMessage(`"${t.title}": the page is ready, but publishing an artifact needs Claude Code signed in with a Claude account (Pro, Max, Team or Enterprise), not an API key.`, 'Open the page')
+        .then(c => { if (c) void vscode.env.openExternal(vscode.Uri.file(file)); });
+      return;
+    }
+    const sid = randomUUID();
+    const prompt = t.artifactUrl
+      ? `Update the artifact ${t.artifactUrl} with the page in ${file}, published exactly as the file is (do not edit it). Reply with only the link.`
+      : `Publish ${file} as an artifact, exactly as the file is (do not edit it). Use its <title> as the title. Reply with only the link.`;
+    const term = vscode.window.createTerminal({ name: `⧉ ${t.title.slice(0, 40)}`, cwd: root, env: { CLAUDECODE: null, CLAUDE_CODE_ENTRYPOINT: null, ANTHROPIC_API_KEY: null } });
+    publishing.set(key, term);
+    term.sendText([b, '--session-id', sid, '--permission-mode', 'auto', prompt].map(q).join(' '));
+    term.show(true);
+    r.store.updateTask(id, { publishing: true });
+    const started = Date.now();
+    const done = (url?: string) => {
+      clearInterval(timer); sub.dispose(); publishing.delete(key);
+      r.store.updateTask(id, { publishing: undefined, ...(url ? { artifactUrl: url } : {}) });
+      out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] info: ${url ? `Artifact for "${t.title}": ${url}` : `No artifact link for "${t.title}"`}`);
+      if (url) {
+        term.dispose();
+        if (setting<string>('notifications', 'actionable') !== 'off') void vscode.window.showInformationMessage(`Artifact ready: "${t.title}"`, 'Open artifact', 'Copy link')
+          .then(c => { if (c === 'Open artifact') void vscode.env.openExternal(vscode.Uri.parse(url)); else if (c === 'Copy link') void vscode.env.clipboard.writeText(url); });
+      } else void vscode.window.showWarningMessage(`"${t.title}": publishing did not return a link. See the ⧉ terminal for what happened, or press Publish again on the card.`);
+    };
+    const timer = setInterval(() => {
+      const url = artifactUrlIn(root, sid);
+      if (url) done(url); else if (Date.now() - started > 5 * 60_000) done();
+    }, 2000);
+    const sub = vscode.window.onDidCloseTerminal(c => { if (c === term) done(artifactUrlIn(root, sid)); });
   }
 
   context.subscriptions.push(vscode.window.onDidCloseTerminal(term => {

@@ -57,6 +57,7 @@ export interface SessionOptions {
   env: Record<string, string>;
   idleMs: number;
   personal?: boolean;         // also load the user's own Claude setup (plugins, skills, MCP, memory)
+  plugins?: string[];         // plugin folders to load even in a lean session (e.g. frontend-design for artifact pages)
   label: string;              // name of the root node in the agent map
 }
 
@@ -140,6 +141,7 @@ export class Session {
       ...(o.agents && Object.keys(o.agents).length ? { agents: o.agents as any } : {}),
       ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
       ...(o.addDirs?.length ? { additionalDirectories: o.addDirs } : {}),
+      ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),
       ...(o.resume ? { resume: o.sessionId } : { sessionId: o.sessionId }),
       abortController: this.ac,
       agentProgressSummaries: true,

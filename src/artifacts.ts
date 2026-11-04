@@ -16,6 +16,7 @@ const jc = (root: string, ...p: string[]) => path.join(root, '.justcode', ...p);
 export const taskDir = (root: string, id: string) => jc(root, 'tasks', id);
 export const briefFile = (root: string, id: string) => path.join(taskDir(root, id), 'brief.md');
 export const handoffFile = (root: string, id: string) => path.join(taskDir(root, id), 'handoff.md');
+export const artifactFile = (root: string, id: string) => path.join(taskDir(root, id), 'artifact.html');
 export const reviewFile = (root: string, id: string) => path.join(taskDir(root, id), 'review.md');
 export const checksLog = (root: string, id: string) => path.join(taskDir(root, id), 'checks.log');
 export const planFile = (root: string, id: string) => path.join(taskDir(root, id), 'plan.md');
