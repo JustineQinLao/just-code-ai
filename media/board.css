@@ -264,3 +264,43 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .bar.busy { background: linear-gradient(90deg, transparent 0, color-mix(in srgb, var(--run) 35%, transparent) 50%, transparent 100%) 0 0 / 200% 100%, color-mix(in srgb, var(--fg) 10%, transparent); animation: jc-busy 1.4s linear infinite; }
 @keyframes jc-busy { from { background-position: 200% 0, 0 0; } to { background-position: -200% 0, 0 0; } }
 @media (prefers-reduced-motion: reduce) { .bar.busy { animation: none; } }
+
+/* Phone / narrow screens */
+@media (max-width: 700px) {
+  body { padding: 0 10px 40px; font-size: 14px; }
+  body.drawer-open { padding-right: 10px; overflow: hidden; }
+  button, select, input, textarea, .proj, .chip, .menuitem, .opt, .refrow { min-height: 44px; }
+  button { padding: 8px 14px; }
+  button.icon { min-width: 44px; padding: 8px 12px; }
+  button.x { min-width: 44px; padding: 0 8px; }
+  .thumb .x { min-width: 28px; min-height: 28px; }
+  input[type=checkbox], input[type=radio] { min-width: 22px; min-height: 22px; }
+  .chip { display: inline-flex; align-items: center; }
+  .tabs a, details.adv > summary, .srclist a { min-height: 44px; display: inline-flex; align-items: center; }
+  .tabs { gap: 20px; }
+  select, input, textarea { font-size: 16px; } /* no iOS zoom on focus */
+  /* header: brand + icons on one line, projects scroll sideways, usage meter hidden */
+  .top { gap: 6px; padding: 6px 0; }
+  .projects { order: 5; flex: 0 0 100%; flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; }
+  .proj { flex: none; }
+  .meter { display: none; }
+  .banner .grow { min-width: 0; }
+  .setup li { grid-template-columns: 20px 1fr; }
+  .setup li > :nth-child(n+3) { grid-column: 2; }
+  .addrow { flex-wrap: wrap; }
+  .addrow input { flex: 1 1 100%; }
+  .addrow button { flex: 1; }
+  /* lanes: one column; Needs you first so approvals are never buried */
+  .lanes { display: flex; flex-direction: column; overflow: visible; }
+  .lane { min-height: 0; }
+  .lane.needs { order: -1; }
+  .lane.work { order: 0; } .lane.review { order: 1; } .lane.todo { order: 2; } .lane.done { order: 3; }
+  .acts button, .ask .row button { flex: 1 1 auto; }
+  /* drawer: full screen */
+  #drawer { width: 100vw; height: 100dvh; border-left: 0; }
+  .dfoot { flex-wrap: wrap; padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .dfoot textarea, .dfoot .col { flex: 1 1 100%; }
+  dialog { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; }
+  .menu { min-width: 0; }
+  .step { grid-template-columns: 44px 1fr; }
+}
