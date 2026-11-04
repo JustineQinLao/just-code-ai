@@ -93,3 +93,14 @@ else if(Notification.permission==='denied')n.textContent='Notifications are bloc
 $('add').onclick=()=>{if($('n').value){act({type:'addTask',title:$('n').value,start:true});$('n').value=''}};
 load();
 </script></body></html>`;
+
+/** The link the Android app pairs with (also what the QR encodes). */
+export const phoneLinkUrl = (host: string, port: number, token: string) => `http://${host}:${port}/?token=${encodeURIComponent(token)}`;
+
+/** QR code for the link as inline SVG. */
+export function qrSvg(text: string): string {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const qr = require('qrcode-generator')(0, 'M');
+  qr.addData(text); qr.make();
+  return qr.createSvgTag({ cellSize: 6, margin: 4, scalable: true });
+}

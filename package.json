@@ -42,6 +42,10 @@
         "title": "JustCode: Install the TASKS.md Sync Skill"
       },
       {
+        "command": "justCode.phoneLink",
+        "title": "JustCode: Phone Link (QR for the Android app)"
+      },
+      {
         "command": "justCode.showPhonePairing",
         "title": "JustCode: Show Phone Pairing"
       }
@@ -135,7 +139,7 @@
         "justCode.reviewLightModel": {
           "type": "string",
           "default": "sonnet",
-          "description": "Model for reviewing small changes that touch no sensitive code (auth, payments, migrations, config\u2026), when review triage is on. Empty: always the reviewer model."
+          "description": "Model for reviewing small changes that touch no sensitive code (auth, payments, migrations, config…), when review triage is on. Empty: always the reviewer model."
         },
         "justCode.reviewTriage": {
           "type": "boolean",
@@ -178,7 +182,7 @@
           "default": 1,
           "minimum": 1,
           "maximum": 6,
-          "description": "Tasks allowed to run at once (any way they are started: \u25b6 Run or Run all). 1 (default): strictly one at a time, each building on the previous one's merged work. More: several run side by side, each in its own folder."
+          "description": "Tasks allowed to run at once (any way they are started: ▶ Run or Run all). 1 (default): strictly one at a time, each building on the previous one's merged work. More: several run side by side, each in its own folder."
         },
         "justCode.autoReview": {
           "type": "boolean",
@@ -309,7 +313,8 @@
     "vscode:prepublish": "npm run compile"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.312"
+    "@anthropic-ai/claude-agent-sdk": "0.3.312",
+    "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
