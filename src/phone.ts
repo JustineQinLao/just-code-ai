@@ -56,7 +56,7 @@ button.n{background:#444}input{box-sizing:border-box;font:inherit;padding:8px;wi
 .a{border:1px solid #f59e0b;padding:8px;margin-top:8px;border-radius:6px;word-break:break-all}
 </style></head><body><header>JustCode</header>
 <input id="t" placeholder="Token (from VS Code: JustCode: Show Phone Pairing)"><input id="n" placeholder="New task title">
-<button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="l"></div>
+<button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="l"></div>
 <script>
 const $=id=>document.getElementById(id);$('t').value=localStorage.tok||new URLSearchParams(location.search).get('token')||'';
 const H=()=>({'x-token':$('t').value,'content-type':'application/json'});
@@ -68,11 +68,10 @@ function focusTask(id){const e=$('task-'+id);if(e){e.scrollIntoView();e.style.ou
 async function notify(t,a){if(!window.Notification||Notification.permission!=='granted')return;
 const o={body:a.tool+': '+a.detail,tag:'ask-'+a.id,data:'/?task='+t.id};
 try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.ready;if(reg)return reg.showNotification(t.title+' needs approval',o);new Notification(t.title+' needs approval',o).onclick=()=>{focus();focusTask(t.id)}}catch(e){}}
-async function load(){if(busy)return;busy=true;clearTimeout(timer);localStorage.tok=$('t').value;let r;
-try{r=await fetch('/api/state',{headers:H()})}catch(e){fails++;$('st').textContent='Offline, retrying in '+Math.min(3000*2**fails,30000)/1000+'s';busy=false;return sched()}
-fails=0;$('st').textContent='';const l=$('l');l.textContent='';
-if(!r.ok){l.append(el('div',{className:'c'},'Not paired: '+r.status));busy=false;return sched()}
-const data=await r.json();
+async function load(){if(busy)return;busy=true;clearTimeout(timer);localStorage.tok=$('t').value;
+try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
+if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));return}
+const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
 for(const t of data.tasks){const c=el('div',{className:'c',id:'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
 if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})},'Run'));
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
@@ -80,12 +79,17 @@ for(const a of t.asks){const d=el('div',{className:'a'},a.tool+': '+a.detail,el(
 if(a.kind==='permission'){d.append(el('button',{onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'allow'})},'Approve'),el('button',{className:'n',onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'deny'})},'Deny'))}else d.append(el('i',{},'Answer this one in VS Code'));c.append(d)}
 if(t.canMerge)c.append(el('button',{onclick:()=>confirm('Merge '+t.title+'?')&&act({type:'merge',id:t.id})},'Merge'));l.append(c);
 for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}}
-first=false;busy=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);sched()}
+first=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);notifState()}
+catch(e){fails++;$('st').textContent='Offline, retrying in '+Math.min(3000*2**fails,30000)/1000+'s'}
+finally{busy=false;sched()}}
 const reload=()=>{fails=0;load()};
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)reload()});addEventListener('online',reload);addEventListener('focus',reload);
 if(navigator.connection)navigator.connection.addEventListener('change',reload);
 if(navigator.serviceWorker){navigator.serviceWorker.register('/sw.js').catch(()=>{});navigator.serviceWorker.addEventListener('message',e=>{const w=new URL(e.data.open,location.href).searchParams.get('task');if(w)focusTask(w)})}
-if(window.Notification&&Notification.permission==='default')$('st').append(el('button',{className:'n',onclick:()=>Notification.requestPermission()},'Enable approval notifications'));
+function notifState(){const n=$('nt');n.textContent='';
+if(!window.Notification||!navigator.serviceWorker||!window.isSecureContext){n.textContent='Approval notifications unavailable here (needs https or localhost); this page still updates while open.';return}
+if(Notification.permission==='default')n.append(el('button',{className:'n',onclick:()=>Notification.requestPermission().then(notifState)},'Enable approval notifications'));
+else if(Notification.permission==='denied')n.textContent='Notifications are blocked in browser settings.'}
 $('add').onclick=()=>{if($('n').value){act({type:'addTask',title:$('n').value,start:true});$('n').value=''}};
 load();
 </script></body></html>`;
