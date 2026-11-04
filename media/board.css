@@ -253,7 +253,7 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .bar { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--fg) 10%, transparent); }
 .bar .seg { display: block; height: 100%; }
 .seg.done, .dot.done { background: var(--ok); }
-.seg.review, .dot.review { background: var(--accent); }
+.seg.review, .dot.review { background: var(--vscode-charts-purple, #b180d7); }
 .seg.work, .seg.run, .dot.work { background: var(--run); }
 .seg.needs, .dot.needs { background: var(--warn); }
 .seg.todo, .dot.todo { background: color-mix(in srgb, var(--fg) 22%, transparent); }
