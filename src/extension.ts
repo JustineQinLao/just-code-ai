@@ -13,7 +13,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer, canPhoneMerge } from './phone';
+import { startPhoneServer, canPhoneMerge, phoneLinkUrl, qrSvg } from './phone';
 import type * as http from 'http';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
@@ -564,6 +564,22 @@ export function activate(context: vscode.ExtensionContext) {
       void recheck();
     }),
     vscode.commands.registerCommand('justCode.installSyncSkill', () => { const f = installSkill(); if (f) vscode.window.showInformationMessage(`Installed /just-code-ai-sync at ${f}`); }),
+    vscode.commands.registerCommand('justCode.phoneLink', async () => {
+      if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
+      await syncPhone();
+      const panel = vscode.window.createWebviewPanel('justCodePhoneLink', 'JustCode: Phone Link', vscode.ViewColumn.Active, { enableScripts: true });
+      const render = () => {
+        const link = phoneLinkUrl(lanIps()[0] ?? 'this-computer', setting('phoneServerPort', 7878), phoneToken());
+        const esc = link.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p><button onclick="acquireVsCodeApi().postMessage('regen')">Regenerate link</button></body>`;
+      };
+      panel.webview.onDidReceiveMessage(async m => {
+        if (m !== 'regen') return;
+        await context.globalState.update('phoneToken', randomUUID().replace(/-/g, ''));
+        phone?.close(); phone = undefined; await syncPhone(); render();
+      });
+      render();
+    }),
     vscode.commands.registerCommand('justCode.showPhonePairing', async () => {
       if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
       await syncPhone();

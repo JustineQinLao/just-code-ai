@@ -25,11 +25,14 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
-        root = FrameLayout(this); setContentView(root)
+        val bar = androidx.appcompat.widget.Toolbar(this).apply { title = "JustCode"; setTitleTextColor(0xFFFFFFFF.toInt()); setBackgroundColor(0xFF263238.toInt()) }
+        root = FrameLayout(this)
+        setContentView(LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; addView(bar, LinearLayout.LayoutParams(-1, -2)); addView(root, LinearLayout.LayoutParams(-1, 0, 1f)) })
+        setSupportActionBar(bar)
         connect()
     }
 
-    override fun onCreateOptionsMenu(m: Menu): Boolean { m.add(0, 1, 0, "Forget / re-pair"); return true }
+    override fun onCreateOptionsMenu(m: Menu): Boolean { m.add(0, 1, 0, "Forget / re-pair").setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS); return true }
     override fun onOptionsItemSelected(i: MenuItem): Boolean {
         if (i.itemId == 1) { Pairing.forget(this); showPairing(null); return true }
         return super.onOptionsItemSelected(i)
@@ -63,7 +66,15 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun showBoard(link: String) {
         root.removeAllViews()
-        root.addView(WebView(this).apply { settings.javaScriptEnabled = true; settings.domStorageEnabled = true; loadUrl(link) })
+        root.addView(WebView(this).apply {
+            settings.javaScriptEnabled = true; settings.domStorageEnabled = true
+            webViewClient = object : android.webkit.WebViewClient() {
+                override fun onReceivedHttpError(v: WebView, r: android.webkit.WebResourceRequest, e: android.webkit.WebResourceResponse) {
+                    if (e.statusCode == 401) runOnUiThread { Pairing.forget(this@MainActivity); showPairing("The pairing token is no longer valid (it was regenerated). Pair again.") }
+                }
+            }
+            loadUrl(link)
+        })
     }
 
     private fun showPairing(error: String?) {
@@ -100,9 +111,14 @@ class MainActivity : AppCompatActivity() {
     private var pendingStart: (() -> Unit)? = null
     override fun onRequestPermissionsResult(code: Int, p: Array<out String>, r: IntArray) {
         super.onRequestPermissionsResult(code, p, r)
-        if (code == 7 && r.firstOrNull() == PackageManager.PERMISSION_GRANTED) pendingStart?.invoke()
+        if (code != 7) return
+        if (r.firstOrNull() == PackageManager.PERMISSION_GRANTED) pendingStart?.invoke()
         else Toast.makeText(this, "Camera denied — paste the link instead.", Toast.LENGTH_LONG).show()
     }
+
+    private fun stopScan() { scanning = false; try { ProcessCameraProvider.getInstance(this).get().unbindAll() } catch (_: Exception) {} }
+    override fun onPause() { stopScan(); super.onPause() }
+    override fun onDestroy() { stopScan(); super.onDestroy() }
 
     private fun startScan(preview: PreviewView, onCode: (String) -> Unit) {
         preview.visibility = View.VISIBLE; scanning = true
