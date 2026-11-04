@@ -13,6 +13,8 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
+import { startPhoneServer } from './phone';
+import type * as http from 'http';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 
@@ -207,6 +209,51 @@ export function activate(context: vscode.ExtensionContext) {
     watching.n = steps.length; watching.last = last;
     void panel.webview.postMessage({ type: 'steps', id: t.id, steps, live: !!live });
   }
+
+  /* ---------- phone server (off by default) ---------- */
+  let phone: http.Server | undefined;
+  const phoneToken = () => {
+    let t = context.globalState.get<string>('phoneToken');
+    if (!t) { t = randomUUID().replace(/-/g, ''); void context.globalState.update('phoneToken', t); }
+    return t;
+  };
+  const phoneState = () => {
+    const r = runner();
+    return { tasks: (r?.store.data.tasks ?? []).filter(t => !t.archived).map(t => {
+      const l = r!.live(t.id);
+      return { id: t.id, title: t.title, status: t.status, busy: l.busy, asks: l.asks, review: t.review?.state,
+        canMerge: !!t.worktree && t.where !== 'root' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical' };
+    }) };
+  };
+  async function phoneAct(m: any): Promise<string | void> {
+    const r = runner();
+    if (!r) return 'no project open';
+    const t = m.id ? r.store.task(m.id) : undefined;
+    switch (m.type) {
+      case 'addTask': {
+        if (!String(m.title ?? '').trim()) return 'title required';
+        const task = r.store.addTask({ title: String(m.title).trim(), mode: (setting<string>('defaultMode', 'auto') === 'bypassPermissions' ? 'auto' : setting<string>('defaultMode', 'auto')) as Task['mode'] });
+        if (m.start) await r.run(task.id);
+        return;
+      }
+      case 'run': if (!t) return 'no such task'; await r.requestRun(t.id); return;
+      case 'stop': if (!t) return 'no such task'; r.stop(t.id); return;
+      case 'answer':
+        if (m.choice !== 'allow' && m.choice !== 'deny') return 'phone can only allow or deny';
+        return r.answer(m.id, { id: m.ask, choice: m.choice }) ? undefined : 'request no longer open';
+      case 'merge':
+        if (!t || t.review?.state !== 'pass') return 'only reviewed (passing) tasks can be merged from the phone';
+        await r.merge(t.id); return;
+    }
+  }
+  async function syncPhone() {
+    const on = setting('phoneServer', false);
+    if (!on) { phone?.close(); phone = undefined; return; }
+    if (phone) return;
+    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct }); }
+    catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
+  }
+  const lanIps = () => Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i!.address);
 
   limits.onChange(push);
   limits.onReset(() => { for (const r of runners.values()) r.afterReset(); });
@@ -517,6 +564,12 @@ export function activate(context: vscode.ExtensionContext) {
       void recheck();
     }),
     vscode.commands.registerCommand('justCode.installSyncSkill', () => { const f = installSkill(); if (f) vscode.window.showInformationMessage(`Installed /just-code-ai-sync at ${f}`); }),
+    vscode.commands.registerCommand('justCode.showPhonePairing', async () => {
+      if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
+      await syncPhone();
+      const port = setting('phoneServerPort', 7878);
+      vscode.window.showInformationMessage(`Open http://${lanIps()[0] ?? 'this-computer'}:${port}/ on your phone (same Wi-Fi). Token: ${phoneToken()}`, { modal: true });
+    }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
     // A key changed in VS Code's own Settings UI replaces the board's copy of it.
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -524,12 +577,14 @@ export function activate(context: vscode.ExtensionContext) {
       for (const k of Object.keys(o)) if (e.affectsConfiguration(`justCode.${k}`) && JSON.stringify(cfg().get(k)) !== JSON.stringify(o[k])) { delete o[k]; changed = true; }
       if (changed) void context.globalState.update('settings', o).then(push);
       if (e.affectsConfiguration('justCode.claudePath')) void recheck();
+      if (e.affectsConfiguration('justCode.phoneServer')) void syncPhone();
     }),
     vscode.window.registerWebviewPanelSerializer('justCode.board', { async deserializeWebviewPanel(p) { open(undefined, p); } }),
-    { dispose: () => { for (const r of runners.values()) r.dispose(); runners.clear(); limits.dispose(); } },
+    { dispose: () => { phone?.close(); for (const r of runners.values()) r.dispose(); runners.clear(); limits.dispose(); } },
     out, status,
   );
   updateStatus();
+  void syncPhone();
 }
 
 const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter(k => o && k in o).map(k => [k, o[k] === '' ? undefined : o[k]]));

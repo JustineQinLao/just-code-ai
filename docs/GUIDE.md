@@ -264,8 +264,6 @@ admin must turn Remote Control on.
 
 ## 11. Phone and Android app access (local server)
 
-> **Status:** not available in this checkout. There is no `justCode.phoneServer` setting in `package.json`/`src` and no `android/` app, so the steps below cannot be followed yet. See docs/FOLLOWUPS.md.
-
 JustCode can serve the board to your phone over your own network. This is separate from *Continue on phone* above.
 
 - **Turn it on:** it is off by default. Enable the phone server in settings (`justCode.phoneServer`). While it is on,
@@ -273,9 +271,11 @@ JustCode can serve the board to your phone over your own network. This is separa
 - **Same network:** the phone and the computer must be on the same Wi-Fi or LAN.
 - **Keep the computer awake:** the server runs inside VS Code on your computer. If it sleeps or VS Code closes, the
   phone loses the board and tasks stop.
-- **Pair the Android app:** build the APK from the `android/` folder (`./gradlew assembleDebug`), install it with
-  `adb install app/build/outputs/apk/debug/app-debug.apk`, then open the app and enter the address and token shown
-  in VS Code (or scan its QR code).
+- **Open it on the phone:** run *JustCode: Show Phone Pairing* in VS Code. It shows an address (`http://<computer-ip>:7878/`)
+  and the token. Open the address in the phone's browser and paste the token. The page lists the open project's tasks and
+  lets you add and run a task, approve or deny a permission, stop a task and merge a task that passed review. Nothing else
+  (no settings, files or bypass mode) is allowed from the phone. A native Android app is not built yet (docs/FOLLOWUPS.md).
+- **Port:** `justCode.phoneServerPort` (default 7878).
 - **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
   on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks
   run with no approvals, so a phone with the token can start commands and change files unchecked. Leave the server

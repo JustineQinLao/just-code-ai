@@ -40,6 +40,10 @@
       {
         "command": "justCode.installSyncSkill",
         "title": "JustCode: Install the TASKS.md Sync Skill"
+      },
+      {
+        "command": "justCode.showPhonePairing",
+        "title": "JustCode: Show Phone Pairing"
       }
     ],
     "configuration": {
@@ -205,8 +209,16 @@
         },
         "justCode.notifications": {
           "type": "string",
-          "enum": ["actionable", "errors", "off"],
-          "enumDescriptions": ["When a task needs you, is ready to merge, or failed", "Only errors", "None (the board and the JustCode output log still show everything)"],
+          "enum": [
+            "actionable",
+            "errors",
+            "off"
+          ],
+          "enumDescriptions": [
+            "When a task needs you, is ready to merge, or failed",
+            "Only errors",
+            "None (the board and the JustCode output log still show everything)"
+          ],
           "default": "actionable",
           "description": "Which JustCode events show a VS Code notification."
         },
@@ -275,6 +287,16 @@
           "default": 120000,
           "minimum": 0,
           "description": "When a task's session holds more context than this, its review-fix round starts a fresh session from the task's brief, handoff and review notes instead of carrying the whole history. 0: never."
+        },
+        "justCode.phoneServer": {
+          "type": "boolean",
+          "default": false,
+          "description": "Serve the board to your phone over your local network (token protected). Off by default. Anyone with the token can start tasks and approve permissions."
+        },
+        "justCode.phoneServerPort": {
+          "type": "number",
+          "default": 7878,
+          "description": "Port for the phone server."
         }
       }
     }
