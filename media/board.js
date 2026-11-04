@@ -139,6 +139,7 @@
             h('label', { title: 'Own branch: an isolated copy you review and merge. Project folder: runs in the project itself (deploys, syncs, releases).' }, 'Runs in ',
               h('select', { id: 'where' }, h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'root' }, 'Project folder'))))))),
     h('div', { id: 'toolbar', class: 'toolbar' }),
+    h('div', { id: 'progress' }),
     h('main', { id: 'lanes', class: 'lanes' }));
 
   function toggleMore(on = !more) { more = on; $('#more').hidden = !more; }
@@ -182,7 +183,7 @@
         btn('+ Add a project folder', () => post('addProject'), 'primary')));
       return;
     }
-    renderProjects(); renderMeter(); renderBanners(); renderAddOptions(); renderToolbar(); renderLanes(); renderDrawer();
+    renderProjects(); renderMeter(); renderBanners(); renderAddOptions(); renderToolbar(); renderProgress(); renderLanes(); renderDrawer();
   }
 
   function renderProjects() {
@@ -281,6 +282,25 @@
       ready.length ? btn(`✓ Merge ready (${ready.length})`, () => post('mergeReady', { ids: ready.map(t => t.id) })) : '',
       btn(`▶ Run all${todo.length ? ` (${todo.length})` : ''}`, () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
       btn('⋯', () => moreMenu(), 'ghost icon', 'Agent map, report, history, archived tasks'));
+  }
+
+  // Sprint progress: the sprint on screen (or the active one in All tasks), as a bar split by lane, plus its goal.
+  function renderProgress() {
+    const sp = S.board.sprints.find(s => s.id === view) ?? (view === 'all' ? S.board.sprints.find(s => s.active && !s.closed) : undefined);
+    if (!sp) return $('#progress').replaceChildren();
+    const tasks = S.board.tasks.filter(t => t.sprintId === sp.id && !t.archived);
+    if (!tasks.length) return $('#progress').replaceChildren(h('div', { class: 'sprintbar' }, h('b', {}, sp.name), sp.goal ? h('span', { class: 'muted' }, ` · ${sp.goal}`) : '',
+      h('span', { class: 'muted small' }, ' · no tasks yet: add one, or use ✦ Plan')));
+    const n = id => tasks.filter(t => lane(t) === id).length;
+    const parts = [['done', 'done', n('done')], ['review', 'in review', n('review')], ['work', 'working', n('work')], ['needs', 'need you', n('needs')], ['todo', 'to do', n('todo')]];
+    const done = n('done'), pct = Math.round(done / tasks.length * 100);
+    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') },
+      h('div', { class: 'row' }, h('b', {}, sp.name), sp.goal ? h('span', { class: 'muted grow' }, sp.goal) : h('span', { class: 'grow' }),
+        h('span', { class: 'small' }, `${done} of ${tasks.length} done · ${pct}%`)),
+      h('div', { class: 'bar', role: 'progressbar', 'aria-label': `${sp.name} progress`, 'aria-valuemin': '0', 'aria-valuemax': String(tasks.length), 'aria-valuenow': String(done) },
+        parts.filter(([, , c]) => c).map(([id, , c]) => h('i', { class: `seg ${id}`, style: `flex:${c}` }))),
+      h('div', { class: 'legend small muted' }, parts.filter(([, , c]) => c).map(([id, l, c]) => h('span', {}, h('i', { class: `dot ${id}` }), ` ${c} ${l}`)),
+        S.queue.queued.length ? h('span', {}, ` · ▶ ${S.queue.queued.length} queued`) : '')));
   }
 
   const LANES = [['todo', 'To do'], ['work', 'Working'], ['needs', 'Needs you'], ['review', 'Review'], ['done', 'Done']];
@@ -499,6 +519,23 @@
   }
 
   /* ---------- planner / editor chat ---------- */
+  // What the planner is doing this turn: a moving bar while it works, then where the plan stands.
+  function planProgress(p, running) {
+    const since = p.turnAt || 0;
+    const turn = (p.steps || []).filter(x => x.time && Date.parse(x.time) >= since);
+    const tools = turn.filter(x => x.kind === 'tool');
+    const reads = tools.filter(x => /^(Read|Grep|Glob)\b/.test(x.text)).length;
+    const stage = p.asks?.length ? 'Waiting for your answer' : !running ? (p.proposals ? 'Plan ready: review and apply below' : p.note ? 'Applied' : 'Your turn')
+      : turn.some(x => x.kind === 'say') ? 'Writing the proposal' : tools.length ? 'Reading the code' : 'Starting';
+    const steps = ['Reading the code', 'Writing the proposal', 'Plan ready: review and apply below'];
+    const at = steps.indexOf(stage);
+    return h('div', { class: 'planprog' },
+      h('div', { class: `bar${running && !p.asks?.length ? ' busy' : ''}`, role: 'progressbar', 'aria-label': 'Planning progress', 'aria-valuetext': stage },
+        h('i', { class: 'seg run', style: `width:${running ? Math.max(15, (at + 1) * 33) : p.proposals ? 100 : 0}%` })),
+      h('div', { class: 'small muted' }, stage, running ? ` · ${ago(since || Date.now())}` : '', tools.length ? ` · ${reads} file reads, ${tools.length} tool uses` : '',
+        running && tools.length ? ` · now: ${tools[tools.length - 1].text.slice(0, 60)}` : ''));
+  }
+
   const pKeep = {}; // which proposals the user has unticked
   function renderPlanner() {
     const p = S.planner;
@@ -511,10 +548,11 @@
     }
     const running = p.run && p.run !== 'idle';
     head.replaceChildren(
-      h('div', { class: 'row' }, h('h3', { class: 'grow' }, p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
+      h('div', { class: 'row' }, h('h3', { class: 'grow' }, p.sprint ? `Editing ${p.sprint}` : p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
         btn('×', closeTask, 'ghost icon', 'Close (the chat keeps running)')),
       h('div', { class: `next ${p.asks?.length ? 'warn' : running ? 'run' : 'muted'}` }, p.asks?.length ? 'Claude has a question for you (below).' : running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
-        p.context ? h('span', { class: 'muted small' }, ` · ${tok(p.context)}`) : ''));
+        p.context ? h('span', { class: 'muted small' }, ` · ${tok(p.context)}`) : ''),
+      planProgress(p, running));
     const prop = p.proposals;
     const panel = [];
     if (p.note) panel.push(h('div', { class: 'applied' }, '✓ ', p.note));
@@ -780,7 +818,12 @@
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.
-  setInterval(() => { if (S && !S.empty && S.board.tasks.some(t => t.run === 'running' || t.reviewing)) { renderLanes(); if (open && tab === 'agents') renderDrawer(); } }, 5000);
+  setInterval(() => {
+    if (!S || S.empty) return;
+    if (S.board.tasks.some(t => t.run === 'running' || t.reviewing)) { renderLanes(); if (open && tab === 'agents') renderDrawer(); }
+    const pp = open === '__planner' && S.planner?.run && S.planner.run !== 'idle' && document.querySelector('#drawer .planprog');
+    if (pp) pp.replaceWith(planProgress(S.planner, true));
+  }, 5000);
   post('ready');
   if (open && open !== '__planner') post('watch', { id: open });
 })();

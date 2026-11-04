@@ -246,3 +246,21 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .pill.ok { color: var(--ok); }
 .pill.warn { color: var(--warn); border-color: var(--warn); cursor: pointer; }
 .pill.run { color: var(--run); cursor: pointer; }
+
+/* Progress: sprint strip under the toolbar, planner bar in the drawer */
+.sprintbar { margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); display: grid; gap: 6px; }
+.sprintbar .row { gap: 8px; }
+.bar { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--fg) 10%, transparent); }
+.bar .seg { display: block; height: 100%; }
+.seg.done, .dot.done { background: var(--ok); }
+.seg.review, .dot.review { background: var(--accent); }
+.seg.work, .seg.run, .dot.work { background: var(--run); }
+.seg.needs, .dot.needs { background: var(--warn); }
+.seg.todo, .dot.todo { background: color-mix(in srgb, var(--fg) 22%, transparent); }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; }
+.legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; }
+.planprog { display: grid; gap: 4px; margin-top: 6px; }
+.planprog .seg { transition: width .4s ease; }
+.bar.busy { background: linear-gradient(90deg, transparent 0, color-mix(in srgb, var(--run) 35%, transparent) 50%, transparent 100%) 0 0 / 200% 100%, color-mix(in srgb, var(--fg) 10%, transparent); animation: jc-busy 1.4s linear infinite; }
+@keyframes jc-busy { from { background-position: 200% 0, 0 0; } to { background-position: -200% 0, 0 0; } }
+@media (prefers-reduced-motion: reduce) { .bar.busy { animation: none; } }

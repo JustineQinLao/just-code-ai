@@ -785,11 +785,13 @@ export class Runner {
   private plannerTargets: string[] = [];        // the To do task ids this chat is editing (empty = planning fresh)
   private plannerProposals?: RefineResult[];
   private plannerNote?: string;  // last apply result, shown in the panel
+  private plannerTurnAt = 0;     // when Claude's current planning turn started (the panel's progress bar)
+  private plannerSprint?: string; // the sprint this chat edits, when started with ✦ Edit sprint
 
   plannerLive() {
     const s = this.planner;
     if (!s?.open && !this.plannerProposals) return undefined;
-    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0, note: this.plannerNote,
+    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0, note: this.plannerNote, turnAt: this.plannerTurnAt, sprint: this.plannerSprint,
       asks: s?.open ? [...s.asks.values()].filter(a => a.kind === 'question') : [] };
   }
 
@@ -801,6 +803,8 @@ export class Runner {
     this.plannerTargets = targetIds;
     this.plannerProposals = undefined;
     this.plannerNote = undefined;
+    this.plannerTurnAt = Date.now();
+    this.plannerSprint = sprint?.name;
     const tasks = targetIds.map(id => this.store.task(id)).filter((t): t is Task => !!t);
     const set = this.d.settings();
     const s = new Session({
@@ -834,6 +838,7 @@ export class Runner {
   plannerSay(text: string) {
     if (!this.planner?.open) throw new Error('The planning chat has ended. Start it again.');
     this.planner.send(text);
+    this.plannerTurnAt = Date.now();
   }
   stopPlanner() { this.planner?.kill(); this.planner = undefined; this.plannerProposals = undefined; this.plannerTargets = []; this.changed(); }
 
