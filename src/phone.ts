@@ -26,10 +26,15 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
   const srv = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const send = (code: number, body: string, type = 'application/json') => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
-    if (url.pathname === '/') return send(200, PAGE, 'text/html');
     if (url.pathname === '/sw.js') return send(200, SW, 'application/javascript');
-    const tok = String(req.headers['x-token'] ?? url.searchParams.get('token') ?? '');
-    if (!same(tok, d.token)) return send(401, '{"error":"bad token"}');
+    const hdr = String(req.headers['x-token'] ?? '');
+    const q = url.searchParams.get('t') ?? url.searchParams.get('token') ?? '';
+    const ck = /(?:^|;\s*)jc_token=([^;]*)/.exec(req.headers.cookie ?? '')?.[1] ?? '';
+    const ok = [hdr, q, decodeURIComponent(ck)].some(t => t && same(t, d.token));
+    if (!ok) return send(401, '{"error":"bad token"}');
+    // A valid link sets an HttpOnly cookie so later requests from the page need no token in the URL.
+    if (q && same(q, d.token)) res.setHeader('set-cookie', `jc_token=${encodeURIComponent(d.token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+    if (url.pathname === '/') return send(200, PAGE, 'text/html');
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
     if (url.pathname === '/api/events' && req.method === 'GET' && d.events) return send(200, JSON.stringify(d.events(Number(url.searchParams.get('since')) || 0)));
     if (url.pathname === '/api/board' && req.method === 'POST' && d.board) {

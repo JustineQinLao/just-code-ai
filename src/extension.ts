@@ -213,10 +213,15 @@ export function activate(context: vscode.ExtensionContext) {
 
   /* ---------- phone server (off by default) ---------- */
   let phone: http.Server | undefined;
-  const phoneToken = () => {
-    let t = context.globalState.get<string>('phoneToken');
-    if (!t) { t = randomUUID().replace(/-/g, ''); void context.globalState.update('phoneToken', t); }
-    return t;
+  let phoneTok = '';
+  const newToken = () => randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+  const phoneToken = () => phoneTok;
+  // Token lives in SecretStorage (migrating the old globalState copy once).
+  const loadPhoneToken = async () => {
+    let t = await context.secrets.get('justCode.phoneToken');
+    if (!t) { t = newToken(); await context.secrets.store('justCode.phoneToken', t); }
+    phoneTok = t;
+    if (context.globalState.get('phoneToken')) void context.globalState.update('phoneToken', undefined);
   };
   const phoneState = () => {
     const r = runner();
@@ -251,6 +256,7 @@ export function activate(context: vscode.ExtensionContext) {
   const hub = new DialogHub();
   const phoneBoard = makePhoneBoard<Task>({ hub, task: id => runner()?.store.task(id), canMerge: canPhoneMerge, merge: id => runner()!.merge(id) });
   async function syncPhone() {
+    await loadPhoneToken();
     const on = setting('phoneServer', false);
     if (!on) { phone?.close(); phone = undefined; return; }
     if (phone) return;
@@ -598,7 +604,7 @@ export function activate(context: vscode.ExtensionContext) {
       };
       panel.webview.onDidReceiveMessage(async m => {
         if (m !== 'regen') return;
-        await context.globalState.update('phoneToken', randomUUID().replace(/-/g, ''));
+        await context.secrets.store('justCode.phoneToken', newToken()); await loadPhoneToken();
         phone?.close(); phone = undefined; await syncPhone(); render();
       });
       render();

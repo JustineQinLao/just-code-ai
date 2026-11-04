@@ -49,7 +49,7 @@ test('phone: /sw.js is served without a token, state still needs one', async () 
 // Runs the page script against a stub DOM and fake fetch/timers. Timers are captured, not run: call `fire()` to run the pending poll.
 async function runPage(responses: Array<() => any>) {
   const { srv, base } = await boot();
-  const html = await (await fetch(base + '/')).text();
+  const html = await (await fetch(base + '/?t=tok')).text();
   srv.close();
   const script = html.match(/<script>([\s\S]*)<\/script>/)![1];
   const els: Record<string, any> = {};

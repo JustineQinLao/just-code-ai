@@ -429,3 +429,24 @@ test('queue: Run all continues when a task is merged with no Claude process open
   assert.deepEqual(store.queue, []);
   r.dispose(); store.dispose();
 });
+
+test('phone auth: link sets cookie, missing/wrong/old token gets 401', async () => {
+  const { startPhoneServer } = await import('../phone');
+  const mk = (token: string) => startPhoneServer(0, { token, state: () => ({ ok: 1 }), act: async () => {} });
+  const base = (s: any) => `http://127.0.0.1:${s.address().port}`;
+  let srv = await mk('tok1');
+  try {
+    assert.equal((await fetch(base(srv) + '/')).status, 401);
+    assert.equal((await fetch(base(srv) + '/?t=nope')).status, 401);
+    assert.equal((await fetch(base(srv) + '/api/state')).status, 401);
+    const r = await fetch(base(srv) + '/?t=tok1');
+    assert.equal(r.status, 200);
+    const ck = r.headers.get('set-cookie')!;
+    assert.match(ck, /HttpOnly/);
+    const cookie = ck.split(';')[0];
+    assert.equal((await fetch(base(srv) + '/api/state', { headers: { cookie } })).status, 200);
+    srv.close(); srv = await mk('tok2'); // regenerated
+    assert.equal((await fetch(base(srv) + '/api/state', { headers: { cookie } })).status, 401);
+    assert.equal((await fetch(base(srv) + '/?t=tok1')).status, 401);
+  } finally { srv.close(); }
+});
