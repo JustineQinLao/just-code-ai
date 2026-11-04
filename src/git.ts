@@ -113,6 +113,12 @@ export const worktreeDir = (repo: string, id: string) => path.join(repo, '.justc
 
 export async function addWorktree(repo: string, dir: string, branch: string, base: string) {
   if (fs.existsSync(path.join(dir, '.git'))) return;
+  // A folder without .git is not a worktree: what is left after one was removed while a process still wrote into it
+  // (build output, test caches). Clear it, and git's record of it, so the task can start again.
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    await ok(repo, ['worktree', 'prune']);
+  }
   const exists = await ok(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
   await git(repo, exists ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, base]);
 }

@@ -12,8 +12,13 @@ project. Claude asks for approval right on the card, and an AI reviewer tests th
 - **Plan with Claude:** one **✦ Plan** button turns a goal into small tasks or reworks the To do list. Claude reads
   the code read-only, asks you a few questions when the goal is unclear, and proposes tasks with a goal, likely files
   and a *Done when* checklist, grouped into sprints. You keep chatting, then apply the tasks you want.
+- **Project setup:** a label by the project name says whether it is set up for Claude. **Set up project** has Claude
+  interview you, then write `CLAUDE.md`, a reviewer agent and `TASKS.md` (with sprints) after you approve.
+- **Sprints with progress:** each sprint has a goal and a progress bar (done, in review, working, needs you, to do).
+  **✦ Edit sprint** reworks every not-started task in a sprint with one prompt. The planning panel shows its own
+  progress: reading the code, writing the proposal, waiting for you, ready.
 - **Quiet notifications:** a notification appears only when a task needs you, is ready to merge, or failed, with an
-  **Open task** button. Everything else goes to the JustCode output log.
+  **Open task** and **Don't show again**. Everything else goes to the JustCode output log.
 - **Sources and artifacts:** tasks rest on your specs, designs, docs and links (**📎 Sources**). Each task keeps a
   brief, a plan, the builder's handoff and the review notes, so every step reads short notes instead of re-exploring
   the code.
@@ -54,9 +59,11 @@ You can also open this folder in VS Code and press F5 (run `npm run compile` fir
 1. Run **JustCode: Open Board**, or click **JustCode** in the status bar.
 2. Work through the **setup checklist** at the top until every line has a ✓. Each line that fails has a button that
    fixes it.
-3. Type a task, for example *"Add a dark mode toggle to the settings page"*, and press **⌘/Ctrl+Enter** to add it and
+3. Optional: if the project label says **● Not set up**, press **Set up project**. Answer Claude's questions on the
+   card and approve the files it proposes.
+4. Type a task, for example *"Add a dark mode toggle to the settings page"*, and press **⌘/Ctrl+Enter** to add it and
    run it.
-4. Watch the card:
+5. Watch the card:
    - **Working**: Claude is building in the task's own branch.
    - **Needs you**: Claude asked a question or wants approval. Answer it on the card.
    - **Review**: the AI reviewer ran the tests and checked the diff. Issues go back to Claude by themselves.
@@ -199,7 +206,7 @@ git tag v1.0.0 && git push origin v1.0.0
 Off by default. Enable the phone server (`justCode.phoneServer`) to open the board from your phone or the Android app
 on the **same network**; the computer must stay awake. Access needs a token, so keep it private. With Bypass
 permissions or `justCode.bypassAll`, anyone with the token can run unapproved commands. This differs from *Continue on
-phone*, which uses Remote Control. Build, install and pairing steps: [docs/GUIDE.md](docs/GUIDE.md) (section 7b).
+phone*, which uses Remote Control. Build, install and pairing steps: [docs/GUIDE.md](docs/GUIDE.md) (section 11).
 
 ## Limits
 

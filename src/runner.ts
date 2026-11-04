@@ -60,6 +60,7 @@ export class Runner {
   private starting = new Set<string>();
   private reviews = new Map<string, { ac: AbortController; started: number }>();
   private busy = new Set<string>();
+  private checking = new Set<string>();   // tasks whose checks are running now: no review, merge or cleanup meanwhile
   private errorSwept = new Set<string>(); // errored reviews the sweep already retried this window
   private emptyAt = new Set<string>();
   private phase = new Map<string, string>(); // what JustCode itself is doing for a task: setting up, running checks
@@ -360,6 +361,8 @@ export class Runner {
     if (!checks.length) return 'none';
     const head = await g.git(t.worktree, ['rev-parse', 'HEAD']).catch(() => '');
     if (t.checks?.head === head && t.checks.state === 'pass') return 'pass';
+    if (this.checking.has(id)) return 'fail';  // already running for this task: the first run decides
+    this.checking.add(id);
     this.setPhase(id, `Running checks: ${checks.map(c => c.name).join(', ')}…`);
     let results: C.CheckResult[], log: string;
     try {
@@ -369,11 +372,12 @@ export class Runner {
         const base = await this.baseline(t.base, failing.map(f => f.cmd));
         for (const r of failing) if (base.get(r.cmd) === false) r.preexisting = true;
       }
-    } finally { this.setPhase(id); }
+    } finally { this.setPhase(id); this.checking.delete(id); }
+    const now = this.store.task(id);
+    // Merged, discarded or deleted while the checks ran: their results no longer belong to anything.
+    if (!now || now.status === 'done' || !now.worktree || now.worktree !== t.worktree || !fs.existsSync(now.worktree)) return 'none';
     try { fs.mkdirSync(A.taskDir(this.root, id), { recursive: true }); fs.writeFileSync(A.checksLog(this.root, id), log); } catch { /* the card still shows it */ }
     const real = results.filter(r => !r.ok && !r.preexisting);
-    const now = this.store.task(id);
-    if (!now) return 'none';
     const rounds = real.length ? (now.checks?.state === 'fail' ? now.checks.rounds : 0) + 1 : 0;
     this.store.updateTask(id, { checks: { state: real.length ? 'fail' : 'pass', rounds, head,
       results: results.map(r => ({ name: r.name, cmd: r.cmd, ok: r.ok, ms: r.ms, tail: r.tail || undefined, preexisting: r.preexisting, timedOut: r.timedOut })) } });
@@ -517,8 +521,11 @@ export class Runner {
       for (const t of [...this.store.data.tasks]) {
         if (t.archived || t.status === 'done' || t.init || t.remote || !t.branch || !t.worktree || t.conflicts?.length || t.error || t.limited) continue;
         if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') continue;
-        if (this.reviews.has(t.id) || this.busy.has(t.id) || this.starting.has(t.id)) continue;
-        if (t.status === 'review' && !t.review && !this.emptyAt.has(t.id) && await this.hasWork(t.id)) { await this.review(t.id); continue; }
+        if (this.reviews.has(t.id) || this.busy.has(t.id) || this.starting.has(t.id) || this.checking.has(t.id)) continue;
+        if (t.status === 'review' && !t.review && !this.emptyAt.has(t.id) && await this.hasWork(t.id)) {
+          if (await this.check(t.id) !== 'fail') await this.review(t.id);  // the reviewer only sees work whose checks pass
+          continue;
+        }
         // A review that could not run before (e.g. before this setting existed, or the window closed): one more try,
         // then the automatic merge applies.
         if (t.status === 'review' && t.review?.state === 'error' && o.autoMerge && o.mergeIfCannotRun && !this.errorSwept.has(t.id) && !isLimitError(t.review.error ?? '')) {
@@ -705,6 +712,7 @@ export class Runner {
       if (!t.branch || !t.base) throw new Error('Nothing to merge yet');
       const s = this.sessions.get(id);
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
+      if (this.checking.has(id)) throw new Error('The checks are still running in this task\'s folder. Merge when they finish.');
       this.stop(id);
       await g.commitAll(t.worktree, t.title);
       const conflicts = await g.syncWithBase(t.worktree, t.base);

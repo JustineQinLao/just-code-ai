@@ -367,3 +367,43 @@ test('planner: editing a sprint scopes the instruction to all its tasks', () => 
   assert.match(text, /\[a\] Login\n\[b\] Logout/);
   assert.doesNotMatch(plannerFirst([], 'x'), /Scope/);
 });
+
+test('runner: a task merged while its checks run is not sent back; Resume clears a leftover folder', async () => {
+  const root = tmp();
+  const sh = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+  sh(root, 'init', '-q', '-b', 'main'); sh(root, 'config', 'user.email', 't@t'); sh(root, 'config', 'user.name', 't');
+  // A slow test, so the task can be merged while it runs.
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node t.js' } }));
+  fs.writeFileSync(path.join(root, 't.js'), 'setTimeout(() => process.exit(1), 400)');
+  sh(root, 'add', '-A'); sh(root, 'commit', '-qm', 'init');
+  const store = new Store(root);
+  const said: string[] = [];
+  const settings: any = { maxParallel: 1, taskModel: '', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, freshAfterTokens: 0, checks: 'auto', setup: '', maxCheckRounds: 2, checkTimeoutMinutes: 1,
+    review: { auto: false, model: '', lightModel: '', triage: true, maxAttempts: 3, autoMerge: false, mergeIfCannotRun: false, commands: [], timeoutMinutes: 1 } };
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({ PATH: process.env.PATH! }), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  r.say = async (_id: string, text: string) => { said.push(text); };
+  const t = store.addTask({ title: 'Docs', mode: 'auto' });
+  const wt = g.worktreeDir(root, t.id), branch = 'jc/docs-' + t.id;
+  await g.addWorktree(root, wt, branch, 'main');
+  store.updateTask(t.id, { worktree: wt, branch, base: 'main', status: 'review' });
+  fs.writeFileSync(path.join(wt, 'README.md'), 'docs');
+  await g.commitAll(wt, 'docs');
+  const running = r.check(t.id);
+  await new Promise(res => setTimeout(res, 100));
+  assert.equal(r.checking.has(t.id), true);           // the checks are in flight
+  settings.review.auto = true; settings.review.autoMerge = true;
+  await r.sweep();                                      // the sweep must not review or merge meanwhile
+  settings.review.auto = false;
+  assert.equal(store.task(t.id)!.review, undefined);
+  // Merged elsewhere while the test still runs: the folder goes away, then a stray write recreates part of it.
+  store.updateTask(t.id, { status: 'done', worktree: undefined });
+  sh(root, 'worktree', 'remove', '--force', wt);
+  fs.mkdirSync(path.join(wt, 'out-test'), { recursive: true });
+  assert.equal(await running, 'none');
+  assert.equal(said.length, 0);
+  assert.equal(store.task(t.id)!.status, 'done');
+  // Starting the task again over the leftover folder works.
+  await g.addWorktree(root, wt, branch, 'main');
+  assert.ok(fs.existsSync(path.join(wt, '.git')));
+  r.dispose();
+});
