@@ -124,7 +124,7 @@ test('phone page: says notifications are unavailable outside a secure context', 
 
 test('phoneLinkUrl and qrSvg', () => {
   assert.equal(phoneLinkUrl('192.168.1.5', 7878, 'a b'), 'http://192.168.1.5:7878/?pair=a%20b');
-  const svg = qrSvg('http://192.168.1.5:7878/?token=abc');
+  const svg = qrSvg('http://192.168.1.5:7878/?pair=abc');
   assert.match(svg, /^<svg/);
   assert.ok(svg.length > 500);
 });
@@ -390,7 +390,27 @@ test('pairing code is single-use, expires, and sets a session cookie', async () 
     const code = issuePairingCode();
     const r = await fetch(`${base}/?pair=${code}`);
     assert.equal(r.status, 200);
-    assert.match(r.headers.get('set-cookie') ?? '', /jc_token=secret/);
+    assert.match(r.headers.get('set-cookie') ?? '', /jc_session=(?!secret)[\w-]+;.*HttpOnly/);
     assert.equal((await fetch(`${base}/?pair=${code}`)).status, 401);
+  } finally { srv.close(); }
+});
+
+test('pairing: cookie authorizes later calls, expired/empty codes do not, session is not the token', async () => {
+  const { issuePairingCode } = await import('../phone');
+  const srv = await startPhoneServer(0, { token: 'secret', state: () => ({ ok: 1 }), act: async () => {}, allowTokenInUrl: false });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const expired = issuePairingCode(-1);
+    assert.equal((await fetch(`${base}/?pair=${expired}`)).status, 401);
+    assert.equal((await fetch(`${base}/?pair=`)).status, 401);
+    assert.equal((await fetch(`${base}/?pair=bogus`)).status, 401);
+    assert.equal((await fetch(`${base}/?pair=bogus`, { headers: { 'x-token': 'secret' } })).status, 200);
+    assert.equal((await fetch(`${base}/?pair=`, { headers: { 'x-token': 'secret' } })).status, 200);
+    assert.equal((await fetch(`${base}/?token=secret`)).status, 401); // opted out of token links
+    const r = await fetch(`${base}/?pair=${issuePairingCode()}`);
+    const cookie = (r.headers.get('set-cookie') ?? '').split(';')[0];
+    assert.doesNotMatch(cookie, /secret/);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { cookie } })).status, 200);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { cookie: 'jc_session=secret' } })).status, 401);
   } finally { srv.close(); }
 });

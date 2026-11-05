@@ -280,7 +280,7 @@ export function activate(context: vscode.ExtensionContext) {
     const on = setting('phoneServer', false);
     if (!on) { phone?.close(); phone = undefined; return; }
     if (phone) return;
-    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n) }); }
+    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n), allowTokenInUrl: false }); }
     catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
   }
   let mobile: MobileServer | undefined;

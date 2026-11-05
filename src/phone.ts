@@ -9,7 +9,11 @@ export interface PhoneDeps {
   /** Board messages relayed from a remote page; the host always handles them as remote. */
   board?(m: Record<string, unknown>): Promise<void>;
   events?(since: number): unknown;
+  /** Accept the permanent token in the URL (?t= / ?token=). Default true; the extension turns it off in favour of pairing codes. */
+  allowTokenInUrl?: boolean;
 }
+
+const SESSION_TTL_MS = 12 * 3600_000;
 
 // Actions a phone may send. Anything else is refused, so a leaked token cannot open files, change settings, etc.
 // Board messages a remote page may relay: answers to dialogs, and merge (which the host checks and confirms). Nothing else.
@@ -53,19 +57,27 @@ export function redeemPairingCode(code: string, now = Date.now()): boolean {
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Server> {
+  // Per-server, in memory: a cookie is a random revocable session id, never the permanent token. A restart or token change drops them all.
+  const sessions = new Map<string, number>();
+  const sessionOk = (id: string, now = Date.now()) => { const e = sessions.get(id); if (e !== undefined && e <= now) sessions.delete(id); return !!id && (sessions.get(id) ?? 0) > now; };
   const srv = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const send = (code: number, body: string, type = 'application/json') => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
     if (url.pathname === '/sw.js') return send(200, SW, 'application/javascript');
     const hdr = String(req.headers['x-token'] ?? '');
-    const q = url.searchParams.get('t') ?? url.searchParams.get('token') ?? '';
-    const ck = /(?:^|;\s*)jc_token=([^;]*)/.exec(req.headers.cookie ?? '')?.[1] ?? '';
+    const q = d.allowTokenInUrl === false ? '' : url.searchParams.get('t') ?? url.searchParams.get('token') ?? '';
+    const ckRaw = /(?:^|;\s*)jc_session=([^;]*)/.exec(req.headers.cookie ?? '')?.[1] ?? '';
+    const ck = (() => { try { return decodeURIComponent(ckRaw); } catch { return ''; } })();
     const pair = url.searchParams.get('pair') ?? '';
     const paired = !!pair && redeemPairingCode(pair);
-    const ok = paired || [hdr, q, (() => { try { return decodeURIComponent(ck); } catch { return ''; } })()].some(t => t && same(t, d.token));
-    if (!ok) return send(401, '{"error":"bad token"}');
-    // A valid link sets an HttpOnly cookie so later requests from the page need no token in the URL.
-    if (paired || (q && same(q, d.token))) res.setHeader('set-cookie', `jc_token=${encodeURIComponent(d.token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+    const viaToken = [hdr, q].some(t => t && same(t, d.token));
+    if (!(paired || viaToken || sessionOk(ck))) return send(401, '{"error":"bad token"}');
+    // Redeeming a pairing code (or a token link) starts a session: an HttpOnly cookie, so later requests need nothing in the URL.
+    if (paired || (q && viaToken)) {
+      const id = randomBytes(24).toString('base64url');
+      sessions.set(id, Date.now() + SESSION_TTL_MS);
+      res.setHeader('set-cookie', `jc_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
+    }
     if (url.pathname === '/') return send(200, PAGE, 'text/html');
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
     if (url.pathname === '/api/events' && req.method === 'GET' && d.events) return send(200, JSON.stringify(d.events(Number(url.searchParams.get('since')) || 0)));
