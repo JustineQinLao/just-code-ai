@@ -45,3 +45,4 @@ Each non-done card has a *Move to…* select (todo/doing/review); picking one po
 - Same drag onto *done*: refused, red message "a task cannot be moved to Done from the phone (merge it instead)" under the status line, no alert. Works.
 - A slow drag (4.5s) starts moving before the 0.5s hold, so it is treated as a scroll, not a drag (expected).
 - NOT verified: the native *Move to…* picker. The popup does not appear in `screencap`/`uiautomator`, so I could not pick an option via adb; only that the select renders on the card. Tap it by hand to confirm.
+Cards without a Move control are intentional: busy (running), waiting on an approval, or done. The server refuses those moves too (`phoneMoveError`), so the control and drag are hidden rather than offered and then rejected.

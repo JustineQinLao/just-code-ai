@@ -311,3 +311,47 @@ test('phone page: pending permission asks show and notify on every tab, not just
     assert.doesNotMatch(html, /Move to done/);
   } finally { srv.close(); }
 });
+
+async function pageSrc() {
+  const { srv, base } = await boot();
+  const html = await (await fetch(base + '/?t=tok')).text();
+  srv.close();
+  return html;
+}
+
+test('phone page: load() skips while dragging or a select is focused but keeps polling', async () => {
+  const html = await pageSrc();
+  const load = html.match(/async function load\(\)\{if\(busy\)return;if\(hold\(\)\)\{.*?\}busy=true/)![0];
+  assert.match(load, /sched\(\);return/);
+  const hold = html.match(/function hold\(\)\{.*?\}/)![0];
+  const mk = (tag: string) => new vm.Script(`(function(document){let dragging=false;${hold};return {hold,set:v=>dragging=v}})`).runInThisContext()({ activeElement: { tagName: tag } });
+  const a = mk('BUTTON'); assert.equal(a.hold(), false); a.set(true); assert.equal(a.hold(), true);
+  assert.equal(mk('SELECT').hold(), true);
+});
+
+test('phone page: Move select blurs then posts a move; drag onto a tab posts it; refresh deferred during drag', async () => {
+  const html = await pageSrc();
+  // select
+  assert.match(html, /onchange:\(\)=>\{if\(sel\.value\)\{sel\.blur\(\);act\(\{type:'move',id:t\.id,status:sel\.value\}\)\}\}/);
+  // drag handler run against a fake card and timers
+  const src = html.match(/let dragging=false.*?c\.addEventListener\('touchcancel',end\)\}/s)![0];
+  const acts: any[] = []; const ls: Record<string, any> = {}; let fire: any;
+  const card = { style: {} as any, addEventListener: (n: string, f: any) => { ls[n] = f; }, };
+  const tab = { id: 'tab-doing', closest: () => tab };
+  const doc = { elementFromPoint: () => ({ closest: () => tab }) };
+  const $ = (id: string) => ({ style: {} as any });
+  const fn = new vm.Script(`(function(document,$,act,setTimeout,clearTimeout,navigator){${src};return {dragMove,get:()=>dragging}})`).runInThisContext();
+  const m = fn(doc, $, (x: any) => acts.push(x), (f: any) => { fire = f; return 1; }, () => { fire = undefined; }, {});
+  m.dragMove(card, { id: 'a', status: 'todo' });
+  const pt = { clientX: 5, clientY: 5 };
+  ls.touchstart({ target: { closest: () => null }, touches: [pt] });
+  fire(); assert.equal(m.get(), true);
+  ls.touchmove({ touches: [pt], preventDefault() {} });
+  ls.touchend({ type: 'touchend', changedTouches: [pt], touches: [] });
+  assert.deepEqual(acts, [{ type: 'move', id: 'a', status: 'doing' }]);
+  assert.equal(m.get(), false);
+  // a quick touch (no long-press) does nothing
+  ls.touchstart({ target: { closest: () => null }, touches: [pt] });
+  ls.touchend({ type: 'touchend', changedTouches: [pt], touches: [] });
+  assert.equal(acts.length, 1);
+});

@@ -99,7 +99,7 @@ const $=id=>document.getElementById(id);$('t').value=localStorage.tok||new URLSe
 const H=()=>({'x-token':$('t').value,'content-type':'application/json'});
 async function act(m){const r=await fetch('/api/act',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();$('er').textContent=j.error||'';load()}
 async function board(m){const r=await fetch('/api/board',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();if(j.error)alert(j.error);load()}
-let dragging=false,redo=false;function dragMove(c,t){let tm,on=false,sx,sy;const hl=x=>{for(const k of ['todo','doing','review','done']){const b=$('tab-'+k);if(b)b.style.outline=x===k?'2px solid #4af':''}};
+let dragging=false,redo=false;function hold(){return dragging||document.activeElement?.tagName==='SELECT'}function dragMove(c,t){let tm,on=false,sx,sy;const hl=x=>{for(const k of ['todo','doing','review','done']){const b=$('tab-'+k);if(b)b.style.outline=x===k?'2px solid #4af':''}};
 const at=e=>{const p=e.touches[0]||e.changedTouches[0],n=document.elementFromPoint(p.clientX,p.clientY),b=n&&n.closest('button[id^=tab-]');return b?b.id.slice(4):''};
 c.addEventListener('touchstart',e=>{if(e.target.closest('select,button'))return;sx=e.touches[0].clientX;sy=e.touches[0].clientY;tm=setTimeout(()=>{on=true;dragging=true;c.style.opacity='.6';navigator.vibrate&&navigator.vibrate(30)},500)},{passive:true});
 c.addEventListener('touchmove',e=>{if(!on){if(Math.abs(e.touches[0].clientX-sx)+Math.abs(e.touches[0].clientY-sy)>10)clearTimeout(tm);return}e.preventDefault();hl(at(e))},{passive:false});
@@ -120,7 +120,7 @@ function focusTask(id){const e=$('task-'+id);if(e){e.scrollIntoView();e.style.ou
 async function notify(t,a){if(!window.Notification||Notification.permission!=='granted')return;
 const o={body:a.tool+': '+a.detail,tag:'ask-'+a.id,data:'/?task='+t.id};
 try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.ready;if(reg)return reg.showNotification(t.title+' needs approval',o);new Notification(t.title+' needs approval',o).onclick=()=>{focus();focusTask(t.id)}}catch(e){}}
-async function load(){if(busy||dragging||document.activeElement?.tagName==='SELECT'){if(dragging)redo=true;return}busy=true;clearTimeout(timer);localStorage.tok=$('t').value;
+async function load(){if(busy)return;if(hold()){if(dragging)redo=true;sched();return}busy=true;clearTimeout(timer);localStorage.tok=$('t').value;
 try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
@@ -131,7 +131,7 @@ if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
 for(const a of t.asks){const d=el('div',{className:'a'},a.tool+': '+a.detail,el('br'));
 if(a.kind==='permission'){d.append(el('button',{onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'allow'})},'Approve'),el('button',{className:'n',onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'deny'})},'Deny'))}else d.append(el('i',{},'Answer this one in VS Code'));c.append(d)}
-if(!t.busy&&!t.asks.length&&t.status!=='done'){const sel=el('select',{className:'n',onchange:()=>{if(sel.value)act({type:'move',id:t.id,status:sel.value})}},el('option',{value:''},'Move to…'));for(const k of ['todo','doing','review'])if(k!==t.status)sel.append(el('option',{value:k},k));c.append(sel);dragMove(c,t)}
+if(!t.busy&&!t.asks.length&&t.status!=='done'){const sel=el('select',{className:'n',onchange:()=>{if(sel.value){sel.blur();act({type:'move',id:t.id,status:sel.value})}}},el('option',{value:''},'Move to…'));for(const k of ['todo','doing','review'])if(k!==t.status)sel.append(el('option',{value:k},k));c.append(sel);dragMove(c,t)}
 if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));l.append(c)}
 for(const t of data.tasks)for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}
 first=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);notifState()}
