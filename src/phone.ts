@@ -16,7 +16,7 @@ export interface PhoneDeps {
 export const BOARD_ACTIONS = ['dialogReply', 'merge'] as const;
 
 export const PHONE_COLUMNS = ['todo', 'doing', 'review', 'done'] as const;
-export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge', 'selectProject', 'move'] as const;
+export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge', 'project', 'move'] as const;
 /** Why a phone may not move a task to `status` (an error string), or undefined if allowed. Pure so it can be tested. */
 export function phoneMoveError(t: { status: string; worktree?: string; where?: string; review?: { state?: string; risk?: string }; busy?: boolean; asks?: unknown[] }, status: unknown): string | undefined {
   if (typeof status !== 'string' || !(PHONE_COLUMNS as readonly string[]).includes(status)) return 'unknown status';
@@ -26,6 +26,8 @@ export function phoneMoveError(t: { status: string; worktree?: string; where?: s
   if (status === 'todo' && t.worktree) return 'this task has work on its branch; discard it on the desktop to start over';
   return undefined;
 }
+/** Projects as the phone sees them: only root and a display name. */
+export const phoneProjects = (roots: string[]) => roots.map(root => ({ root, name: root.split(/[\\/]/).filter(Boolean).pop() ?? root }));
 /** A project path the phone may select: a string that is one of the known roots. */
 export const phoneProjectOk = (path: unknown, roots: string[]) => typeof path === 'string' && roots.includes(path);
 

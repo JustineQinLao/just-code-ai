@@ -259,7 +259,7 @@ test('phone page: has the project picker and the column tabs', async () => {
     assert.match(html, /<div id="pj"/);
     assert.match(html, /<div id="tabs"/);
     for (const k of ['todo', 'doing', 'review', 'done']) assert.ok(html.includes(`'${k}'`), k);
-    assert.match(html, /type:'selectProject'/);
+    assert.match(html, /type:'project'/);
     assert.match(html, /type:'move'/);
     assert.match(html, /name="viewport" content="width=device-width/);
     for (const l of ['To do', 'Doing', 'Review', 'Done']) assert.ok(html.includes(`${l}:'`) || html.includes(`'${l}'`), l);
@@ -267,13 +267,13 @@ test('phone page: has the project picker and the column tabs', async () => {
     assert.match(html, /\$\('t'\)\.hidden=true/);
     assert.match(html, /if\(rs\.length\)\{const ps=el\('select'/);
     assert.match(html, /<div id="top"><header>/);
-    assert.ok(html.includes("{ps.blur();act({type:'selectProject'"));
+    assert.ok(html.includes("{ps.blur();act({type:'project'"));
   } finally { srv.close(); }
 });
 
-test('phone act: selectProject and move are whitelisted', async () => {
+test('phone act: project and move are whitelisted', async () => {
   const { PHONE_ACTIONS } = await import('../phone');
-  assert.ok((PHONE_ACTIONS as readonly string[]).includes('selectProject'));
+  assert.ok((PHONE_ACTIONS as readonly string[]).includes('project'));
   assert.ok((PHONE_ACTIONS as readonly string[]).includes('move'));
 });
 
@@ -310,7 +310,7 @@ test('phone page: act() posts the message, shows a server error inline and reloa
   assert.deepEqual(calls, ['/api/act {"type":"move","id":"a","status":"review"}', 'load']);
   assert.deepEqual(alerts, ['busy']);
   calls.length = 0; alerts.length = 0;
-  await (await mkAct({ ok: true }))({ type: 'selectProject', path: '/p' });
+  await (await mkAct({ ok: true }))({ type: 'project', root: '/p' });
   assert.deepEqual(alerts, []); assert.equal(calls[1], 'load');
 });
 
@@ -366,4 +366,14 @@ test('phone page: Move select blurs then posts a move; drag onto a tab posts it;
   ls.touchstart({ target: { closest: () => null }, touches: [pt] });
   ls.touchend({ type: 'touchend', changedTouches: [pt], touches: [] });
   assert.equal(acts.length, 1);
+});
+
+test('phone projects: listing, valid switch and rejected path', async () => {
+  const { phoneProjects, phoneProjectOk } = await import('../phone');
+  const roots = ['/a/one', '/b/two'];
+  assert.deepEqual(phoneProjects(roots), [{ root: '/a/one', name: 'one' }, { root: '/b/two', name: 'two' }]);
+  assert.equal(phoneProjectOk('/b/two', roots), true);
+  assert.equal(phoneProjectOk('/etc', roots), false);
+  assert.equal(phoneProjectOk('/a/one/../../etc', roots), false);
+  assert.equal(phoneProjectOk(undefined, roots), false);
 });
