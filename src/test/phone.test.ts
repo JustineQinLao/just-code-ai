@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as vm from 'vm';
 import { AddressInfo } from 'net';
-import { startPhoneServer, phoneMoveError, canPhoneMerge, phoneLinkUrl, qrSvg } from '../phone';
+import { startPhoneServer, phoneMoveError, canPhoneMerge, phoneLinkUrl, qrSvg, phoneSteps, PHONE_ACTIONS, BOARD_ACTIONS } from '../phone';
 
 test('phone server: token required, only whitelisted actions', async () => {
   const acts: any[] = [];
@@ -504,4 +504,23 @@ test('phone server: GET /api/detail needs a token, passes the id, and a rejectio
     assert.equal(ok.status, 200); assert.deepEqual(await ok.json(), { files: [], checks: [] }); assert.deepEqual(ids, ['a']);
     assert.equal((await fetch(base + '/api/detail?id=bad', { headers: { 'x-token': 'secret' } })).status, 500);
   } finally { srv.close(); }
+});
+
+test('phone: /api/task is token-protected, read-only, 404 for unknown ids', async () => {
+  const srv = await startPhoneServer(0, { token: 'tok', state: () => ({ tasks: [] }), act: async () => {},
+    task: async id => id === 'a' ? { id, steps: phoneSteps(Array.from({ length: 300 }, (_, i) => ({ kind: 'say', text: 'x'.repeat(i === 299 ? 5000 : 1) }))), files: [], checks: [], agents: [], costUsd: 1, context: 5 } : undefined });
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  try {
+    assert.equal((await fetch(base + '/api/task?id=a')).status, 401);
+    const ok = await fetch(base + '/api/task?id=a', { headers: { 'x-token': 'tok' } });
+    assert.equal(ok.status, 200);
+    const j: any = await ok.json();
+    assert.equal(j.steps.length, 200);
+    assert.ok(j.steps[199].text.length < 700);
+    assert.equal(j.costUsd, 1);
+    assert.equal((await fetch(base + '/api/task?id=zzz', { headers: { 'x-token': 'tok' } })).status, 404);
+    assert.equal((await fetch(base + '/api/task', { headers: { 'x-token': 'tok' } })).status, 404);
+  } finally { srv.close(); }
+  assert.deepEqual([...PHONE_ACTIONS], ['addTask', 'run', 'stop', 'answer', 'merge', 'project', 'move']);
+  assert.deepEqual([...BOARD_ACTIONS], ['dialogReply', 'merge']);
 });
