@@ -14,7 +14,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer, canPhoneMerge, phoneDetail, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
+import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 
@@ -281,15 +281,21 @@ export function activate(context: vscode.ExtensionContext) {
     if (!on) { phone?.close(); phone = undefined; return; }
     if (phone) return;
     try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n),
-      detail: async id => { const r = runner(), t = r?.store.task(id); if (!t) return { files: [], checks: [], error: 'no such task' };
-        const steps = (r!.steps(t.id) ?? (t.sessionId ? sessionLog(t.worktree && fs.existsSync(t.worktree) ? t.worktree : r!.root, t.sessionId) : [])).slice(-200);
+      task: async id => { const r = runner(), t = r?.store.task(id); if (!r || !t) return undefined; const l = r.live(t.id);
+        return { id: t.id, ...await detailOf(id), agents: l.agents, costUsd: t.costUsd ?? 0, usage: t.usage, context: l.context }; },
+      detail: id => detailOf(id), allowTokenInUrl: false }); }
+    catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
+  }
+  async function detailOf(id: string): Promise<any> {
+    const r = runner(), t = r?.store.task(id); if (!r || !t) return { files: [], checks: [], error: 'no such task' };
+    {
+        const steps = phoneSteps(r.steps(t.id) ?? (t.sessionId ? sessionLog(t.worktree && fs.existsSync(t.worktree) ? t.worktree : r.root, t.sessionId) : []));
         return { steps, ...await phoneDetail(t, async dir => {
           const base = t.base ?? 'HEAD', stat = new Map<string, [number, number]>();
           const num = await g.git(dir, ['diff', '--numstat', '--no-renames', '-z', `${base}...HEAD`]).catch(() => '');
           for (const l of num.split('\0').filter(Boolean)) { const [a, d, ...f] = l.split('\t'); stat.set(f.join('\t'), [Number(a) || 0, Number(d) || 0]); }
           return (await g.changes(dir, base)).map(c => { const raw = /^".*"$/.test(c.file) ? (() => { try { return JSON.parse(c.file) as string; } catch { return c.file; } })() : c.file, n = stat.get(raw); return { file: raw, status: c.status, added: n?.[0] ?? 0, removed: n?.[1] ?? 0 }; });
-        }) }; }, allowTokenInUrl: false }); }
-    catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
+        }) }; }
   }
   let mobile: MobileServer | undefined;
   let mobileChain: Promise<void> = Promise.resolve();

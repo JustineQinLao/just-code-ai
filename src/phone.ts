@@ -11,6 +11,8 @@ export interface PhoneDeps {
   events?(since: number): unknown;
   /** Changed files, review and checks of one task, for the phone detail view. */
   detail?(id: string): Promise<unknown>;
+  /** Full read-only detail of one task in the current project (steps, files, review, checks, agents, cost, context); undefined for an unknown id. */
+  task?(id: string): Promise<unknown | undefined>;
   /** Accept the permanent token in the URL (?t= / ?token=). Default true; the extension turns it off in favour of pairing codes. */
   allowTokenInUrl?: boolean;
 }
@@ -46,6 +48,12 @@ export async function phoneDetail(t: { worktree?: string; review?: { state: stri
   if (t.review) out.review = { state: t.review.state, why: t.review.why, issues: t.review.issues ?? [] };
   if (t.worktree) { try { out.files = await diff(t.worktree); } catch (e: any) { out.error = String(e.message ?? e); } }
   return out;
+}
+
+export const PHONE_STEP_CAP = 200, PHONE_STEP_TEXT = 600;
+/** Last `cap` steps with long text cut, so one task cannot make a huge response. */
+export function phoneSteps<T extends { text: string }>(steps: T[], cap = PHONE_STEP_CAP, max = PHONE_STEP_TEXT): T[] {
+  return steps.slice(-cap).map(s => s.text.length > max ? { ...s, text: s.text.slice(0, max) + '…' } : s);
 }
 
 export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>
@@ -94,6 +102,12 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
     if (url.pathname === '/api/detail' && req.method === 'GET' && d.detail) {
       d.detail(url.searchParams.get('id') ?? '').then(j => send(200, JSON.stringify(j)), () => send(500, '{"error":"detail failed"}'));
+      return;
+    }
+    if (url.pathname === '/api/task' && req.method === 'GET' && d.task) {
+      const id = url.searchParams.get('id') ?? '';
+      if (!id) return send(404, '{"error":"no such task"}');
+      d.task(id).then(j => j === undefined ? send(404, '{"error":"no such task"}') : send(200, JSON.stringify(j)), () => send(500, '{"error":"task failed"}'));
       return;
     }
     if (url.pathname === '/api/events' && req.method === 'GET' && d.events) return send(200, JSON.stringify(d.events(Number(url.searchParams.get('since')) || 0)));
