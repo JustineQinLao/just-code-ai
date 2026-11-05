@@ -298,6 +298,11 @@ JustCode can serve the board to your phone over your own network. This is separa
   and the token. Open the address in the phone's browser and paste the token. The page lists the open project's tasks and
   lets you add and run a task, approve or deny a permission, stop a task and merge a task that passed review. Nothing else
   (no settings, files or bypass mode) is allowed from the phone. A native Android app is not built yet (docs/FOLLOWUPS.md).
+- **Projects and moving cards:** the phone board can switch between the projects open in VS Code (the `root` message)
+  and move a card to another column (the `move` message). Some moves are blocked: moving a card to **Done** is refused
+  from the phone, because it merges the task's branch, so merge from the card's Merge button (only after review passed)
+  or on the desktop. Moving a card that has work on its branch back to **To do** is also refused (use Discard on the
+  desktop). Adding or removing project folders is desktop-only.
 - **Port:** `justCode.phoneServerPort` (default 7878).
 - **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
   on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks

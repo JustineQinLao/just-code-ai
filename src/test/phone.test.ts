@@ -242,3 +242,12 @@ test('phoneBoard: merge needs a confirm, re-checks after it, ignores a second ta
   assert.equal(h.events(0).events.length, 1);
   replyNext(h, { button: 'Merge' }); await first; assert.deepEqual(merged, ['a']);
 });
+
+test('phone board messages: selecting a project and moving cards are allowed, moving to done is not', async () => {
+  const { mobileMessage } = await import('../bridge');
+  assert.deepEqual(mobileMessage({ type: 'root', root: '/p' }), { type: 'root', root: '/p' });
+  assert.ok(mobileMessage({ type: 'move', id: 'a', status: 'doing' }));
+  assert.ok(mobileMessage({ type: 'move', id: 'a', status: 'review' }));
+  assert.equal(mobileMessage({ type: 'move', id: 'a', status: 'done' }), undefined);
+  assert.equal(mobileMessage({ type: 'addProject' }), undefined);
+});
