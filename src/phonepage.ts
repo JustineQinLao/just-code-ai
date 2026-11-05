@@ -12,6 +12,7 @@ button,select{font:inherit;min-height:44px;padding:8px 14px;margin:6px 6px 0 0;b
 button.n,select.n,header select{background:#444}
 input{font:inherit;min-height:44px;padding:8px;width:calc(100% - 20px);margin:10px;border:1px solid #444;border-radius:8px;background:#1c1c1c;color:#eee}
 input[hidden]{display:none}
+.c,.tabs{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 .a{border:1px solid #f59e0b;padding:8px;margin-top:8px;border-radius:8px;word-break:break-all}
 @media(max-width:400px){body{font-size:14px}.c{margin:8px}.tabs{gap:4px;padding:6px}.tabs button{padding:8px 2px;font-size:13px}}
 </style></head><body><div id="top"><header>JustCode<div id="pj" style="flex:1;min-width:0;text-align:right"></div></header>

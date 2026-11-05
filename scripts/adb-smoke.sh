@@ -53,9 +53,11 @@ tap_text "New task title" 400 321
 shot 02-add-task
 tap_text "Add + run" 72 388
 shot 03-permission
-tap_text "Approve" 91 738
+tap_text "Approve" 97 809
 shot 04-merge-button
-tap_text "Merge" 70 641
+tap_text "Review" 497 237   # approved task moves to Review
+shot 04b-review-tab
+tap_text "Merge" 233 539
 shot 05-confirm
 tap_text "Merge" 311 782
 shot 06-done
