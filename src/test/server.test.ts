@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert';
 import * as http from 'http';
+import { mobileMessage } from '../bridge';
 import { startMobileServer, hostAllowed, MobileServer } from '../server';
 
 function setup() {
@@ -51,4 +52,15 @@ test('SSE delivers state and missed dialogs; stop ends open streams and frees th
   await new Promise(r => setTimeout(r, 50));
   assert.ok(ended);
   await assert.rejects(req(s.port, 'GET', '/'));
+});
+
+test('LAN client messages: allowlist and safe settings only', () => {
+  for (const type of ['addProject', 'removeProject', 'fix', 'apiKey', 'openFolder', 'merge', 'delete', 'initialize', 'pickFiles', 'addSource', 'nope'])
+    assert.equal(mobileMessage({ type }), undefined, type);
+  assert.equal(mobileMessage(null), undefined); assert.equal(mobileMessage({}), undefined);
+  assert.deepEqual(mobileMessage({ type: 'run', id: 'x' }), { type: 'run', id: 'x' });
+  const v = mobileMessage({ type: 'settings', values: { claudePath: '/bin/sh', allowedTools: ['Bash'], defaultMode: 'bypassPermissions', bypassAll: true,
+    phoneServer: true, 'mobile.enabled': false, reviewCommands: ['x'], autoMerge: true, taskModel: 'opus', maxParallel: 'many', idleMinutes: 5, __proto__: { taskEffort: 'high' } } });
+  assert.deepEqual(v.values, { taskModel: 'opus', idleMinutes: 5 });
+  assert.deepEqual(mobileMessage({ type: 'settings', values: 'x' }).values, {});
 });

@@ -96,3 +96,22 @@ export function makePhoneBoard<T extends { id: string; title: string; base?: str
     } finally { busy.delete(id); }
   };
 }
+
+/** The unauthenticated LAN board may only send these message types. Anything that touches the host machine (projects, files, terminals,
+ *  merge/delete, MCP/API keys, sources, artifacts, setup) stays desktop-only. */
+const MOBILE_TYPES = new Set(['dialogReply', 'ready', 'root', 'guideSeen', 'openUrl', 'settings', 'resumeNow', 'addTask', 'editTask', 'move', 'reorder',
+  'addSprint', 'activateSprint', 'closeSprint', 'run', 'runAll', 'cancelQueue', 'stop', 'interrupt', 'say', 'answer', 'setMode', 'watch', 'changes',
+  'review', 'cancelReview', 'resolve', 'sendIssues', 'sendChecks', 'copy', 'shots', 'planner', 'plannerAnswer', 'plannerSay', 'stopPlanner']);
+/** Settings a LAN client may change: plain model/effort/limit choices. Never paths, tool allowlists, bypass, servers, auto-merge or commands. */
+const MOBILE_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
+  notifications: 'string', taskModel: 'string', taskEffort: 'string', plannerModel: 'string', plannerEffort: 'string', reviewModel: 'string',
+  reviewEffort: 'string', reviewLightModel: 'string', reviewTriage: 'boolean', maxParallel: 'number', autoReview: 'boolean', maxReviews: 'number', idleMinutes: 'number',
+};
+/** Returns the message a LAN client may send (settings filtered to the safe keys), or undefined to drop it. */
+export function mobileMessage(m: any): any | undefined {
+  if (!m || typeof m !== 'object' || typeof m.type !== 'string' || !MOBILE_TYPES.has(m.type)) return undefined;
+  if (m.type !== 'settings') return m;
+  const values: Record<string, unknown> = {};
+  if (m.values && typeof m.values === 'object') for (const [k, v] of Object.entries(m.values)) if (Object.hasOwn(MOBILE_SETTINGS, k) && typeof v === MOBILE_SETTINGS[k]) values[k] = v;
+  return { ...m, values };
+}

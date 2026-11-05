@@ -36,8 +36,10 @@ export function startMobileServer(port: number, o: MobileOpts, bindHost = '0.0.0
   const clients = new Map<http.ServerResponse, { since: number }>();
   const send = (c: http.ServerResponse, m: any) => { if (!c.destroyed) c.write(`data: ${JSON.stringify(m)}\n\n`); };
   const remove = o.addSink(m => { for (const c of clients.keys()) send(c, m); });
+  let tick = 0;
   const poll = setInterval(() => {
     if (!clients.size) return;
+    if (++tick % 30 === 0) for (const c of clients.keys()) if (!c.destroyed) c.write(': ping\n\n'); // keepalive (every ~15s)
     for (const [c, st] of clients) {
       const r = o.hubEvents(st.since); st.since = r.last;
       for (const m of r.events) send(c, m);
@@ -60,6 +62,7 @@ export function startMobileServer(port: number, o: MobileOpts, bindHost = '0.0.0
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(': ok\n\n');
       res.on('error', () => clients.delete(res));
+      // Hub events (toast/copy/open) are not scoped per client: they reach every connected client, so one client is the supported case.
       const snap = o.hubEvents(0);
       clients.set(res, { since: snap.last });
       for (const m of snap.events) if (m && m.type === 'dialog') send(res, m); // pending dialogs this client missed

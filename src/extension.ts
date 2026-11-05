@@ -1,4 +1,4 @@
-import { bypassGate, canEnableBypassAll, DialogHub, makePhoneBoard, confirmBypassFor, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
+import { mobileMessage, bypassGate, canEnableBypassAll, DialogHub, makePhoneBoard, confirmBypassFor, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -369,6 +369,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // `remote` is set by the phone server only (never read from the message), so a client cannot pick the confirmation path.
   async function handle(m: any, remote = false) {
+    if (remote) { m = mobileMessage(m); if (!m) return; } // the LAN client has no token: only allowlisted types, safe settings
     const confirm = confirmFor(remote);
     // A remote caller must not approve its own bypass: the answer would come from the same token. Desktop only.
     const confirmBypass = () => confirmBypassFor(remote, () => confirm(BYPASS_TEXT, 'Bypass permissions'));
