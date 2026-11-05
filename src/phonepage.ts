@@ -17,7 +17,7 @@ input[hidden]{display:none}
 @media(max-width:400px){body{font-size:14px}.c{margin:8px}.tabs{gap:4px;padding:6px}.tabs button{padding:8px 2px;font-size:13px}}
 .tabs[hidden]{display:none}
 @media(min-width:900px){.cols{display:grid;grid-template-columns:repeat(4,1fr) 1.3fr;gap:8px;padding:0 10px;align-items:start}.col{min-width:0}.col .c{margin:8px 0}.pane{position:sticky;top:60px}.pane .c{margin:0}}
-</style></head><body><div id="top"><header>JustCode<div id="pj" style="flex:1;min-width:0;text-align:right"></div></header>
+</style></head><body><div id="top"><header style="flex-wrap:wrap">JustCode<div id="pj" style="flex:1 1 100%;min-width:0"></div></header>
 <div id="tabs" class="tabs"></div></div>
 <input id="t" placeholder="Token (from VS Code: JustCode: Show Phone Pairing)"><input id="n" placeholder="New task title">
 <dialog id="dg" style="background:#222;color:#eee;border:1px solid #555;border-radius:8px;max-width:90vw"></dialog><button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="er" role="alert" style="margin:4px 12px;color:#f88"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="l"></div>
@@ -51,7 +51,7 @@ async function load(){if(busy)return;if(hold()){if(dragging)redo=true;sched();re
 try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));$('t').hidden=false;return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
-$('t').hidden=true;const pj=$('pj');pj.textContent='';const rs=data.projects||[];if(rs.length){const ps=el('select',{title:'Project',onchange:()=>{ps.blur();act({type:'project',root:ps.value})}});for(const r of rs){const o=el('option',{value:r.root},r.name);o.selected=r.root===data.current;ps.append(o)}pj.append(ps)}
+$('t').hidden=true;const pj=$('pj');pj.textContent='';const rs=data.projects||[];{const ps=el('select',{title:'Project',style:'width:100%;min-height:44px;font-size:16px',onchange:()=>{ps.blur();selId='';actGen++;clearTimeout(actTimer);l.textContent='';$('tabs').textContent='';act({type:'project',root:ps.value})}});for(const r of rs){const o=el('option',{value:r.root},r.name);o.selected=r.root===data.current;ps.append(o)}if(!rs.length)ps.append(el('option',{},'No project'));pj.append(ps);if(rs.length<2)pj.append(el('div',{className:'s'},'No other projects. Add one in VS Code: JustCode: Add Project'))}
 busyIds=new Set(data.tasks.filter(t=>t.busy).map(t=>t.id));if(!selId||!data.tasks.some(t=>t.id===selId)){actGen++;clearTimeout(actTimer)}
 const wide=isWide();const tb=$('tabs');tb.textContent='';tb.hidden=wide;if(!wide)for(const k of ['todo','doing','review','done'])tb.append(el('button',{id:'tab-'+k,className:k===col?'':'n',onclick:()=>{col=k;load()}},({todo:'To do',doing:'Doing',review:'Review',done:'Done'})[k]+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));
 const feed=(box,steps)=>{box.textContent='';if(!steps.length){box.append(el('div',{className:'s'},'No activity yet'));return}for(const x of steps){const k=x.kind||'info';box.append(el('div',{className:'s',style:'margin:2px 0;white-space:pre-wrap;word-break:break-word'+(k==='error'?';color:#f88':k==='say'?';color:#eee':'')},el('b',{},(x.time?x.time+' ':'')+k+' '),(x.text||'').slice(0,500)))}};

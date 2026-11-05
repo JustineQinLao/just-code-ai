@@ -265,9 +265,11 @@ test('phone page: has the project picker and the column tabs', async () => {
     for (const l of ['To do', 'Doing', 'Review', 'Done']) assert.ok(html.includes(`${l}:'`) || html.includes(`'${l}'`), l);
     assert.match(html, /<input id="t"/);
     assert.match(html, /\$\('t'\)\.hidden=true/);
-    assert.match(html, /if\(rs\.length\)\{const ps=el\('select'/);
-    assert.match(html, /<div id="top"><header>/);
-    assert.ok(html.includes("{ps.blur();act({type:'project'"));
+    assert.match(html, /const ps=el\('select'/);
+    assert.ok(html.includes('min-height:44px'));
+    assert.ok(html.includes('JustCode: Add Project'));
+    assert.match(html, /<div id="top"><header/);
+    assert.match(html, /\{ps\.blur\(\);selId='';actGen\+\+;[^}]*act\(\{type:'project'/);
   } finally { srv.close(); }
 });
 
@@ -376,6 +378,8 @@ test('phone projects: listing, valid switch and rejected path', async () => {
   assert.equal(phoneProjectOk('/etc', roots), false);
   assert.equal(phoneProjectOk('/a/one/../../etc', roots), false);
   assert.equal(phoneProjectOk(undefined, roots), false);
+  assert.equal(phoneProjectOk(5, roots), false);
+  assert.equal(phoneProjectOk({ toString: () => '/a/one' }, roots), false);
 });
 
 test('pairing code is single-use, expires, and sets a session cookie', async () => {

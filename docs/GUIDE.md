@@ -28,7 +28,7 @@ After a fix, close its terminal or press **Check again**. You can reopen the che
 **JustCode: Check Setup**, or from ⚙ → *Setup checklist*.
 
 **Projects.** The folders open in VS Code become projects automatically. **+** adds any other folder; it is
-remembered across windows. **×** removes a project from the board, and its files are kept.
+remembered across windows. **×** removes a project from the board, and its files are kept. The phone page only lists these known projects: add a folder in VS Code (**JustCode: Add Project**) for it to appear on the phone.
 
 ## 2. Set up the project for Claude
 
