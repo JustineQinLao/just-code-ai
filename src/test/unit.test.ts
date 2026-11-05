@@ -490,3 +490,96 @@ test('a phone can neither get bypass nor enable bypass-all; the desktop skips th
   assert.equal(asked, 1);
   assert.equal(await canEnableBypassAll(false, yes), true);
 });
+
+const leaseRepo = () => {
+  const root = tmp();
+  const sh = (...a: string[]) => execFileSync('git', a, { cwd: root });
+  sh('init', '-q', '-b', 'main'); sh('config', 'user.email', 't@t'); sh('config', 'user.name', 't');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'x'); sh('add', '-A'); sh('commit', '-qm', 'init');
+  return { root, sh };
+};
+const leaseRunner = (store: Store, notes: string[] = []): any => new Runner(store, { bin: () => 'claude', env: () => ({ PATH: process.env.PATH! }),
+  settings: () => ({ maxParallel: 1, worktreeCopy: [], review: { auto: false } }) as any, limits: new Limits(), notify: (_l: string, text: string) => { notes.push(text); }, choose: async () => 'x', cli: '' });
+
+test('addWorktree: a folder still being written into does not stop the task', async () => {
+  const { root } = leaseRepo();
+  const dir = g.worktreeDir(root, 'busy');
+  fs.mkdirSync(path.join(dir, 'out-test'), { recursive: true });
+  const writer = setInterval(() => { try { fs.mkdirSync(path.join(dir, 'out-test'), { recursive: true }); fs.writeFileSync(path.join(dir, 'out-test', 'a.js'), 'x'); } catch { /* being cleared */ } }, 1);
+  setTimeout(() => clearInterval(writer), 300);
+  await g.addWorktree(root, dir, 'jc/busy', 'main');
+  clearInterval(writer);
+  assert.ok(fs.existsSync(path.join(dir, '.git')));
+});
+
+test('git errors leave out the progress lines', async () => {
+  const { root } = leaseRepo();
+  await g.addWorktree(root, g.worktreeDir(root, 'one'), 'jc/one', 'main');
+  await assert.rejects(g.git(root, ['worktree', 'add', g.worktreeDir(root, 'two'), 'jc/one']), (e: Error) => !/Preparing worktree/.test(e.message) && /already/.test(e.message));
+});
+
+test('Resume on a merged task that late checks sent back: goes to Done, no new folder', async () => {
+  const { root, sh } = leaseRepo();
+  sh('branch', 'jc/merged');
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const t = store.addTask({ title: 'Merged', mode: 'auto' });
+  store.updateTask(t.id, { status: 'doing', branch: 'jc/merged', base: 'main', doneAt: Date.now(), error: "fatal: 'x' already exists" });
+  await r.run(t.id, 'Continue the task.');
+  assert.equal(store.task(t.id)!.status, 'done');
+  assert.equal(store.task(t.id)!.error, undefined);
+  assert.ok(!fs.existsSync(g.worktreeDir(root, t.id)));
+  assert.throws(() => sh('rev-parse', '--verify', '--quiet', 'refs/heads/jc/merged'));
+  r.dispose();
+});
+
+test('late check results never send a merged task back to work', async () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const said: string[] = [];
+  const r = leaseRunner(store);
+  r.say = async (_id: string, text: string) => { said.push(text); };
+  const t = store.addTask({ title: 'Merged', mode: 'auto' });
+  store.updateTask(t.id, { status: 'done', checks: { state: 'fail', rounds: 1, head: 'x', results: [{ name: 'tests', cmd: 'npm test', ok: false, ms: 1 }] } });
+  await r.sendChecks(t.id);
+  assert.equal(store.task(t.id)!.status, 'done');
+  assert.equal(said.length, 0);
+  r.dispose();
+});
+
+test('one window per project: a live lease elsewhere blocks runs and automation, a dead one passes on', async () => {
+  const { root } = leaseRepo();
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  const lock = path.join(root, '.justcode', 'runner.lock');
+  fs.writeFileSync(lock, String(process.ppid));
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const t = store.addTask({ title: 'A', mode: 'auto' });
+  store.setQueue([t.id]);
+  await assert.rejects(r.run(t.id), /Another window/);
+  r.pump();
+  assert.deepEqual(store.queue, [t.id]);
+  r.dispose();
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.ppid), 'never drops another window\'s lease');
+  // That window crashed: the next one takes over, and gives the lease back when it closes.
+  const dead = execFileSync(process.execPath, ['-p', 'process.pid'], { encoding: 'utf8' }).trim();
+  fs.writeFileSync(lock, dead);
+  const r2 = leaseRunner(store);
+  assert.equal(r2.holdsLease(), true);
+  assert.equal(fs.readFileSync(lock, 'utf8'), String(process.pid));
+  r2.dispose();
+  assert.ok(!fs.existsSync(lock));
+});
+
+test('a failed start tells the user once and stays on the card', async () => {
+  const { root } = leaseRepo();
+  const notes: string[] = [];
+  const store = new Store(root);
+  const r = leaseRunner(store, notes);
+  r.prepare = async () => { throw new Error('git worktree: fatal: boom'); };
+  const t = store.addTask({ title: 'A', mode: 'auto' });
+  await r.run(t.id);
+  assert.equal(store.task(t.id)!.error, 'git worktree: fatal: boom');
+  assert.equal(notes.length, 1);
+  r.dispose();
+});

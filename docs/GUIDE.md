@@ -414,7 +414,8 @@ where they stopped. **Try now** skips the wait.
 | Setup seems stuck | It is probably waiting for your answer: open it from the **◌ Setting up…** label or the yellow banner. |
 | The planning chat stopped moving | Its progress bar says *Waiting for your answer* when Claude asked something. Otherwise press **Stop step** and send your message again. |
 | A task keeps asking for the same command | Press **Always allow …**, or add a rule in ⚙, e.g. `Bash(docker compose:*)`. A compound command like `cd x && make` needs a rule for each part. |
-| "…/.justcode/worktrees/<id>' already exists" | Press **Resume**: the leftover folder is cleared. (Fixed in this version: a merge no longer happens while checks run.) |
+| "…/.justcode/worktrees/<id>' already exists" | Press **Resume**. If the task was already merged, the card moves to Done. Otherwise the leftover folder is cleared and the task continues. |
+| "Another window is running JustCode for this project" | Only one window runs a project's tasks, so two windows can't merge and test the same task at once. Use that window, or close it and try again. |
 | The reviewer says it couldn't run a command | Add the command's prefix to `justCode.reviewCommands`, e.g. `make check`. |
 | Tests in the task's copy miss a config file | Add the file to `justCode.worktreeCopy`. Only committed files are in the copy otherwise. |
 | An artifact task shows no link | Check the ⧉ terminal: artifacts need a Claude account login, and your organization must allow them. Press **Publish** on the card to try again. |

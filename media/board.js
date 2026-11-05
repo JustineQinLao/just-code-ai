@@ -274,7 +274,7 @@
   function renderToolbar() {
     const tasks = visible();
     const todo = tasks.filter(t => t.status === 'todo' && !t.queued);
-    const ready = tasks.filter(t => t.review?.state === 'pass' && t.review.risk !== 'critical' && t.status !== 'done');
+    const ready = tasks.filter(t => t.review?.state === 'pass' && t.review.risk !== 'critical' && t.status !== 'done' && !t.error && t.worktree);
     const q = S.queue;
     const sprint = S.board.sprints.find(s => s.id === view);
     const editable = tasks.filter(t => t.status === 'todo' && !t.worktree && !t.queued);
@@ -347,7 +347,7 @@
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
-      h('div', { class: `next ${nx.tone}` }, nx.text),
+      h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
       ...(t.asks || []).map(a => askBox(t, a)),
       nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary'), nx.extra ? btn(nx.extra[0], nx.extra[1], 'ghost') : '') : '');
     return el;

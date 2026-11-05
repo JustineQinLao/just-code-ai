@@ -61,6 +61,8 @@ export interface Live { phase?: string; run?: RunState; asks: Ask[]; agents: Age
 /** The mode a task actually runs with: bypass-all forces bypassPermissions. */
 export const effectiveMode = <M,>(mode: M, bypassAll?: boolean): M | 'bypassPermissions' => bypassAll ? 'bypassPermissions' : mode;
 
+const LEASE_MS = 2 * 60_000;
+
 export class Runner {
   private sessions = new Map<string, Session>();
   private starting = new Set<string>();
@@ -77,6 +79,8 @@ export class Runner {
   private sweeping = false;
   private unsub: { dispose(): void };
   private disposed = false;
+  private leading = false;
+  private leaseTimer?: NodeJS.Timeout;
 
   constructor(readonly store: Store, private d: RunnerDeps) {
     // Finished or archived work has no running session, however it got there (Done, archive, sync, merge).
@@ -91,9 +95,46 @@ export class Runner {
       // already closed (idle during a long review) left the queue stuck.
       this.pumpSoon();
     });
-    // A review that was running when the window closed never finished.
-    for (const t of store.data.tasks) if (t.review?.state === 'running') store.updateTask(t.id, { review: undefined });
-    setTimeout(() => void this.startup(), 1500).unref?.();
+    setTimeout(() => this.renewLease(), 1500).unref?.();
+    this.leaseTimer = setInterval(() => this.renewLease(), LEASE_MS / 4);
+    this.leaseTimer.unref?.();
+  }
+
+  /* ---------- one window per project ---------- */
+
+  // Two windows on one project each ran checks, reviews and merges on the same task, and neither saw the other's
+  // running checks: one merged and removed the folder the other was still testing. So only the window holding this
+  // lease runs tasks and the automation. It passes on when that window closes, or stops renewing after a crash.
+  private get leaseFile() { return path.join(this.root, '.justcode', 'runner.lock'); }
+
+  private holdsLease() {
+    if (this.disposed) return false;
+    const file = this.leaseFile;
+    const mine = String(process.pid);
+    try {
+      const owner = fs.readFileSync(file, 'utf8').trim();
+      if (owner === mine) { const now = new Date(); fs.utimesSync(file, now, now); return true; }
+      let alive = Date.now() - fs.statSync(file).mtimeMs < LEASE_MS;
+      if (alive) try { process.kill(Number(owner), 0); } catch (e: any) { alive = e.code === 'EPERM'; }
+      if (alive) return false;
+      fs.rmSync(file, { force: true });
+    } catch { /* no lease yet */ }
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, mine, { flag: 'wx' });
+      return true;
+    } catch { return false; } // another window took it first
+  }
+
+  private renewLease() {
+    const was = this.leading;
+    this.leading = this.holdsLease();
+    if (this.leading && !was) void this.startup();
+  }
+
+  private requireLease() {
+    if (!this.holdsLease()) throw new Error('Another window is running JustCode for this project. Use that window, or close it and try again.');
+    if (!this.leading) this.renewLease();
   }
 
   get root() { return this.store.root; }
@@ -128,6 +169,9 @@ export class Runner {
   /* ---------- startup ---------- */
 
   private async startup() {
+    // A review that was running when the window closed never finished.
+    for (const t of this.store.data.tasks) if (t.review?.state === 'running' && !this.reviews.has(t.id)) this.store.updateTask(t.id, { review: undefined });
+    for (const t of [...this.store.data.tasks]) await this.settleMerged(t);
     // Task copies whose task no longer exists.
     const keep = new Set([...this.store.data.tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)), BASELINE]);
     if (await g.isRepo(this.root)) {
@@ -147,9 +191,23 @@ export class Runner {
 
   /* ---------- runs ---------- */
 
+  // Merged earlier, then sent back to work by a late check result (a second window, an older version). Its work is
+  // already on base, so Resume must not build a new folder for it: the card goes to Done. true = it was that case.
+  private async settleMerged(t: Task) {
+    if (t.status === 'done' || !t.doneAt || t.worktree || !t.branch || !t.base || this.sessions.get(t.id)?.open) return false;
+    const branch = `refs/heads/${t.branch}`;
+    const gone = !await g.git(this.root, ['rev-parse', '--verify', '--quiet', branch]).then(() => true, () => false);
+    if (!gone && !await g.git(this.root, ['merge-base', '--is-ancestor', branch, t.base]).then(() => true, () => false)) return false;
+    if (!gone) await this.serial(() => g.deleteBranch(this.root, t.branch!)).catch(() => undefined);
+    this.store.updateTask(t.id, { status: 'done', error: undefined, live: undefined, checks: undefined });
+    return true;
+  }
+
   async run(id: string, prompt?: string) {
     const t = this.store.task(id);
     if (!t || this.sessions.get(id)?.open || this.starting.has(id) || t.remote) return;
+    this.requireLease();
+    if (await this.settleMerged(t)) return;
     if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. The task starts by itself after the reset.');
     const bin = this.d.bin();
     if (!bin) throw new Error('Claude Code is not installed or not found. Open JustCode: Check Setup.');
@@ -164,8 +222,10 @@ export class Runner {
         ? `JustCode brought the latest ${prep.base} into this task's folder. Re-check the files you rely on and continue the task.` : prompt;
       await this.start(t, bin, prep.worktree, { base: prep.base, branch: prep.branch, worktree: prep.worktree }, note);
     } catch (e) {
+      // The card shows it; one notification, however the run was started.
       this.fail(id, e);
-      throw e;
+      const error = this.store.task(id)?.error;
+      if (error) this.d.notify('error', `"${t.title}" stopped: ${error}`, id, true);
     } finally {
       this.starting.delete(id);
       this.changed();
@@ -388,7 +448,7 @@ export class Runner {
     } finally { this.setPhase(id); this.checking.delete(id); }
     const now = this.store.task(id);
     // Merged, discarded or deleted while the checks ran: their results no longer belong to anything.
-    if (!now || now.status === 'done' || !now.worktree || now.worktree !== t.worktree || !fs.existsSync(now.worktree)) return 'none';
+    if (!now || now.status === 'done' || !now.worktree || now.worktree !== t.worktree || !fs.existsSync(path.join(now.worktree, '.git'))) return 'none';
     try { fs.mkdirSync(A.taskDir(this.root, id), { recursive: true }); fs.writeFileSync(A.checksLog(this.root, id), log); } catch { /* the card still shows it */ }
     const real = results.filter(r => !r.ok && !r.preexisting);
     const rounds = real.length ? (now.checks?.state === 'fail' ? now.checks.rounds : 0) + 1 : 0;
@@ -406,7 +466,7 @@ export class Runner {
   async sendChecks(id: string) {
     const t = this.store.task(id);
     const failing = t?.checks?.results?.filter(r => !r.ok && !r.preexisting) ?? [];
-    if (!t || !failing.length) return;
+    if (!t?.worktree || t.status === 'done' || !failing.length) return;
     this.store.updateTask(id, { status: 'doing' });
     await this.say(id, `JustCode ran the project's checks after your turn. These fail:\n\n` +
       failing.map(r => `$ ${r.cmd}  (${r.timedOut ? 'timed out' : 'failed'})\n\`\`\`\n${r.tail ?? ''}\n\`\`\``).join('\n\n') +
@@ -511,7 +571,7 @@ export class Runner {
   }
 
   private pump() {
-    if (this.disposed || this.d.limits.held()) return;
+    if (this.disposed || this.d.limits.held() || !this.holdsLease()) return;
     const q = [...this.store.queue];
     let slots = this.d.settings().maxParallel - this.inFlight().length, changed = false;
     while (slots > 0 && q.length) {
@@ -536,7 +596,7 @@ export class Runner {
   // whose session had closed go back to Claude. One at a time, never during a usage limit.
   private async sweep() {
     const o = this.d.settings().review;
-    if (this.disposed || this.sweeping || !o.auto || this.d.limits.held()) return;
+    if (this.disposed || this.sweeping || !o.auto || this.d.limits.held() || !this.holdsLease()) return;
     this.sweeping = true;
     try {
       for (const t of [...this.store.data.tasks]) {
@@ -606,6 +666,7 @@ export class Runner {
     const t = this.store.task(id), o = this.d.settings().review;
     const bin = this.d.bin();
     if (!t?.worktree || !t.base || !t.branch || t.conflicts?.length || this.reviews.has(id) || !bin) return;
+    this.requireLease();
     let after: 'retry' | 'merge' | undefined;
     const ac = new AbortController();
     this.reviews.set(id, { ac, started: Date.now() }); // synchronously: two triggers never start two reviewers
@@ -729,6 +790,7 @@ export class Runner {
   // Base is brought into the branch first, inside the task's folder; conflicts stop there, never in the user's checkout.
   merge(id: string, auto = false) {
     return this.guarded(id, async t => {
+      this.requireLease();
       if (t.where === 'root' || !t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
       if (!t.branch || !t.base) throw new Error('Nothing to merge yet');
       const s = this.sessions.get(id);
@@ -909,7 +971,9 @@ export class Runner {
   }
 
   dispose() {
+    if (this.holdsLease()) fs.rmSync(this.leaseFile, { force: true });
     this.disposed = true;
+    clearInterval(this.leaseTimer);
     this.unsub.dispose();
     clearTimeout(this.sweepTimer);
     clearTimeout(this.pumpTimer);

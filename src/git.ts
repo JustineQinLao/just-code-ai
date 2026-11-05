@@ -19,7 +19,9 @@ export async function git(cwd: string, args: string[]) {
     if (e.code === 'ENOENT') throw new Error('git is not installed. Install it from https://git-scm.com, then try again.');
     const msg = String(e.stderr || e.message).trim();
     if (/Please tell me who you are|empty ident/i.test(msg)) throw new Error('git needs your name and email before it can commit. Open JustCode: Check Setup to set them.');
-    throw new Error(`git ${args[0]}: ${msg}`);
+    // git's progress lines ("Preparing worktree ...") arrive on stderr too; only the failure is worth showing.
+    const failure = msg.split('\n').filter(l => !/^Preparing worktree/.test(l)).join('\n');
+    throw new Error(`git ${args[0]}: ${failure}`);
   }
 }
 const ok = (cwd: string, args: string[]) => git(cwd, args).then(() => true, () => false);
@@ -114,13 +116,22 @@ export const worktreeDir = (repo: string, id: string) => path.join(repo, '.justc
 export async function addWorktree(repo: string, dir: string, branch: string, base: string) {
   if (fs.existsSync(path.join(dir, '.git'))) return;
   // A folder without .git is not a worktree: what is left after one was removed while a process still wrote into it
-  // (build output, test caches). Clear it, and git's record of it, so the task can start again.
-  if (fs.existsSync(dir)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-    await ok(repo, ['worktree', 'prune']);
+  // (build output, test caches). Clear it, and git's record of it, so the task can start again. That process may
+  // still be writing and put the folder back, so "already exists" is tried again before it reaches the card.
+  for (let attempt = 0; ; attempt++) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+      await ok(repo, ['worktree', 'prune']);
+    }
+    const exists = await ok(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+    try {
+      await git(repo, exists ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, base]);
+      return;
+    } catch (e: any) {
+      if (attempt >= 4 || !/already exists/.test(e.message)) throw e;
+      await new Promise(res => setTimeout(res, 500));
+    }
   }
-  const exists = await ok(repo, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
-  await git(repo, exists ? ['worktree', 'add', dir, branch] : ['worktree', 'add', '-b', branch, dir, base]);
 }
 
 // Uncommitted files in the project folder (what a task's copy would not have). Ignored files don't count.

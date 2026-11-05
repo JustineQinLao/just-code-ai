@@ -111,11 +111,12 @@ textarea { resize: vertical; width: 100%; }
 .meta { display: flex; gap: 4px; flex-wrap: wrap; margin: 5px 0 0; }
 .tag { font-size: 11px; padding: 0 6px; border-radius: 4px; background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--muted); }
 .tag.mode-bypassPermissions { color: var(--err); }
-.next { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.next { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; }
 .next.run { color: var(--fg); }
 .next.run::before { content: ''; width: 7px; height: 7px; border-radius: 99px; background: var(--run); animation: pulse 1.4s infinite; }
 .next.warn { color: var(--warn); }
 .next.err { color: var(--err); }
+.card .next.err { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .next.ok { color: var(--ok); }
 @keyframes pulse { 50% { opacity: .3; } }
 
