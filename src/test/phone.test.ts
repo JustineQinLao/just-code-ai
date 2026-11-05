@@ -486,3 +486,18 @@ test('phoneDetail: no worktree gives an empty file list and no error; files and 
   const e = await phoneDetail({ worktree: '/x', checks: { results: [{ name: 'test', ok: false, tail: 'boom' }] } }, async () => [{ file: 'a.ts', status: 'M', added: 2, removed: 1 }]);
   assert.equal(e.files[0].added, 2); assert.deepEqual(e.checks, [{ name: 'test', ok: false, tail: 'boom' }]);
 });
+
+test('phone server: GET /api/detail needs a token, passes the id, and a rejection gives 500', async () => {
+  const ids: string[] = [];
+  const srv = await startPhoneServer(0, { token: 'secret', state: () => ({}), act: async () => {},
+    detail: async id => { ids.push(id); if (id === 'bad') throw new Error('x'); return { files: [], checks: [] }; } });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    assert.equal((await fetch(base + '/api/detail?id=a')).status, 401);
+    assert.equal((await fetch(base + '/api/detail?id=a', { headers: { 'x-token': 'nope' } })).status, 401);
+    assert.deepEqual(ids, []);
+    const ok = await fetch(base + '/api/detail?id=a', { headers: { 'x-token': 'secret' } });
+    assert.equal(ok.status, 200); assert.deepEqual(await ok.json(), { files: [], checks: [] }); assert.deepEqual(ids, ['a']);
+    assert.equal((await fetch(base + '/api/detail?id=bad', { headers: { 'x-token': 'secret' } })).status, 500);
+  } finally { srv.close(); }
+});
