@@ -304,6 +304,7 @@ JustCode can serve the board to your phone over your own network. This is separa
   other columns. Blocked moves: nothing can be moved to **Done** from the phone (that merges the branch; use the Merge
   button on a task that passed review, or the desktop), a task that is running or waiting for an answer cannot be moved (stop it first), a done task cannot be moved out of Done, and a task with work on its branch cannot go back to **To do**
   (discard it on the desktop first).
+- **Tablet view:** at 900px wide or more (a tablet or landscape), the four columns show side by side with a detail pane on the right instead of tabs. Tap a card to see it in the pane; drag-to-move (drop on a column heading), the project switcher and approval notifications work as on the phone. Below 900px the tabs layout is unchanged.
 - **Port:** `justCode.phoneServerPort` (default 7878).
 - **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
   on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks
