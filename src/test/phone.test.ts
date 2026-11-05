@@ -286,14 +286,14 @@ test('phoneMoveError: done, busy, asking, out of done and todo-with-branch are r
   assert.equal(phoneProjectOk(['/a'], ['/a']), false);
 });
 
-test('phone page: act() posts the message, alerts a server error and reloads', async () => {
+test('phone page: act() posts the message, shows a server error inline and reloads', async () => {
   const { srv, base } = await boot();
   const html = await (await fetch(base + '/?t=tok')).text();
   srv.close();
   const src = html.match(/async function act\(m\)\{.*\}/)![0];
   const calls: string[] = []; const alerts: string[] = [];
-  const f = new vm.Script(`(${'async function(fetch,H,alert,load){' + src + '; return act}'})`).runInThisContext();
-  const mkAct = (reply: any) => f(async (u: string, o: any) => { calls.push(u + ' ' + o.body); return { json: async () => reply }; }, () => ({}), (t: string) => alerts.push(t), () => calls.push('load'));
+  const f = new vm.Script(`(${'async function(fetch,H,$,load){' + src + '; return act}'})`).runInThisContext();
+  const mkAct = (reply: any) => f(async (u: string, o: any) => { calls.push(u + ' ' + o.body); return { json: async () => reply }; }, () => ({}), () => ({ set textContent(t: string) { if (t) alerts.push(t); } }), () => calls.push('load'));
   await (await mkAct({ error: 'busy' }))({ type: 'move', id: 'a', status: 'review' });
   assert.deepEqual(calls, ['/api/act {"type":"move","id":"a","status":"review"}', 'load']);
   assert.deepEqual(alerts, ['busy']);
@@ -310,4 +310,48 @@ test('phone page: pending permission asks show and notify on every tab, not just
     assert.match(html, /for\(const t of data\.tasks\)for\(const a of t\.asks\)/);
     assert.doesNotMatch(html, /Move to done/);
   } finally { srv.close(); }
+});
+
+async function pageSrc() {
+  const { srv, base } = await boot();
+  const html = await (await fetch(base + '/?t=tok')).text();
+  srv.close();
+  return html;
+}
+
+test('phone page: load() skips while dragging or a select is focused but keeps polling', async () => {
+  const html = await pageSrc();
+  const load = html.match(/async function load\(\)\{if\(busy\)return;if\(hold\(\)\)\{.*?\}busy=true/)![0];
+  assert.match(load, /sched\(\);return/);
+  const hold = html.match(/function hold\(\)\{.*?\}/)![0];
+  const mk = (tag: string) => new vm.Script(`(function(document){let dragging=false;${hold};return {hold,set:v=>dragging=v}})`).runInThisContext()({ activeElement: { tagName: tag } });
+  const a = mk('BUTTON'); assert.equal(a.hold(), false); a.set(true); assert.equal(a.hold(), true);
+  assert.equal(mk('SELECT').hold(), true);
+});
+
+test('phone page: Move select blurs then posts a move; drag onto a tab posts it; refresh deferred during drag', async () => {
+  const html = await pageSrc();
+  // select
+  assert.match(html, /onchange:\(\)=>\{if\(sel\.value\)\{sel\.blur\(\);act\(\{type:'move',id:t\.id,status:sel\.value\}\)\}\}/);
+  // drag handler run against a fake card and timers
+  const src = html.match(/let dragging=false.*?c\.addEventListener\('touchcancel',end\)\}/s)![0];
+  const acts: any[] = []; const ls: Record<string, any> = {}; let fire: any;
+  const card = { style: {} as any, addEventListener: (n: string, f: any) => { ls[n] = f; }, };
+  const tab = { id: 'tab-doing', closest: () => tab };
+  const doc = { elementFromPoint: () => ({ closest: () => tab }) };
+  const $ = (id: string) => ({ style: {} as any });
+  const fn = new vm.Script(`(function(document,$,act,setTimeout,clearTimeout,navigator){${src};return {dragMove,get:()=>dragging}})`).runInThisContext();
+  const m = fn(doc, $, (x: any) => acts.push(x), (f: any) => { fire = f; return 1; }, () => { fire = undefined; }, {});
+  m.dragMove(card, { id: 'a', status: 'todo' });
+  const pt = { clientX: 5, clientY: 5 };
+  ls.touchstart({ target: { closest: () => null }, touches: [pt] });
+  fire(); assert.equal(m.get(), true);
+  ls.touchmove({ touches: [pt], preventDefault() {} });
+  ls.touchend({ type: 'touchend', changedTouches: [pt], touches: [] });
+  assert.deepEqual(acts, [{ type: 'move', id: 'a', status: 'doing' }]);
+  assert.equal(m.get(), false);
+  // a quick touch (no long-press) does nothing
+  ls.touchstart({ target: { closest: () => null }, touches: [pt] });
+  ls.touchend({ type: 'touchend', changedTouches: [pt], touches: [] });
+  assert.equal(acts.length, 1);
 });

@@ -38,3 +38,11 @@ Then repeat the steps from the scripted run, screencapping each one (`adb exec-o
 
 ## Smoke steps: project picker, tabs, moves
 After the main run, on the phone page: (1) the project buttons sit under the header and the current one is highlighted; tap another and the list reloads. (2) Tap each tab (todo, doing, review, done); counts match the cards. (3) On a todo card tap *Move to doing*: it leaves To do and shows under the Doing tab. (4) Confirm no card offers *Move to done*; a done move is blocked (use Merge). The scripted run and fake backend do not cover these yet.
+
+## Move menu and long-press drag
+Each non-done card has a *Move to…* select (todo/doing/review); picking one posts `{type:'move'}` to /api/act and reloads. Long-press (~0.5s) a card and drag onto a tab to do the same; the tab is outlined while hovered. Refused moves (e.g. dropping on Done) show a red message under the status line, not an alert. Checked 2026-11-05 on the connected Android phone (Samsung Internet, phone-size viewport) against `scripts/fake-phone-backend.js` (now handles `move`):
+- Long-press drag (`adb shell input touchscreen draganddrop 300 545 176 479 1500`) of a todo card onto *doing*: card moved, tab counts updated. Works.
+- Same drag onto *done*: refused, red message "a task cannot be moved to Done from the phone (merge it instead)" under the status line, no alert. Works.
+- A slow drag (4.5s) starts moving before the 0.5s hold, so it is treated as a scroll, not a drag (expected).
+- NOT verified: the native *Move to…* picker. The popup does not appear in `screencap`/`uiautomator`, so I could not pick an option via adb; only that the select renders on the card. Tap it by hand to confirm.
+Cards without a Move control are intentional: busy (running), waiting on an approval, or done. The server refuses those moves too (`phoneMoveError`), so the control and drag are hidden rather than offered and then rejected.
