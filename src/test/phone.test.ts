@@ -269,3 +269,30 @@ test('phone act: selectProject and move are whitelisted', async () => {
   assert.ok((PHONE_ACTIONS as readonly string[]).includes('selectProject'));
   assert.ok((PHONE_ACTIONS as readonly string[]).includes('move'));
 });
+
+test('phoneMoveError: done, busy, asking, out of done and todo-with-branch are refused; plain moves pass', async () => {
+  const { phoneMoveError, phoneProjectOk } = await import('../phone');
+  const t = { status: 'doing' };
+  assert.match(phoneMoveError(t, 'done')!, /Done/);
+  assert.match(phoneMoveError(t, 42)!, /Done/);
+  assert.match(phoneMoveError({ ...t, busy: true }, 'review')!, /running/);
+  assert.match(phoneMoveError({ ...t, asks: [{}] }, 'review')!, /running/);
+  assert.match(phoneMoveError({ status: 'done' }, 'todo')!, /done task/);
+  assert.match(phoneMoveError({ ...t, worktree: '/w' }, 'todo')!, /branch/);
+  assert.equal(phoneMoveError({ ...t, worktree: '/w' }, 'review'), undefined);
+  assert.equal(phoneMoveError({ status: 'todo' }, 'doing'), undefined);
+  assert.equal(phoneProjectOk('/a', ['/a', '/b']), true);
+  assert.equal(phoneProjectOk('/c', ['/a']), false);
+  assert.equal(phoneProjectOk(['/a'], ['/a']), false);
+});
+
+test('phone page: tapping a project or move calls act(), which shows server errors and reloads', async () => {
+  const { srv, base } = await boot();
+  try {
+    const html = await (await fetch(base + '/?t=tok')).text();
+    assert.match(html, /async function act\(m\)\{.*if\(j\.error\)alert\(j\.error\);load\(\)\}/);
+    assert.match(html, /act\(\{type:'selectProject',path:r\}\)/);
+    assert.match(html, /act\(\{type:'move',id:t\.id,status:k\}\)/);
+    assert.doesNotMatch(html, /Move to done/);
+  } finally { srv.close(); }
+});

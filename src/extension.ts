@@ -14,7 +14,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer, canPhoneMerge, phoneLinkUrl, qrSvg } from './phone';
+import { startPhoneServer, canPhoneMerge, phoneMoveError, phoneProjectOk, phoneLinkUrl, qrSvg } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 
@@ -260,12 +260,11 @@ export function activate(context: vscode.ExtensionContext) {
         if (m.choice !== 'allow' && m.choice !== 'deny') return 'phone can only allow or deny';
         return r.answer(m.id, { id: m.ask, choice: m.choice }) ? undefined : 'request no longer open';
       case 'selectProject':
-        if (!roots().includes(m.path)) return 'unknown project';
+        if (!phoneProjectOk(m.path, roots())) return 'unknown project';
         setCurrent(m.path); watching = undefined; void recheck(); push(); return;
       case 'move':
         if (!t) return 'no such task';
-        if (!['todo', 'doing', 'review'].includes(m.status)) return 'a task cannot be moved to Done from the phone (merge it instead)';
-        if (m.status === 'todo' && t.worktree) return 'this task has work on its branch; discard it on the desktop to start over';
+        { const l = r.live(t.id); const e = phoneMoveError({ status: t.status, worktree: t.worktree, busy: l.busy, asks: l.asks }, m.status); if (e) return e; }
         r.store.updateTask(t.id, { status: m.status }); return;
       case 'merge':
         if (!t || !canPhoneMerge(t)) return 'only tasks that passed review (and are not flagged critical) can be merged from the phone';
