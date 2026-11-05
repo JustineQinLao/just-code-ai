@@ -36,5 +36,5 @@ adb shell am start -a android.intent.action.VIEW -d "http://localhost:7878/?toke
 Then repeat the steps from the scripted run, screencapping each one (`adb exec-out screencap -p > docs/smoke/live-NN.png`). Differences from the fake: the task really starts a Claude run in a branch, so the permission card depends on what the agent asks for; use a task like "run npm test" to trigger a Bash card. Clean up with `adb reverse --remove tcp:7878`.
 `scripts/adb-smoke.sh` can't drive this: it launches the fake backend and hardcodes token "tok".
 
-## Note: project switching and moves
-The phone can select a project and move cards between columns, but not to Done (that merges; use the Merge button) and not back to To do when the task has branch work. The smoke run does not exercise these.
+## Note
+The phone page has no project picker, column tabs or move controls yet, so the smoke run does not cover them.
