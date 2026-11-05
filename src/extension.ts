@@ -14,7 +14,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer, canPhoneMerge, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
+import { startPhoneServer, canPhoneMerge, phoneDetail, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 
@@ -280,7 +280,14 @@ export function activate(context: vscode.ExtensionContext) {
     const on = setting('phoneServer', false);
     if (!on) { phone?.close(); phone = undefined; return; }
     if (phone) return;
-    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n), allowTokenInUrl: false }); }
+    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n),
+      detail: async id => { const r = runner(), t = r?.store.task(id); if (!t) return { files: [], checks: [], error: 'no such task' };
+        return phoneDetail(t, async dir => {
+          const base = t.base ?? 'HEAD', stat = new Map<string, [number, number]>();
+          const num = await g.git(dir, ['diff', '--numstat', `${base}...HEAD`]).catch(() => '');
+          for (const l of num.split('\n').filter(Boolean)) { const [a, d, ...f] = l.split('\t'); stat.set(f[f.length - 1], [Number(a) || 0, Number(d) || 0]); }
+          return (await g.changes(dir, base)).map(c => ({ file: c.file, status: c.status, added: stat.get(c.file)?.[0] ?? 0, removed: stat.get(c.file)?.[1] ?? 0 }));
+        }); }, allowTokenInUrl: false }); }
     catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
   }
   let mobile: MobileServer | undefined;

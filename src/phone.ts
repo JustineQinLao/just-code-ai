@@ -9,6 +9,8 @@ export interface PhoneDeps {
   /** Board messages relayed from a remote page; the host always handles them as remote. */
   board?(m: Record<string, unknown>): Promise<void>;
   events?(since: number): unknown;
+  /** Changed files, review and checks of one task, for the phone detail view. */
+  detail?(id: string): Promise<unknown>;
   /** Accept the permanent token in the URL (?t= / ?token=). Default true; the extension turns it off in favour of pairing codes. */
   allowTokenInUrl?: boolean;
 }
@@ -36,6 +38,16 @@ export const phoneProjects = (roots: string[]) => roots.map(root => ({ root, nam
 export const phoneProjectOk = (path: unknown, roots: string[]) => typeof path === 'string' && roots.includes(path);
 
 // One rule for showing the Merge button and for accepting a phone merge; never looser than the board's bulk merge.
+export interface PhoneDetail { files: { file: string; status: string; added: number; removed: number }[]; review?: { state: string; why?: string; issues: string[] }; checks: { name: string; ok: boolean; tail?: string }[]; error?: string }
+/** Payload for the detail view. A task without a worktree has no files and no error. `diff` is only called when there is a worktree. */
+export async function phoneDetail(t: { worktree?: string; review?: { state: string; why?: string; issues?: string[] }; checks?: { results?: { name: string; ok: boolean; tail?: string }[] } },
+  diff: (dir: string) => Promise<PhoneDetail['files']>): Promise<PhoneDetail> {
+  const out: PhoneDetail = { files: [], checks: (t.checks?.results ?? []).map(c => ({ name: c.name, ok: c.ok, tail: c.tail })) };
+  if (t.review) out.review = { state: t.review.state, why: t.review.why, issues: t.review.issues ?? [] };
+  if (t.worktree) { try { out.files = await diff(t.worktree); } catch (e: any) { out.error = String(e.message ?? e); } }
+  return out;
+}
+
 export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>
   !!t.worktree && t.where !== 'root' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical';
 
@@ -80,6 +92,10 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
     }
     if (url.pathname === '/') return send(200, PAGE, 'text/html');
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
+    if (url.pathname === '/api/detail' && req.method === 'GET' && d.detail) {
+      d.detail(url.searchParams.get('id') ?? '').then(j => send(200, JSON.stringify(j)), () => send(500, '{"error":"detail failed"}'));
+      return;
+    }
     if (url.pathname === '/api/events' && req.method === 'GET' && d.events) return send(200, JSON.stringify(d.events(Number(url.searchParams.get('since')) || 0)));
     if (url.pathname === '/api/board' && req.method === 'POST' && d.board) {
       let body = '';

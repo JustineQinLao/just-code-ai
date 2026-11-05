@@ -478,3 +478,11 @@ test('phone board: dialogReply and merge relay as remote, bad token rejected', a
     assert.equal((await post('/api/board', { type: 'openFile' })).status, 400);
   } finally { srv.close(); }
 });
+
+import { phoneDetail } from '../phone';
+test('phoneDetail: no worktree gives an empty file list and no error; files and checks are mapped', async () => {
+  const d = await phoneDetail({ review: { state: 'fail', why: 'w', issues: ['i'] } }, async () => { throw new Error('should not run'); });
+  assert.deepEqual(d.files, []); assert.equal(d.error, undefined); assert.deepEqual(d.review, { state: 'fail', why: 'w', issues: ['i'] });
+  const e = await phoneDetail({ worktree: '/x', checks: { results: [{ name: 'test', ok: false, tail: 'boom' }] } }, async () => [{ file: 'a.ts', status: 'M', added: 2, removed: 1 }]);
+  assert.equal(e.files[0].added, 2); assert.deepEqual(e.checks, [{ name: 'test', ok: false, tail: 'boom' }]);
+});
