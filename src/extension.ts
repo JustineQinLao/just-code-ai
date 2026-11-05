@@ -728,10 +728,12 @@ export function activate(context: vscode.ExtensionContext) {
       const render = () => {
         const link = phoneLinkUrl(lanIps()[0] ?? 'this-computer', setting('phoneServerPort', 7878), issuePairingCode());
         const esc = link.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><p>One-time link, valid 10 minutes. Same Wi-Fi only.</p><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p><button onclick="acquireVsCodeApi().postMessage('regen')">New link</button></body>`;
+        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><p>One-time link, valid 10 minutes. Same Wi-Fi only.</p><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p><script>const vs=acquireVsCodeApi()</script><button onclick="vs.postMessage('new')">New link</button> <button onclick="vs.postMessage('revoke')">Unpair all devices</button></body>`;
       };
       panel.webview.onDidReceiveMessage(async m => {
-        if (m !== 'regen') return;
+        if (m === 'new') return render(); // a fresh one-time link; paired devices keep working
+        if (m !== 'revoke') return;
+        // Revoke all devices: a new permanent token and a restarted server drop every session.
         await context.secrets.store('justCode.phoneToken', newToken()); await loadPhoneToken();
         phone?.close(); phone = undefined; await syncPhone(); render();
       });
