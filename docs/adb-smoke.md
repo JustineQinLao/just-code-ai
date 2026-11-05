@@ -46,3 +46,25 @@ Each non-done card has a *Move to…* select (todo/doing/review); picking one po
 - A slow drag (4.5s) starts moving before the 0.5s hold, so it is treated as a scroll, not a drag (expected).
 - NOT verified: the native *Move to…* picker. The popup does not appear in `screencap`/`uiautomator`, so I could not pick an option via adb; only that the select renders on the card. Tap it by hand to confirm.
 Cards without a Move control are intentional: busy (running), waiting on an approval, or done. The server refuses those moves too (`phoneMoveError`), so the control and drag are hidden rather than offered and then rejected.
+
+## Tablet run (SM-X133, 800x1340, Samsung Internet) 2026-11-05
+Screenshots in `docs/smoke/tablet/`, fake backend. `OUT=docs/smoke/tablet scripts/adb-smoke.sh` now passes end to end (fallback taps updated for this screen).
+
+| Step | Shot | Result |
+|---|---|---|
+| Open page, tabs + Add row render full width | 01-open | PASS |
+| Add task | 02-add-task | PASS |
+| Permission card (Approve/Deny) | 03-permission | PASS |
+| Approve: task leaves Doing, shows under Review | 04-merge-button, 04b-review-tab | PASS |
+| Merge confirm dialog | 05-confirm | PASS |
+| Merge: Done (1) | 06-done | PASS |
+| Tabs todo/doing/review/done, counts | 07-tab-* | PASS |
+| Long-press drag todo -> doing | 08, 09 | PASS |
+| Drag onto done refused, red message, no alert | 10-drag-to-done-refused | PASS (after fix) |
+
+Failures found:
+- Script taps missed on the tablet (Approve, Merge used phone coordinates): FIXED in `scripts/adb-smoke.sh` (coordinates, plus a Review-tab step since an approved task leaves the Doing tab). Re-run passes.
+- Long-press on a card/blank area started browser text selection and a Copy/Share toolbar (first attempt of step 10 showed it): FIXED with `user-select:none` on `.c,.tabs` in `src/phonepage.ts`; re-run screenshot 10 shows the refusal message with no selection.
+- Layout: no overflow or small tap targets seen (buttons 44px+); no change needed. Viewport is ~600 CSS px wide, so the phone breakpoint does not apply.
+
+UNVERIFIED: native *Move to…* picker (not visible to adb); project picker (the fake backend returns no projects); real-extension run (needs a manual pairing code); landscape orientation.
