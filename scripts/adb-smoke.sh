@@ -3,10 +3,15 @@
 # Usage: scripts/adb-smoke.sh [--record]     env: ADB_SERIAL, TOKEN (tok), OUT (docs/smoke)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PORT=7878; TOKEN=${TOKEN:-tok}; OUT=${OUT:-docs/smoke}; WAIT=${WAIT:-3}
+PORT=${PORT:-7878}; TOKEN=${TOKEN:-tok}; OUT=${OUT:-docs/smoke}; WAIT=${WAIT:-3}
 RECORD=0; [ "${1:-}" = "--record" ] && RECORD=1
 A=(adb); [ -n "${ADB_SERIAL:-}" ] && A=(adb -s "$ADB_SERIAL")
 mkdir -p "$OUT"
+# screen size from the device (fallback tap coordinates below were measured on 800x1340)
+SIZE=$("${A[@]}" shell wm size | tr -d '\r' | grep -o '[0-9]*x[0-9]*' | tail -1)
+SW=${SIZE%x*}; SH=${SIZE#*x}
+[ -n "$SW" ] && [ -n "$SH" ] || { echo "cannot read screen size from adb shell wm size" >&2; exit 1; }
+echo "screen ${SW}x${SH}"
 BACKEND_PID=""; REC_PID=""
 
 cleanup() {
@@ -31,9 +36,9 @@ tap_text() {
       const s=((t.match(/ text="([^"]*)"/)||[])[1]||"")+"|"+((t.match(/content-desc="([^"]*)"/)||[])[1]||"");
       const b=t.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
       if(b&&s.toLowerCase().includes(want)){console.log(((+b[1]+ +b[3])>>1)+" "+((+b[2]+ +b[4])>>1));break}}' "$1")
-  # web content is often not in the UI tree: fall back to the given X Y (800x1340 screen)
-  [ -n "$xy" ] || xy="${2:-} ${3:-}"
-  [ "$xy" != " " ] || { echo "no element with text '$1'" >&2; exit 1; }
+  # web content is often not in the UI tree: fall back to the given X Y (measured on 800x1340), scaled to this screen
+  if [ -z "$xy" ] && [ -n "${2:-}" ]; then xy="$(( $2 * SW / 800 )) $(( $3 * SH / 1340 ))"; fi
+  [ -n "$xy" ] || { echo "no element with text '$1'" >&2; exit 1; }
   "${A[@]}" shell input tap $xy
 }
 

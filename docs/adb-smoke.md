@@ -68,3 +68,26 @@ Failures found:
 - Layout: no overflow or small tap targets seen (buttons 44px+); no change needed. Viewport is ~600 CSS px wide, so the phone breakpoint does not apply.
 
 UNVERIFIED: native *Move to…* picker (not visible to adb); project picker (the fake backend returns no projects); real-extension run (needs a manual pairing code); landscape orientation.
+
+## Tablet action checklist (SM-X133, 800x1340)
+Driven by hand with adb taps against the fake backend (`PORT=7899`) on 2026-11-05; screenshots in `docs/smoke/tablet/`. The `Please confirm` dialog the fake backend raises at startup was dismissed (OK) before each shot except where noted. `scripts/adb-smoke.sh` reads the screen size from `adb shell wm size` and scales its fallback taps; `PORT` overrides 7878 when another backend holds it. If a second device/emulator is attached, set `ANDROID_SERIAL`.
+Shots: `01-open` (open), `02-add-task` (title typed), `03-permission` (after Add + run: permission card with Approve/Deny, question card, notification button), `04-merge-button`/`04b-review-tab` (after Approve), `05-confirm`/`05b-merge-cancel`/`06-done`, `07-tab-*` (each tab), `11`..`16` below. `08`-`10` (drag) are from the earlier run.
+
+| Action | Result observed (shot) | Status |
+|---|---|---|
+| Run | Todo task *Run*: left To do, Doing count +1 (12, 13) | PASS |
+| Stop | Smoke task *Stop*: left Doing, To do 1 -> 2, shows Run again (11) | PASS |
+| Approve | *Approve* on Running task: ask gone, task in Review with *Move to…* + *Merge*, Review 2 (04, 04b) | PASS |
+| Deny | *Deny*: ask gone, task back in To do with *Run*, not busy, Doing 2 -> 1 (15) | PASS |
+| Answer | Question card shows "Answer this one in VS Code", no buttons; phone cannot answer questions (03) | PASS |
+| Move select | Native popup is not in the screenshot, but tap select + `input keyevent 20` (down) + `66` (enter) picked *doing*: backend state `doing` (14) | PASS (by keyboard) |
+| Long-press drag | Earlier run: drag onto Doing moved the card, onto Done refused with red message and no alert (08-10) | PASS (earlier run, not repeated) |
+| Project picker | Header select lists alpha/beta/gamma (the fake backend does return them; the older "no projects" note was stale). Same keyboard method picked *beta*: header shows beta, `/api/state` current `/fake/beta` (13). The fake shares one task list across projects, so the list does not change | PASS |
+| Tabs | Each tab shows its count and cards (07-*). Cards with a pending ask (Running task, question) also show on the To do tab; the Doing tab lists only doing cards | PASS |
+| Add task | Typed "Smoke task", *Add + run*: Doing 2 -> 3, new card with Stop (02, 03). Empty title not tried | PASS |
+| Dialog reply | Startup dialog *OK* closed it (01). Merge dialog *Cancel*: nothing moved, backend got no button (05b) | PASS |
+| Merge | *Merge* then *Merge* in dialog: Review task is in Done, Done (1) (05, 06) | PASS |
+| Notification button | *Enable approval notifications* opens the browser prompt "Allow notifications from this website?" Block / Allow (16). I tapped Block; the grant path (button hides, notification on a new ask) is UNVERIFIED | PARTIAL |
+
+Observed: the question card reads "undefined: Which database should I use?" because the fake ask has no `tool`; the page should probably omit the prefix.
+UNVERIFIED: empty-title add, notification grant and delivery, drag in this run, real extension, landscape.
