@@ -14,7 +14,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer, canPhoneMerge, phoneMoveError, phoneProjectOk, phoneLinkUrl, qrSvg } from './phone';
+import { startPhoneServer, canPhoneMerge, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 
@@ -237,7 +237,7 @@ export function activate(context: vscode.ExtensionContext) {
   };
   const phoneState = () => {
     const r = runner();
-    return { roots: roots(), root: current, tasks: (r?.store.data.tasks ?? []).filter(t => !t.archived).map(t => {
+    return { projects: phoneProjects(roots()), current, tasks: (r?.store.data.tasks ?? []).filter(t => !t.archived).map(t => {
       const l = r!.live(t.id);
       return { id: t.id, title: t.title, status: t.status, busy: l.busy, asks: l.asks, review: t.review?.state,
         canMerge: canPhoneMerge(t) };
@@ -259,9 +259,9 @@ export function activate(context: vscode.ExtensionContext) {
       case 'answer':
         if (m.choice !== 'allow' && m.choice !== 'deny') return 'phone can only allow or deny';
         return r.answer(m.id, { id: m.ask, choice: m.choice }) ? undefined : 'request no longer open';
-      case 'selectProject':
-        if (!phoneProjectOk(m.path, roots())) return 'unknown project';
-        setCurrent(m.path); watching = undefined; void recheck(); push(); return;
+      case 'project':
+        if (!phoneProjectOk(m.root, roots())) return 'unknown project';
+        setCurrent(m.root); watching = undefined; void recheck(); push(); return;
       case 'move':
         if (!t) return 'no such task';
         { const l = r.live(t.id); const e = phoneMoveError({ status: t.status, worktree: t.worktree, where: t.where, review: t.review, busy: l.busy, asks: l.asks }, m.status); if (e) return e; }
