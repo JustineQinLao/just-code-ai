@@ -16,6 +16,7 @@ import * as A from './artifacts';
 import * as C from './checks';
 import { startPhoneServer, canPhoneMerge, phoneLinkUrl, qrSvg } from './phone';
 import type * as http from 'http';
+import { startMobileServer } from './server';
 
 const cfg = () => vscode.workspace.getConfiguration('justCode');
 
@@ -31,6 +32,7 @@ const setting = <T,>(key: string, fallback: T): T => { if (key === 'defaultMode'
 
 const runners = new Map<string, Runner>(); // project root → runner
 let panel: vscode.WebviewPanel | undefined;
+let closeMobile: (() => void) | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
   ctx = context;
@@ -272,6 +274,23 @@ export function activate(context: vscode.ExtensionContext) {
     if (phone) return;
     try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n) }); }
     catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
+  }
+  let mobile: http.Server | undefined;
+  closeMobile = () => { mobile?.close(); mobile = undefined; };
+  async function syncMobile() {
+    if (!setting('mobile.enabled', false)) { mobile?.close(); mobile = undefined; return; }
+    if (mobile) return;
+    const port = setting('mobile.port', 7979);
+    try {
+      mobile = await startMobileServer(port, {
+        media: vscode.Uri.joinPath(context.extensionUri, 'media').fsPath,
+        addSink: s => { sinks.add(s); return () => { sinks.delete(s); }; },
+        onMessage: async m => { await handle(m, true); },
+        onConnect: () => { watching = undefined; push(); },
+        hubEvents: n => hub.events(n),
+      });
+      vscode.window.showInformationMessage(`JustCode board is served on your network: http://${lanIps()[0] ?? 'this-computer'}:${port}/ (no token: turn off justCode.mobile.enabled when done).`);
+    } catch (e: any) { mobile = undefined; vscode.window.showErrorMessage(`JustCode mobile server could not start: ${e.message}`); }
   }
   const lanIps = () => Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i!.address);
 
@@ -714,13 +733,15 @@ export function activate(context: vscode.ExtensionContext) {
       if (e.affectsConfiguration('justCode.phoneServer') && bypassAllOn() && setting('phoneServer', false)) void confirm(PHONE_BYPASS_TEXT, 'Keep both on').then(async ok => { if (!ok) { await cfg().update('phoneServer', false, vscode.ConfigurationTarget.Global); const o3 = { ...overrides() }; delete o3.phoneServer; await context.globalState.update('settings', o3); void syncPhone(); push(); } });
       if (e.affectsConfiguration('justCode.claudePath')) void recheck();
       if (e.affectsConfiguration('justCode.phoneServer')) void syncPhone();
+      if (e.affectsConfiguration('justCode.mobile')) { mobile?.close(); mobile = undefined; void syncMobile(); }
     }),
     vscode.window.registerWebviewPanelSerializer('justCode.board', { async deserializeWebviewPanel(p) { open(undefined, p); } }),
-    { dispose: () => { phone?.close(); for (const r of runners.values()) r.dispose(); runners.clear(); limits.dispose(); } },
+    { dispose: () => { phone?.close(); mobile?.close(); for (const r of runners.values()) r.dispose(); runners.clear(); limits.dispose(); } },
     out, status,
   );
   updateStatus();
   void syncPhone();
+  void syncMobile();
   void checkBypassAll();
 }
 
@@ -728,6 +749,7 @@ const pick = (o: any, keys: string[]) => Object.fromEntries(keys.filter(k => o &
 
 // Every Claude process this window started ends with it.
 export function deactivate() {
+  closeMobile?.();
   for (const r of runners.values()) r.dispose();
   runners.clear();
 }
