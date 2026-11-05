@@ -296,8 +296,14 @@ JustCode can serve the board to your phone over your own network. This is separa
   phone loses the board and tasks stop.
 - **Open it on the phone:** run *JustCode: Show Phone Pairing* in VS Code. It shows an address (`http://<computer-ip>:7878/`)
   and the token. Open the address in the phone's browser and paste the token. The page lists the open project's tasks and
-  lets you add and run a task, approve or deny a permission, stop a task and merge a task that passed review. Nothing else
+  lets you switch project, move cards between columns, add and run a task, approve or deny a permission, stop a task and merge a task that passed review. Nothing else
   (no settings, files or bypass mode) is allowed from the phone. A native Android app is not built yet (docs/FOLLOWUPS.md).
+- **Selecting a project:** the top of the phone page shows one button per project open in VS Code; tap one to switch the
+  board to it (only projects JustCode already knows; adding folders stays on the desktop).
+- **Columns and moving cards:** tabs show To do, Doing, Review and Done with counts (a `!` marks a tab with a task waiting for your approval; such tasks also show on every tab). Moves only change the card's column, the same as dragging it on the desktop board; they do not start a run or a review. Each card has *Move to* buttons for the
+  other columns. Blocked moves: nothing can be moved to **Done** from the phone (that merges the branch; use the Merge
+  button on a task that passed review, or the desktop), a task that is running or waiting for an answer cannot be moved (stop it first), a done task cannot be moved out of Done, and a task with work on its branch cannot go back to **To do**
+  (discard it on the desktop first).
 - **Port:** `justCode.phoneServerPort` (default 7878).
 - **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
   on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks

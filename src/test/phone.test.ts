@@ -242,3 +242,72 @@ test('phoneBoard: merge needs a confirm, re-checks after it, ignores a second ta
   assert.equal(h.events(0).events.length, 1);
   replyNext(h, { button: 'Merge' }); await first; assert.deepEqual(merged, ['a']);
 });
+
+test('board message filter: moving a card to done is refused, other moves and project selection pass', async () => {
+  const { mobileMessage } = await import('../bridge');
+  assert.deepEqual(mobileMessage({ type: 'root', root: '/p' }), { type: 'root', root: '/p' });
+  assert.ok(mobileMessage({ type: 'move', id: 'a', status: 'doing' }));
+  assert.ok(mobileMessage({ type: 'move', id: 'a', status: 'review' }));
+  assert.equal(mobileMessage({ type: 'move', id: 'a', status: 'done' }), undefined);
+  assert.equal(mobileMessage({ type: 'addProject' }), undefined);
+});
+
+test('phone page: has the project picker and the column tabs', async () => {
+  const { srv, base } = await boot();
+  try {
+    const html = await (await fetch(base + '/?t=tok')).text();
+    assert.match(html, /<div id="pj"/);
+    assert.match(html, /<div id="tabs"/);
+    for (const k of ['todo', 'doing', 'review', 'done']) assert.ok(html.includes(`'${k}'`), k);
+    assert.match(html, /type:'selectProject'/);
+    assert.match(html, /type:'move'/);
+  } finally { srv.close(); }
+});
+
+test('phone act: selectProject and move are whitelisted', async () => {
+  const { PHONE_ACTIONS } = await import('../phone');
+  assert.ok((PHONE_ACTIONS as readonly string[]).includes('selectProject'));
+  assert.ok((PHONE_ACTIONS as readonly string[]).includes('move'));
+});
+
+test('phoneMoveError: done, busy, asking, out of done and todo-with-branch are refused; plain moves pass', async () => {
+  const { phoneMoveError, phoneProjectOk } = await import('../phone');
+  const t = { status: 'doing' };
+  assert.match(phoneMoveError(t, 'done')!, /Done/);
+  assert.match(phoneMoveError(t, 42)!, /Done/);
+  assert.match(phoneMoveError({ ...t, busy: true }, 'review')!, /running/);
+  assert.match(phoneMoveError({ ...t, asks: [{}] }, 'review')!, /running/);
+  assert.match(phoneMoveError({ status: 'done' }, 'todo')!, /done task/);
+  assert.match(phoneMoveError({ ...t, worktree: '/w' }, 'todo')!, /branch/);
+  assert.equal(phoneMoveError({ ...t, worktree: '/w' }, 'review'), undefined);
+  assert.equal(phoneMoveError({ status: 'todo' }, 'doing'), undefined);
+  assert.equal(phoneProjectOk('/a', ['/a', '/b']), true);
+  assert.equal(phoneProjectOk('/c', ['/a']), false);
+  assert.equal(phoneProjectOk(['/a'], ['/a']), false);
+});
+
+test('phone page: act() posts the message, alerts a server error and reloads', async () => {
+  const { srv, base } = await boot();
+  const html = await (await fetch(base + '/?t=tok')).text();
+  srv.close();
+  const src = html.match(/async function act\(m\)\{.*\}/)![0];
+  const calls: string[] = []; const alerts: string[] = [];
+  const f = new vm.Script(`(${'async function(fetch,H,alert,load){' + src + '; return act}'})`).runInThisContext();
+  const mkAct = (reply: any) => f(async (u: string, o: any) => { calls.push(u + ' ' + o.body); return { json: async () => reply }; }, () => ({}), (t: string) => alerts.push(t), () => calls.push('load'));
+  await (await mkAct({ error: 'busy' }))({ type: 'move', id: 'a', status: 'review' });
+  assert.deepEqual(calls, ['/api/act {"type":"move","id":"a","status":"review"}', 'load']);
+  assert.deepEqual(alerts, ['busy']);
+  calls.length = 0; alerts.length = 0;
+  await (await mkAct({ ok: true }))({ type: 'selectProject', path: '/p' });
+  assert.deepEqual(alerts, []); assert.equal(calls[1], 'load');
+});
+
+test('phone page: pending permission asks show and notify on every tab, not just the open one', async () => {
+  const { srv, base } = await boot();
+  try {
+    const html = await (await fetch(base + '/?t=tok')).text();
+    assert.match(html, /t\.status===col\|\|t\.asks\.length/);
+    assert.match(html, /for\(const t of data\.tasks\)for\(const a of t\.asks\)/);
+    assert.doesNotMatch(html, /Move to done/);
+  } finally { srv.close(); }
+});

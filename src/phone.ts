@@ -14,7 +14,18 @@ export interface PhoneDeps {
 // Board messages a remote page may relay: answers to dialogs, and merge (which the host checks and confirms). Nothing else.
 export const BOARD_ACTIONS = ['dialogReply', 'merge'] as const;
 
-export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge'] as const;
+export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge', 'selectProject', 'move'] as const;
+/** Why a phone may not move a task to `status` (an error string), or undefined if allowed. Pure so it can be tested. */
+export function phoneMoveError(t: { status: string; worktree?: string; busy?: boolean; asks?: unknown[] }, status: unknown): string | undefined {
+  if (typeof status !== 'string' || !['todo', 'doing', 'review'].includes(status)) return 'a task cannot be moved to Done from the phone (merge it instead)';
+  if (t.busy || (t.asks?.length ?? 0) > 0) return 'this task is running or waiting for an answer; stop it first';
+  if (t.status === 'done') return 'a done task cannot be moved from the phone';
+  if (status === 'todo' && t.worktree) return 'this task has work on its branch; discard it on the desktop to start over';
+  return undefined;
+}
+/** A project path the phone may select: a string that is one of the known roots. */
+export const phoneProjectOk = (path: unknown, roots: string[]) => typeof path === 'string' && roots.includes(path);
+export const PHONE_COLUMNS = ['todo', 'doing', 'review', 'done'] as const;
 
 // One rule for showing the Merge button and for accepting a phone merge; never looser than the board's bulk merge.
 export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>
@@ -82,7 +93,7 @@ button.n{background:#444}input{box-sizing:border-box;font:inherit;padding:8px;wi
 .a{border:1px solid #f59e0b;padding:8px;margin-top:8px;border-radius:6px;word-break:break-all}
 </style></head><body><header>JustCode</header>
 <input id="t" placeholder="Token (from VS Code: JustCode: Show Phone Pairing)"><input id="n" placeholder="New task title">
-<dialog id="dg" style="background:#222;color:#eee;border:1px solid #555;border-radius:8px;max-width:90vw"></dialog><button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="l"></div>
+<dialog id="dg" style="background:#222;color:#eee;border:1px solid #555;border-radius:8px;max-width:90vw"></dialog><button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="pj" class="s" style="margin:8px 12px"></div><div id="tabs" class="tabs" style="margin:0 10px"></div><div id="l"></div>
 <script>
 const $=id=>document.getElementById(id);$('t').value=localStorage.tok||new URLSearchParams(location.search).get('token')||'';
 const H=()=>({'x-token':$('t').value,'content-type':'application/json'});
@@ -97,7 +108,7 @@ d.append(el('button',{className:'n',onclick:()=>fin({cancelled:true})},'Cancel')
 d.onclose=()=>fin({cancelled:true});if(!d.open)d.showModal()}
 async function poll(){try{const r=await fetch('/api/events?since='+evN,{headers:H()});if(r.ok){const j=await r.json();if(j.last<evN){evN=0;return poll()}evN=j.last;for(const e of j.events)if(e.type==='dialog')showDialog(e);else if(e.type==='toast')alert(e.text)}}catch(e){}}
 function el(t,p,...k){const e=document.createElement(t);Object.assign(e,p);e.append(...k);return e}
-let fails=0,timer,seen=new Set(),first=true,busy=false;
+let col='todo',fails=0,timer,seen=new Set(),first=true,busy=false;
 function sched(){clearTimeout(timer);timer=setTimeout(load,Math.min(3000*2**fails,30000))}
 function focusTask(id){const e=$('task-'+id);if(e){e.scrollIntoView();e.style.outline='2px solid #f59e0b'}}
 async function notify(t,a){if(!window.Notification||Notification.permission!=='granted')return;
@@ -107,13 +118,16 @@ async function load(){if(busy)return;busy=true;clearTimeout(timer);localStorage.
 try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
-for(const t of data.tasks){const c=el('div',{className:'c',id:'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
+const pj=$('pj');pj.textContent='Project: ';for(const r of data.roots||[])pj.append(el('button',{className:r===data.root?'':'n',onclick:()=>act({type:'selectProject',path:r})},r.split(/[\\/]/).pop()));
+const tb=$('tabs');tb.textContent='';for(const k of ['todo','doing','review','done'])tb.append(el('button',{className:k===col?'':'n',onclick:()=>{col=k;load()}},k+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));
+for(const t of data.tasks.filter(t=>t.status===col||t.asks.length)){const c=el('div',{className:'c',id:'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
 if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})},'Run'));
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
 for(const a of t.asks){const d=el('div',{className:'a'},a.tool+': '+a.detail,el('br'));
 if(a.kind==='permission'){d.append(el('button',{onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'allow'})},'Approve'),el('button',{className:'n',onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'deny'})},'Deny'))}else d.append(el('i',{},'Answer this one in VS Code'));c.append(d)}
-if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));l.append(c);
-for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}}
+if(!t.busy&&!t.asks.length)for(const k of ['todo','doing','review'])if(k!==t.status&&t.status!=='done')c.append(el('button',{className:'n',onclick:()=>act({type:'move',id:t.id,status:k})},'Move to '+k));
+if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));l.append(c)}
+for(const t of data.tasks)for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}
 first=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);notifState()}
 catch(e){fails++;$('st').textContent='Offline, retrying in '+Math.min(3000*2**fails,30000)/1000+'s'}
 finally{busy=false;sched()}}
