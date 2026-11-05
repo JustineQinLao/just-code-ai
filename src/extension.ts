@@ -14,7 +14,7 @@ import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
 import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
-import { startPhoneServer, canPhoneMerge, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg } from './phone';
+import { startPhoneServer, canPhoneMerge, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 
@@ -726,9 +726,9 @@ export function activate(context: vscode.ExtensionContext) {
       await syncPhone();
       const panel = vscode.window.createWebviewPanel('justCodePhoneLink', 'JustCode: Phone Link', vscode.ViewColumn.Active, { enableScripts: true });
       const render = () => {
-        const link = phoneLinkUrl(lanIps()[0] ?? 'this-computer', setting('phoneServerPort', 7878), phoneToken());
+        const link = phoneLinkUrl(lanIps()[0] ?? 'this-computer', setting('phoneServerPort', 7878), issuePairingCode());
         const esc = link.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p><button onclick="acquireVsCodeApi().postMessage('regen')">Regenerate link</button></body>`;
+        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><p>One-time link, valid 10 minutes. Same Wi-Fi only.</p><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p><button onclick="acquireVsCodeApi().postMessage('regen')">New link</button></body>`;
       };
       panel.webview.onDidReceiveMessage(async m => {
         if (m !== 'regen') return;
@@ -741,7 +741,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
       await syncPhone();
       const port = setting('phoneServerPort', 7878);
-      vscode.window.showInformationMessage(`Open http://${lanIps()[0] ?? 'this-computer'}:${port}/ on your phone (same Wi-Fi). Token: ${phoneToken()}`, { modal: true });
+      vscode.window.showInformationMessage(`Open this one-time link on your phone (same Wi-Fi, valid 10 minutes): ${phoneLinkUrl(lanIps()[0] ?? 'this-computer', port, issuePairingCode())}`, { modal: true });
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
     // A key changed in VS Code's own Settings UI replaces the board's copy of it.

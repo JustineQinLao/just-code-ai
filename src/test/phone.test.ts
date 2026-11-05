@@ -123,7 +123,7 @@ test('phone page: says notifications are unavailable outside a secure context', 
 });
 
 test('phoneLinkUrl and qrSvg', () => {
-  assert.equal(phoneLinkUrl('192.168.1.5', 7878, 'a b'), 'http://192.168.1.5:7878/?token=a%20b');
+  assert.equal(phoneLinkUrl('192.168.1.5', 7878, 'a b'), 'http://192.168.1.5:7878/?pair=a%20b');
   const svg = qrSvg('http://192.168.1.5:7878/?token=abc');
   assert.match(svg, /^<svg/);
   assert.ok(svg.length > 500);
@@ -376,4 +376,21 @@ test('phone projects: listing, valid switch and rejected path', async () => {
   assert.equal(phoneProjectOk('/etc', roots), false);
   assert.equal(phoneProjectOk('/a/one/../../etc', roots), false);
   assert.equal(phoneProjectOk(undefined, roots), false);
+});
+
+test('pairing code is single-use, expires, and sets a session cookie', async () => {
+  const { issuePairingCode, redeemPairingCode } = await import('../phone');
+  const c = issuePairingCode(1000, 0);
+  assert.equal(redeemPairingCode(c, 500), true);
+  assert.equal(redeemPairingCode(c, 500), false);
+  assert.equal(redeemPairingCode(issuePairingCode(1000, 0), 2000), false);
+  const srv = await startPhoneServer(0, { token: 'secret', state: () => ({}), act: async () => {} });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const code = issuePairingCode();
+    const r = await fetch(`${base}/?pair=${code}`);
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('set-cookie') ?? '', /jc_token=secret/);
+    assert.equal((await fetch(`${base}/?pair=${code}`)).status, 401);
+  } finally { srv.close(); }
 });

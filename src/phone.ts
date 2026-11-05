@@ -1,5 +1,5 @@
 import * as http from 'http';
-import { timingSafeEqual } from 'crypto';
+import { timingSafeEqual, randomBytes } from 'crypto';
 import { PAGE } from './phonepage';
 
 export interface PhoneDeps {
@@ -35,6 +35,21 @@ export const phoneProjectOk = (path: unknown, roots: string[]) => typeof path ==
 export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>
   !!t.worktree && t.where !== 'root' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical';
 
+// Pairing codes: single-use and short-lived, so the link/QR never carries the long-lived token.
+const PAIR_TTL_MS = 10 * 60_000;
+const pairCodes = new Map<string, number>();
+export function issuePairingCode(ttlMs = PAIR_TTL_MS, now = Date.now()): string {
+  for (const [c, exp] of pairCodes) if (exp <= now) pairCodes.delete(c);
+  const code = randomBytes(18).toString('base64url');
+  pairCodes.set(code, now + ttlMs);
+  return code;
+}
+/** Consumes the code: true only the first time, and only before it expires. */
+export function redeemPairingCode(code: string, now = Date.now()): boolean {
+  const exp = pairCodes.get(code); pairCodes.delete(code);
+  return !!code && exp !== undefined && exp > now;
+}
+
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Server> {
@@ -45,10 +60,12 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
     const hdr = String(req.headers['x-token'] ?? '');
     const q = url.searchParams.get('t') ?? url.searchParams.get('token') ?? '';
     const ck = /(?:^|;\s*)jc_token=([^;]*)/.exec(req.headers.cookie ?? '')?.[1] ?? '';
-    const ok = [hdr, q, (() => { try { return decodeURIComponent(ck); } catch { return ''; } })()].some(t => t && same(t, d.token));
+    const pair = url.searchParams.get('pair') ?? '';
+    const paired = !!pair && redeemPairingCode(pair);
+    const ok = paired || [hdr, q, (() => { try { return decodeURIComponent(ck); } catch { return ''; } })()].some(t => t && same(t, d.token));
     if (!ok) return send(401, '{"error":"bad token"}');
     // A valid link sets an HttpOnly cookie so later requests from the page need no token in the URL.
-    if (q && same(q, d.token)) res.setHeader('set-cookie', `jc_token=${encodeURIComponent(d.token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+    if (paired || (q && same(q, d.token))) res.setHeader('set-cookie', `jc_token=${encodeURIComponent(d.token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
     if (url.pathname === '/') return send(200, PAGE, 'text/html');
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
     if (url.pathname === '/api/events' && req.method === 'GET' && d.events) return send(200, JSON.stringify(d.events(Number(url.searchParams.get('since')) || 0)));
@@ -89,7 +106,7 @@ const SW = `self.addEventListener('notificationclick',e=>{e.notification.close()
 e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(l=>{for(const c of l){if('focus' in c){c.postMessage({open:u});return c.focus()}}return clients.openWindow(u)}))});`;
 
 /** The link the Android app pairs with (also what the QR encodes). */
-export const phoneLinkUrl = (host: string, port: number, token: string) => `http://${host}:${port}/?token=${encodeURIComponent(token)}`;
+export const phoneLinkUrl = (host: string, port: number, code: string) => `http://${host}:${port}/?pair=${encodeURIComponent(code)}`;
 
 /** QR code for the link as inline SVG. */
 export function qrSvg(text: string): string {
