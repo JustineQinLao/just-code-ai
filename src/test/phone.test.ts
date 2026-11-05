@@ -252,10 +252,20 @@ test('board message filter: moving a card to done is refused, other moves and pr
   assert.equal(mobileMessage({ type: 'addProject' }), undefined);
 });
 
-test('phone page: has no project picker or move controls yet (update docs/GUIDE.md section 11 when it does)', async () => {
+test('phone page: has the project picker and the column tabs', async () => {
   const { srv, base } = await boot();
   try {
     const html = await (await fetch(base + '/?t=tok')).text();
-    assert.doesNotMatch(html, /project picker|id="proj|class="tabs/);
+    assert.match(html, /<div id="pj"/);
+    assert.match(html, /<div id="tabs"/);
+    for (const k of ['todo', 'doing', 'review', 'done']) assert.ok(html.includes(`'${k}'`), k);
+    assert.match(html, /type:'selectProject'/);
+    assert.match(html, /type:'move'/);
   } finally { srv.close(); }
+});
+
+test('phone act: selectProject and move are whitelisted', async () => {
+  const { PHONE_ACTIONS } = await import('../phone');
+  assert.ok((PHONE_ACTIONS as readonly string[]).includes('selectProject'));
+  assert.ok((PHONE_ACTIONS as readonly string[]).includes('move'));
 });
