@@ -99,11 +99,11 @@ const $=id=>document.getElementById(id);$('t').value=localStorage.tok||new URLSe
 const H=()=>({'x-token':$('t').value,'content-type':'application/json'});
 async function act(m){const r=await fetch('/api/act',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();$('er').textContent=j.error||'';load()}
 async function board(m){const r=await fetch('/api/board',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();if(j.error)alert(j.error);load()}
-function dragMove(c,t){let tm,on=false,sx,sy;const hl=x=>{for(const k of ['todo','doing','review','done']){const b=$('tab-'+k);if(b)b.style.outline=x===k?'2px solid #4af':''}};
+let dragging=false,redo=false;function dragMove(c,t){let tm,on=false,sx,sy;const hl=x=>{for(const k of ['todo','doing','review','done']){const b=$('tab-'+k);if(b)b.style.outline=x===k?'2px solid #4af':''}};
 const at=e=>{const p=e.touches[0]||e.changedTouches[0],n=document.elementFromPoint(p.clientX,p.clientY),b=n&&n.closest('button[id^=tab-]');return b?b.id.slice(4):''};
-c.addEventListener('touchstart',e=>{if(e.target.closest('select,button'))return;sx=e.touches[0].clientX;sy=e.touches[0].clientY;tm=setTimeout(()=>{on=true;c.style.opacity='.6';navigator.vibrate&&navigator.vibrate(30)},500)},{passive:true});
+c.addEventListener('touchstart',e=>{if(e.target.closest('select,button'))return;sx=e.touches[0].clientX;sy=e.touches[0].clientY;tm=setTimeout(()=>{on=true;dragging=true;c.style.opacity='.6';navigator.vibrate&&navigator.vibrate(30)},500)},{passive:true});
 c.addEventListener('touchmove',e=>{if(!on){if(Math.abs(e.touches[0].clientX-sx)+Math.abs(e.touches[0].clientY-sy)>10)clearTimeout(tm);return}e.preventDefault();hl(at(e))},{passive:false});
-const end=e=>{clearTimeout(tm);if(!on)return;on=false;c.style.opacity='';hl('');if(e.type==='touchend'){const k=at(e);if(k&&k!==t.status)act({type:'move',id:t.id,status:k})}};
+const end=e=>{clearTimeout(tm);if(!on)return;on=false;dragging=false;c.style.opacity='';hl('');if(e.type==='touchend'){const k=at(e);if(k&&k!==t.status)act({type:'move',id:t.id,status:k});else if(redo)load()}redo=false};
 c.addEventListener('touchend',end);c.addEventListener('touchcancel',end)}
 let evN=0,shown=new Set();
 function showDialog(m){if(shown.has(m.id))return;shown.add(m.id);const d=$('dg');let done=false;
@@ -120,7 +120,7 @@ function focusTask(id){const e=$('task-'+id);if(e){e.scrollIntoView();e.style.ou
 async function notify(t,a){if(!window.Notification||Notification.permission!=='granted')return;
 const o={body:a.tool+': '+a.detail,tag:'ask-'+a.id,data:'/?task='+t.id};
 try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.ready;if(reg)return reg.showNotification(t.title+' needs approval',o);new Notification(t.title+' needs approval',o).onclick=()=>{focus();focusTask(t.id)}}catch(e){}}
-async function load(){if(busy)return;busy=true;clearTimeout(timer);localStorage.tok=$('t').value;
+async function load(){if(busy||dragging||document.activeElement?.tagName==='SELECT'){if(dragging)redo=true;return}busy=true;clearTimeout(timer);localStorage.tok=$('t').value;
 try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
