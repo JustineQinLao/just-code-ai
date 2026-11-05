@@ -264,7 +264,8 @@ export function activate(context: vscode.ExtensionContext) {
         setCurrent(m.path); watching = undefined; void recheck(); push(); return;
       case 'move':
         if (!t) return 'no such task';
-        { const l = r.live(t.id); const e = phoneMoveError({ status: t.status, worktree: t.worktree, busy: l.busy, asks: l.asks }, m.status); if (e) return e; }
+        { const l = r.live(t.id); const e = phoneMoveError({ status: t.status, worktree: t.worktree, where: t.where, review: t.review, busy: l.busy, asks: l.asks }, m.status); if (e) return e; }
+        if (m.status === 'done') { await r.merge(t.id); return; }
         r.store.updateTask(t.id, { status: m.status }); return;
       case 'merge':
         if (!t || !canPhoneMerge(t)) return 'only tasks that passed review (and are not flagged critical) can be merged from the phone';
