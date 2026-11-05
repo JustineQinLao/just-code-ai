@@ -107,9 +107,20 @@ const MOBILE_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
   notifications: 'string', taskModel: 'string', taskEffort: 'string', plannerModel: 'string', plannerEffort: 'string', reviewModel: 'string',
   reviewEffort: 'string', reviewLightModel: 'string', reviewTriage: 'boolean', maxParallel: 'number', autoReview: 'boolean', maxReviews: 'number', idleMinutes: 'number',
 };
+const MOBILE_MODES = new Set(['default', 'acceptEdits', 'plan', 'auto']); // never bypassPermissions
 /** Returns the message a LAN client may send (settings filtered to the safe keys), or undefined to drop it. */
 export function mobileMessage(m: any): any | undefined {
   if (!m || typeof m !== 'object' || typeof m.type !== 'string' || !MOBILE_TYPES.has(m.type)) return undefined;
+  // Moving to done merges unmerged work, and a LAN client could answer its own confirm: merging is desktop-only.
+  if (m.type === 'move' && m.status === 'done') return undefined;
+  if (m.type === 'addTask' || m.type === 'editTask' || m.type === 'setMode') {
+    const ok = (x: unknown) => typeof x === 'string' && MOBILE_MODES.has(x);
+    if (m.type === 'setMode') return ok(m.mode) ? m : undefined;
+    if (m.type === 'addTask') { const { where, output, ...rest } = m; return { ...rest, mode: ok(m.mode) ? m.mode : 'auto' }; }
+    const patch = { ...(m.patch && typeof m.patch === 'object' ? m.patch : {}) };
+    delete patch.where; if (!ok(patch.mode)) delete patch.mode;
+    return { ...m, patch };
+  }
   if (m.type !== 'settings') return m;
   const values: Record<string, unknown> = {};
   if (m.values && typeof m.values === 'object') for (const [k, v] of Object.entries(m.values)) if (Object.hasOwn(MOBILE_SETTINGS, k) && typeof v === MOBILE_SETTINGS[k]) values[k] = v;

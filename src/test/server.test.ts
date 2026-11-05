@@ -64,3 +64,15 @@ test('LAN client messages: allowlist and safe settings only', () => {
   assert.deepEqual(v.values, { taskModel: 'opus', idleMinutes: 5 });
   assert.deepEqual(mobileMessage({ type: 'settings', values: 'x' }).values, {});
 });
+
+test('LAN client cannot merge via move, bypass, or root-writing options', () => {
+  assert.equal(mobileMessage({ type: 'move', id: 'x', status: 'done' }), undefined);
+  assert.deepEqual(mobileMessage({ type: 'move', id: 'x', status: 'review' }), { type: 'move', id: 'x', status: 'review' });
+  assert.equal(mobileMessage({ type: 'setMode', id: 'x', mode: 'bypassPermissions' }), undefined);
+  assert.equal(mobileMessage({ type: 'setMode', id: 'x', mode: 'plan' }).mode, 'plan');
+  const a = mobileMessage({ type: 'addTask', title: 't', mode: 'bypassPermissions', where: 'root', output: 'artifact', start: true });
+  assert.equal(a.mode, 'auto'); assert.ok(!('where' in a) && !('output' in a));
+  assert.equal(mobileMessage({ type: 'addTask', title: 't' }).mode, 'auto');
+  const e = mobileMessage({ type: 'editTask', id: 'x', patch: { mode: 'bypassPermissions', where: 'root', title: 'n' } });
+  assert.deepEqual(e.patch, { title: 'n' });
+});

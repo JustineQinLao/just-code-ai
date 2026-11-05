@@ -282,12 +282,14 @@ export function activate(context: vscode.ExtensionContext) {
     const on = setting('mobile.enabled', false);
     if (mobile && (restart || !on)) { const m = mobile; mobile = undefined; await m.stop(); }
     if (!on || mobile) return;
+    // The server has no token: with Bypass all on, a LAN client could start tasks that run any command, so it never starts then.
+    if (bypassAllOn()) { vscode.window.showWarningMessage('JustCode mobile server not started: turn off Bypass all first (it would let anyone on the network run commands on this computer).'); return; }
     const port = setting('mobile.port', 7979);
     try {
       mobile = await startMobileServer(port, {
         media: vscode.Uri.joinPath(context.extensionUri, 'media').fsPath,
         addSink: s => { sinks.add(s); return () => { sinks.delete(s); }; },
-        onMessage: async m => { await handle(m, true); },
+        onMessage: async m => { if (!bypassAllOn()) await handle(m, true); },
         onConnect: () => { watching = undefined; push(); },
         hubEvents: n => hub.events(n),
       });
@@ -369,7 +371,13 @@ export function activate(context: vscode.ExtensionContext) {
 
   // `remote` is set by the phone server only (never read from the message), so a client cannot pick the confirmation path.
   async function handle(m: any, remote = false) {
-    if (remote) { m = mobileMessage(m); if (!m) return; } // the LAN client has no token: only allowlisted types, safe settings
+    if (remote) {
+      m = mobileMessage(m); if (!m) return;
+      // Agents must be ones the project defines.
+      const known = new Set(discoverAgents(runner()?.root ?? '').map(a => a.name));
+      if (typeof m.agent !== 'undefined' && !known.has(m.agent)) m = { ...m, agent: undefined };
+      if (m.patch && typeof m.patch.agent !== 'undefined' && !known.has(m.patch.agent)) m = { ...m, patch: { ...m.patch, agent: undefined } };
+    } // the LAN client has no token: only allowlisted types, safe settings
     const confirm = confirmFor(remote);
     // A remote caller must not approve its own bypass: the answer would come from the same token. Desktop only.
     const confirmBypass = () => confirmBypassFor(remote, () => confirm(BYPASS_TEXT, 'Bypass permissions'));
@@ -733,7 +741,7 @@ export function activate(context: vscode.ExtensionContext) {
       const o = { ...overrides() }; let changed = false;
       for (const k of Object.keys(o)) if (e.affectsConfiguration(`justCode.${k}`) && JSON.stringify(cfg().get(k)) !== JSON.stringify(o[k])) { delete o[k]; changed = true; }
       if (changed) void context.globalState.update('settings', o).then(push);
-      if (e.affectsConfiguration('justCode.bypassAll')) void checkBypassAll();
+      if (e.affectsConfiguration('justCode.bypassAll')) { void checkBypassAll().then(() => syncMobile(true)); }
       if (e.affectsConfiguration('justCode.phoneServer') && bypassAllOn() && setting('phoneServer', false)) void confirm(PHONE_BYPASS_TEXT, 'Keep both on').then(async ok => { if (!ok) { await cfg().update('phoneServer', false, vscode.ConfigurationTarget.Global); const o3 = { ...overrides() }; delete o3.phoneServer; await context.globalState.update('settings', o3); void syncPhone(); push(); } });
       if (e.affectsConfiguration('justCode.claudePath')) void recheck();
       if (e.affectsConfiguration('justCode.phoneServer')) void syncPhone();
