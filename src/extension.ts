@@ -405,7 +405,17 @@ export function activate(context: vscode.ExtensionContext) {
           if (m.values.bypassAll === true && !bypassAllOn() && !await canEnableBypassAll(remote, () => ensureBypassAll())) m = { ...m, values: { ...m.values, bypassAll: false } };
           else if (m.values.bypassAll !== true) await context.globalState.update('bypassAllConfirmed', false);
         }
+        const oldMode = setting<string>('defaultMode', 'auto');
+        if (m.values?.defaultMode === 'bypassPermissions' && oldMode !== 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) {
+          const { defaultMode: _, ...rest } = m.values; m = { ...m, values: rest };
+        }
         await context.globalState.update('settings', { ...overrides(), ...m.values });
+        // "Permissions for new tasks" also covers the To do tasks that never started and still have the old default:
+        // otherwise a task planned a minute ago keeps running in the mode you just switched away from.
+        const newMode = setting<string>('defaultMode', 'auto');
+        if (newMode !== oldMode) for (const run of runners.values()) for (const t of run.store.data.tasks) {
+          if (t.status === 'todo' && !t.sessionId && t.mode === oldMode) run.store.updateTask(t.id, { mode: newMode as Task['mode'] });
+        }
         for (const [k, v] of Object.entries(m.values)) {
           try { await cfg().update(k, v, vscode.ConfigurationTarget.Global); } catch { /* not registered in this window: the board's own copy is used */ }
         }
@@ -471,7 +481,7 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.window.showWarningMessage('That request is no longer open (Claude moved on or the session closed).');
         return;
       case 'setMode':
-        if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return;
+        if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return push(); // the picker goes back to the mode it has
         await r.setMode(m.id, m.mode); return;
       case 'rules': s.setRules(Array.isArray(m.rules) ? m.rules.map(String) : []); return;
       case 'watch': watching = m.id ? { root: r.root, id: m.id, n: -1 } : undefined; sendSteps(true); return;
