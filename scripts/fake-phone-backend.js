@@ -15,7 +15,7 @@ let tasks=[
 ];
 // a dialog event so /api/events has something to show (resolved/ignored by the phone page as it likes)
 hub.ask({title:'Please confirm',text:'Fake dialog from the board',buttons:['OK']}).catch(()=>{});
-startPhoneServer(7878,{token:process.env.TOK||'tok',state:()=>({projects,current,tasks}),events:n=>hub.events(n),
+startPhoneServer(+(process.env.PORT||7878),{token:process.env.TOK||'tok',state:()=>({projects,current,tasks}),events:n=>hub.events(n),
  board:async m=>{console.log('board',m.type,m.remote);
   if(m.type==='dialogReply')return void hub.reply(m);
   if(m.type==='merge'){const r=await hub.ask({title:'Please confirm',text:'Merge "Review task" into main?',buttons:['Merge']});console.log('merge answer',r);if(r?.button==='Merge'){const t=find('t-review');if(t){t.status='done';t.canMerge=false}}}},
