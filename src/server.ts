@@ -21,19 +21,33 @@ export const page = () => `<!doctype html><html><head><meta charset="utf-8"><met
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
 <script src="/shim.js"></script><script src="/board.js"></script></body></html>`;
 
-export function startMobileServer(port: number, o: MobileOpts): Promise<http.Server> {
-  const clients = new Set<http.ServerResponse>();
-  const remove = o.addSink(m => { const d = `data: ${JSON.stringify(m)}\n\n`; for (const c of clients) c.write(d); });
-  let since = 0;
+export interface MobileServer { port: number; stop(): Promise<void> }
+
+const IP_LITERAL = /^(\d{1,3}(\.\d{1,3}){3}|\[[0-9a-f:.]+\]|localhost)$/i;
+const hostOf = (h: string) => h.replace(/:\d+$/, '');
+// DNS-rebinding guard: the Host must be an IP literal or localhost, and any Origin must be that same host.
+export function hostAllowed(host: string | undefined, origin: string | undefined): boolean {
+  if (!host || !IP_LITERAL.test(hostOf(host))) return false;
+  if (origin) { try { if (new URL(origin).host !== host) return false; } catch { return false; } }
+  return true;
+}
+
+export function startMobileServer(port: number, o: MobileOpts, bindHost = '0.0.0.0'): Promise<MobileServer> {
+  const clients = new Map<http.ServerResponse, { since: number }>();
+  const send = (c: http.ServerResponse, m: any) => { if (!c.destroyed) c.write(`data: ${JSON.stringify(m)}\n\n`); };
+  const remove = o.addSink(m => { for (const c of clients.keys()) send(c, m); });
   const poll = setInterval(() => {
     if (!clients.size) return;
-    const r = o.hubEvents(since); since = r.last;
-    for (const m of r.events) for (const c of clients) c.write(`data: ${JSON.stringify(m)}\n\n`);
+    for (const [c, st] of clients) {
+      const r = o.hubEvents(st.since); st.since = r.last;
+      for (const m of r.events) send(c, m);
+    }
   }, 500);
   const files: Record<string, [string, string]> = {
     '/board.css': ['board.css', 'text/css'], '/board.js': ['board.js', 'text/javascript'], '/icon.svg': ['icon.svg', 'image/svg+xml'],
   };
   const server = http.createServer((req, res) => {
+    if (!hostAllowed(req.headers.host, req.headers.origin)) { res.statusCode = 403; res.end(); return; }
     const url = (req.url ?? '/').split('?')[0];
     res.setHeader('cache-control', 'no-store');
     if (req.method === 'GET' && url === '/') { res.setHeader('content-type', 'text/html'); res.end(page()); return; }
@@ -45,17 +59,20 @@ export function startMobileServer(port: number, o: MobileOpts): Promise<http.Ser
     if (req.method === 'GET' && url === '/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(': ok\n\n');
-      if (!clients.size) since = o.hubEvents(0).last;
-      clients.add(res);
+      res.on('error', () => clients.delete(res));
+      const snap = o.hubEvents(0);
+      clients.set(res, { since: snap.last });
+      for (const m of snap.events) if (m && m.type === 'dialog') send(res, m); // pending dialogs this client missed
       req.on('close', () => clients.delete(res));
       o.onConnect();
       return;
     }
     if (req.method === 'POST' && url === '/msg') {
       if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) { res.statusCode = 415; res.end(); return; }
-      let body = '';
-      req.on('data', c => { body += c; if (body.length > 1_000_000) req.destroy(); });
+      let body = '', big = false;
+      req.on('data', c => { if (big) return; body += c; if (body.length > 1_000_000) { big = true; res.statusCode = 413; res.end(); req.destroy(); } });
       req.on('end', () => {
+        if (big) return;
         let m: any;
         try { m = JSON.parse(body); } catch { res.statusCode = 400; res.end(); return; }
         if (!m || typeof m !== 'object' || typeof m.type !== 'string') { res.statusCode = 400; res.end(); return; }
@@ -66,9 +83,16 @@ export function startMobileServer(port: number, o: MobileOpts): Promise<http.Ser
     }
     res.statusCode = 404; res.end();
   });
-  server.on('close', () => { clearInterval(poll); remove(); for (const c of clients) c.end(); clients.clear(); });
+  let stopped: Promise<void> | undefined;
+  const stop = () => stopped ??= new Promise<void>(resolve => {
+    clearInterval(poll); remove();
+    for (const c of clients.keys()) c.end();
+    clients.clear();
+    server.close(() => resolve());
+    server.closeAllConnections();
+  });
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, '0.0.0.0', () => resolve(server));
+    server.once('error', e => { clearInterval(poll); remove(); reject(e); });
+    server.listen(port, bindHost, () => resolve({ port: (server.address() as any).port, stop }));
   });
 }
