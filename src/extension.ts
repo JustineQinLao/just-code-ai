@@ -282,12 +282,13 @@ export function activate(context: vscode.ExtensionContext) {
     if (phone) return;
     try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n),
       detail: async id => { const r = runner(), t = r?.store.task(id); if (!t) return { files: [], checks: [], error: 'no such task' };
-        return phoneDetail(t, async dir => {
+        const steps = (r!.steps(t.id) ?? (t.sessionId ? sessionLog(t.worktree && fs.existsSync(t.worktree) ? t.worktree : r!.root, t.sessionId) : [])).slice(-200);
+        return { steps, ...await phoneDetail(t, async dir => {
           const base = t.base ?? 'HEAD', stat = new Map<string, [number, number]>();
           const num = await g.git(dir, ['diff', '--numstat', '--no-renames', '-z', `${base}...HEAD`]).catch(() => '');
           for (const l of num.split('\0').filter(Boolean)) { const [a, d, ...f] = l.split('\t'); stat.set(f.join('\t'), [Number(a) || 0, Number(d) || 0]); }
           return (await g.changes(dir, base)).map(c => { const raw = /^".*"$/.test(c.file) ? (() => { try { return JSON.parse(c.file) as string; } catch { return c.file; } })() : c.file, n = stat.get(raw); return { file: raw, status: c.status, added: n?.[0] ?? 0, removed: n?.[1] ?? 0 }; });
-        }); }, allowTokenInUrl: false }); }
+        }) }; }, allowTokenInUrl: false }); }
     catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
   }
   let mobile: MobileServer | undefined;
