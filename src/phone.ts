@@ -15,10 +15,12 @@ export interface PhoneDeps {
 // Board messages a remote page may relay: answers to dialogs, and merge (which the host checks and confirms). Nothing else.
 export const BOARD_ACTIONS = ['dialogReply', 'merge'] as const;
 
+export const PHONE_COLUMNS = ['todo', 'doing', 'review', 'done'] as const;
 export const PHONE_ACTIONS = ['addTask', 'run', 'stop', 'answer', 'merge', 'selectProject', 'move'] as const;
 /** Why a phone may not move a task to `status` (an error string), or undefined if allowed. Pure so it can be tested. */
-export function phoneMoveError(t: { status: string; worktree?: string; busy?: boolean; asks?: unknown[] }, status: unknown): string | undefined {
-  if (typeof status !== 'string' || !['todo', 'doing', 'review'].includes(status)) return 'a task cannot be moved to Done from the phone (merge it instead)';
+export function phoneMoveError(t: { status: string; worktree?: string; where?: string; review?: { state?: string; risk?: string }; busy?: boolean; asks?: unknown[] }, status: unknown): string | undefined {
+  if (typeof status !== 'string' || !(PHONE_COLUMNS as readonly string[]).includes(status)) return 'unknown status';
+  if (status === 'done') return canPhoneMerge(t) ? undefined : 'only tasks that passed review (and are not flagged critical) can be moved to Done (merged) from the phone';
   if (t.busy || (t.asks?.length ?? 0) > 0) return 'this task is running or waiting for an answer; stop it first';
   if (t.status === 'done') return 'a done task cannot be moved from the phone';
   if (status === 'todo' && t.worktree) return 'this task has work on its branch; discard it on the desktop to start over';
@@ -26,7 +28,6 @@ export function phoneMoveError(t: { status: string; worktree?: string; busy?: bo
 }
 /** A project path the phone may select: a string that is one of the known roots. */
 export const phoneProjectOk = (path: unknown, roots: string[]) => typeof path === 'string' && roots.includes(path);
-export const PHONE_COLUMNS = ['todo', 'doing', 'review', 'done'] as const;
 
 // One rule for showing the Merge button and for accepting a phone merge; never looser than the board's bulk merge.
 export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>

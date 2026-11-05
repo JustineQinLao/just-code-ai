@@ -281,7 +281,12 @@ test('phoneMoveError: done, busy, asking, out of done and todo-with-branch are r
   const { phoneMoveError, phoneProjectOk } = await import('../phone');
   const t = { status: 'doing' };
   assert.match(phoneMoveError(t, 'done')!, /Done/);
-  assert.match(phoneMoveError(t, 42)!, /Done/);
+  assert.match(phoneMoveError(t, 42)!, /unknown/);
+  assert.match(phoneMoveError(t, 'archived')!, /unknown/);
+  const ok = { status: 'review', worktree: '/w', review: { state: 'pass', risk: 'low' } };
+  assert.equal(phoneMoveError(ok, 'done'), undefined);
+  assert.match(phoneMoveError({ ...ok, review: { state: 'pass', risk: 'critical' } }, 'done')!, /Done/);
+  assert.match(phoneMoveError({ ...ok, review: { state: 'fail' } }, 'done')!, /Done/);
   assert.match(phoneMoveError({ ...t, busy: true }, 'review')!, /running/);
   assert.match(phoneMoveError({ ...t, asks: [{}] }, 'review')!, /running/);
   assert.match(phoneMoveError({ status: 'done' }, 'todo')!, /done task/);
