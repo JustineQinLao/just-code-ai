@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as vm from 'vm';
 import { AddressInfo } from 'net';
-import { startPhoneServer, canPhoneMerge, phoneLinkUrl, qrSvg } from '../phone';
+import { startPhoneServer, phoneMoveError, canPhoneMerge, phoneLinkUrl, qrSvg } from '../phone';
 
 test('phone server: token required, only whitelisted actions', async () => {
   const acts: any[] = [];
@@ -412,5 +412,69 @@ test('pairing: cookie authorizes later calls, expired/empty codes do not, sessio
     assert.doesNotMatch(cookie, /secret/);
     assert.equal((await fetch(`${base}/api/state`, { headers: { cookie } })).status, 200);
     assert.equal((await fetch(`${base}/api/state`, { headers: { cookie: 'jc_session=secret' } })).status, 401);
+  } finally { srv.close(); }
+});
+
+// One case per phone action: it reaches the handler with a good token and is rejected (401, handler untouched) with a bad one.
+async function actHarness() {
+  const acts: any[] = []; const boards: any[] = [];
+  const srv = await startPhoneServer(0, {
+    token: 'tok', state: () => ({ tasks: [] }),
+    act: async m => {
+      acts.push(m);
+      if (m.type === 'move') return phoneMoveError({ status: 'review', worktree: '/w', review: { state: 'fail' } }, m.status);
+    },
+    board: async m => { boards.push(m); },
+  });
+  const base = `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+  const post = (path: string, b: object, tok = 'tok') => fetch(base + path, { method: 'POST', headers: { 'x-token': tok }, body: JSON.stringify(b) });
+  return { srv, post, acts, boards };
+}
+
+const actCases: Array<[string, object]> = [
+  ['run', { type: 'run', id: 'a' }],
+  ['stop', { type: 'stop', id: 'a' }],
+  ['answer allow', { type: 'answer', id: 'a', ask: 'q1', allow: true }],
+  ['answer deny', { type: 'answer', id: 'a', ask: 'q1', allow: false }],
+  ['move valid', { type: 'move', id: 'a', status: 'doing' }],
+  ['project', { type: 'project', id: 'p1' }],
+  ['addTask', { type: 'addTask', title: 'x' }],
+  ['merge', { type: 'merge', id: 'a' }],
+];
+for (const [name, body] of actCases) {
+  test(`phone act: ${name} works and rejects a bad token`, async () => {
+    const { srv, post, acts } = await actHarness();
+    try {
+      assert.equal((await post('/api/act', body, 'nope')).status, 401);
+      assert.equal((await post('/api/act', body, '')).status, 401);
+      assert.equal(acts.length, 0);
+      assert.equal((await post('/api/act', body)).status, 200);
+      assert.deepEqual(acts, [body]);
+    } finally { srv.close(); }
+  });
+}
+
+test('phone act: move to done is refused and rejects a bad token', async () => {
+  const { srv, post, acts } = await actHarness();
+  try {
+    const body = { type: 'move', id: 'a', status: 'done' };
+    assert.equal((await post('/api/act', body, 'nope')).status, 401);
+    assert.equal(acts.length, 0);
+    const r = await post('/api/act', body);
+    assert.equal(r.status, 400);
+    assert.match((await r.json() as any).error, /Done/);
+  } finally { srv.close(); }
+});
+
+test('phone board: dialogReply and merge relay as remote, bad token rejected', async () => {
+  const { srv, post, boards } = await actHarness();
+  try {
+    for (const type of ['dialogReply', 'merge']) {
+      assert.equal((await post('/api/board', { type }, 'nope')).status, 401);
+      assert.equal(boards.length, 0);
+      assert.equal((await post('/api/board', { type, id: 'a', remote: false })).status, 200);
+      assert.equal(boards.pop().remote, undefined);
+    }
+    assert.equal((await post('/api/board', { type: 'openFile' })).status, 400);
   } finally { srv.close(); }
 });
