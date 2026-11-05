@@ -67,6 +67,10 @@ export async function remotePaths(hub: DialogHub, root: string, label: string): 
 }
 
 /** A remote caller can never approve its own bypass: the answer would come from the same token. */
+/** Gate for a task asking for bypass: a phone never approves it; on the desktop, bypass-all (already confirmed) skips the per-task confirm. */
+export const bypassGate = (remote: boolean, bypassAll: boolean, confirm: () => Promise<boolean>) => remote ? Promise.resolve(false) : bypassAll ? Promise.resolve(true) : confirm();
+/** Only the desktop can switch bypass-all on, and only after its confirms. */
+export const canEnableBypassAll = async (remote: boolean, confirm: () => Promise<boolean>) => !remote && await confirm();
 export const confirmBypassFor = (remote: boolean, confirm: () => Promise<boolean>) => remote ? Promise.resolve(false) : confirm();
 
 /** Board messages from a phone: dialog replies, and merge of a reviewed task after a confirm. The task is re-checked after the confirm,

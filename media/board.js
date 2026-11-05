@@ -225,6 +225,7 @@
   function renderBanners() {
     const out = [];
     const l = S.limit || {};
+    if (S.settings?.bypassAll) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Bypass all is ON. '), 'Every task runs with no approvals and can run any command. Turn off justCode.bypassAll to go back.'));
     if (l.held) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Usage limit reached. '),
       `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString()}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
     const st = S.setup;

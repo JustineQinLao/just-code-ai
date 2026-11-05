@@ -286,7 +286,8 @@ test('folder setup: node_modules linked when the lockfile matches; ports per tas
   assert.equal(a.PATH, '/bin');
 });
 
-import { Runner } from '../runner';
+import { Runner, effectiveMode } from '../runner';
+import { bypassGate, canEnableBypassAll } from '../bridge';
 
 // A runner on a real temp repo with a fake Claude: checks run by JustCode, failures sent back, base failures ignored.
 test('runner: failing check goes back to Claude; a failure the base already has is ignored', async () => {
@@ -469,4 +470,23 @@ test('artifact tasks: frontend-design is found by path, the brief sets the rules
   assert.match(brief, /Do not publish it yourself/);
   assert.equal(ARTIFACT_URL.exec('{"text":"Published: https://claude.ai/code/artifact/5fbea6f3-aa11-4c2d-9e7a-0b1c2d3e4f50 ok"}')?.[0], 'https://claude.ai/code/artifact/5fbea6f3-aa11-4c2d-9e7a-0b1c2d3e4f50');
   assert.equal(ARTIFACT_URL.exec('see https://claude.ai/artifact/abc123')?.[0], 'https://claude.ai/artifact/abc123');
+});
+
+test('bypass-all forces bypassPermissions at run time, and off leaves the mode alone', () => {
+  assert.equal(effectiveMode('auto', true), 'bypassPermissions');
+  assert.equal(effectiveMode('plan', false), 'plan');
+  assert.equal(effectiveMode('plan', undefined), 'plan');
+});
+
+test('a phone can neither get bypass nor enable bypass-all; the desktop skips the per-task confirm only when bypass-all is on', async () => {
+  let asked = 0; const yes = async () => { asked++; return true; };
+  assert.equal(await bypassGate(true, true, yes), false);
+  assert.equal(await bypassGate(true, false, yes), false);
+  assert.equal(await bypassGate(false, true, yes), true);
+  assert.equal(asked, 0);
+  assert.equal(await bypassGate(false, false, yes), true);
+  assert.equal(asked, 1);
+  assert.equal(await canEnableBypassAll(true, yes), false);
+  assert.equal(asked, 1);
+  assert.equal(await canEnableBypassAll(false, yes), true);
 });
