@@ -95,21 +95,21 @@ class MainActivity : AppCompatActivity() {
         root.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 48, 32, 32) }
         val msg = TextView(this).apply { text = error ?: "Scan the QR from “JustCode: Show Phone Pairing”, or paste the link."; textSize = 15f }
-        val input = EditText(this).apply { hint = "http://host:7878/?token=…"; setSingleLine() }
+        val input = EditText(this).apply { hint = "http://host:7878/?pair=…"; setSingleLine() }
         val go = Button(this).apply { text = "Pair" }
         val scan = Button(this).apply { text = "Scan QR" }
         val preview = PreviewView(this).apply { layoutParams = LinearLayout.LayoutParams(-1, 0, 1f); visibility = View.GONE }
         col.addView(msg); col.addView(input); col.addView(go); col.addView(scan); col.addView(preview)
         root.addView(col)
         fun submit(raw: String) {
-            val link = Pairing.parse(raw) ?: run { msg.text = "That isn't a valid link (needs http://…/?token=…)."; return }
+            val link = Pairing.parse(raw) ?: run { msg.text = "That isn't a valid link (needs http://…/?pair=…)."; return }
             msg.text = "Checking…"
             Executors.newSingleThreadExecutor().execute {
                 val r = Pairing.check(link)
                 runOnUiThread {
                     when (r) {
-                        is Pairing.Check.Ok -> { Pairing.save(this, link); showBoard(link) }
-                        is Pairing.Check.Unauthorized -> msg.text = "The server rejected the token (401). Generate a fresh link and try again."
+                        is Pairing.Check.Ok -> { Pairing.save(this, Pairing.origin(link)); showBoard(link) }
+                        is Pairing.Check.Unauthorized -> msg.text = "The server rejected the link (401). It may have expired or been used; generate a new one and try again."
                         is Pairing.Check.Unreachable -> msg.text = "Can't reach the server: ${r.why}. Check Wi-Fi and try again."
                     }
                 }
