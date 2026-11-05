@@ -261,6 +261,12 @@ test('phone page: has the project picker and the column tabs', async () => {
     for (const k of ['todo', 'doing', 'review', 'done']) assert.ok(html.includes(`'${k}'`), k);
     assert.match(html, /type:'selectProject'/);
     assert.match(html, /type:'move'/);
+    assert.match(html, /name="viewport" content="width=device-width/);
+    for (const l of ['To do', 'Doing', 'Review', 'Done']) assert.ok(html.includes(`${l}:'`) || html.includes(`'${l}'`), l);
+    assert.match(html, /<input id="t"/);
+    assert.match(html, /\$\('t'\)\.hidden=true/);
+    assert.match(html, /if\(rs\.length\)\{const ps=el\('select'/);
+    assert.match(html, /<div id="top"><header>/);
   } finally { srv.close(); }
 });
 

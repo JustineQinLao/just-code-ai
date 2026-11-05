@@ -2,9 +2,10 @@
 export const PAGE = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>JustCode</title><style>
 *{box-sizing:border-box}body{font:15px system-ui;margin:0;background:#111;color:#eee}
-header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;padding:8px 12px;background:#222;font-weight:600}
-header select{flex:1;min-width:0}
-.tabs{position:sticky;top:52px;z-index:4;display:flex;gap:6px;padding:8px 10px;background:#111;overflow-x:auto}
+header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:#222;font-weight:600}
+header select{flex:1;min-width:0;margin:0;max-width:100%}
+#top{position:sticky;top:0;z-index:5;background:#111}
+.tabs{display:flex;gap:6px;padding:8px 10px;background:#111;overflow-x:auto}
 .tabs button{flex:1;margin:0;white-space:nowrap}
 .c{margin:10px;padding:12px;background:#1c1c1c;border:1px solid #2c2c2c;border-radius:10px}.s{opacity:.7;font-size:12px}
 button,select{font:inherit;min-height:44px;padding:8px 14px;margin:6px 6px 0 0;border:0;border-radius:8px;background:#3b82f6;color:#fff}
@@ -12,9 +13,9 @@ button.n,select.n,header select{background:#444}
 input{font:inherit;min-height:44px;padding:8px;width:calc(100% - 20px);margin:10px;border:1px solid #444;border-radius:8px;background:#1c1c1c;color:#eee}
 input[hidden]{display:none}
 .a{border:1px solid #f59e0b;padding:8px;margin-top:8px;border-radius:8px;word-break:break-all}
-@media(max-width:400px){body{font-size:14px}.c{margin:8px}}
-</style></head><body><header>JustCode<div id="pj" style="flex:1;min-width:0;text-align:right"></div></header>
-<div id="tabs" class="tabs"></div>
+@media(max-width:400px){body{font-size:14px}.c{margin:8px}.tabs{gap:4px;padding:6px}.tabs button{padding:8px 2px;font-size:13px}}
+</style></head><body><div id="top"><header>JustCode<div id="pj" style="flex:1;min-width:0;text-align:right"></div></header>
+<div id="tabs" class="tabs"></div></div>
 <input id="t" placeholder="Token (from VS Code: JustCode: Show Phone Pairing)"><input id="n" placeholder="New task title">
 <dialog id="dg" style="background:#222;color:#eee;border:1px solid #555;border-radius:8px;max-width:90vw"></dialog><button id="add" style="margin-left:10px">Add + run</button><div id="st" class="s" style="margin:0 12px"></div><div id="er" role="alert" style="margin:4px 12px;color:#f88"></div><div id="nt" class="s" style="margin:4px 12px"></div><div id="l"></div>
 <script>
@@ -47,7 +48,7 @@ async function load(){if(busy)return;if(hold()){if(dragging)redo=true;sched();re
 try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));$('t').hidden=false;return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
-$('t').hidden=true;const pj=$('pj');pj.textContent='';const rs=data.roots||[];if(rs.length>1){const ps=el('select',{title:'Project',onchange:()=>act({type:'selectProject',path:ps.value})});for(const r of rs){const o=el('option',{value:r},r.split(/[\\/]/).pop());o.selected=r===data.root;ps.append(o)}pj.append(ps)}
+$('t').hidden=true;const pj=$('pj');pj.textContent='';const rs=data.roots||[];if(rs.length){const ps=el('select',{title:'Project',onchange:()=>act({type:'selectProject',path:ps.value})});for(const r of rs){const o=el('option',{value:r},r.split(/[\\/]/).pop());o.selected=r===data.root;ps.append(o)}pj.append(ps)}
 const tb=$('tabs');tb.textContent='';for(const k of ['todo','doing','review','done'])tb.append(el('button',{id:'tab-'+k,className:k===col?'':'n',onclick:()=>{col=k;load()}},({todo:'To do',doing:'Doing',review:'Review',done:'Done'})[k]+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));
 for(const t of data.tasks.filter(t=>t.status===col||t.asks.length)){const c=el('div',{className:'c',id:'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
 if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})},'Run'));
