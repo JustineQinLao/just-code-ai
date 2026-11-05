@@ -267,6 +267,7 @@ test('phone page: has the project picker and the column tabs', async () => {
     assert.match(html, /\$\('t'\)\.hidden=true/);
     assert.match(html, /if\(rs\.length\)\{const ps=el\('select'/);
     assert.match(html, /<div id="top"><header>/);
+    assert.ok(html.includes("{ps.blur();act({type:'selectProject'"));
   } finally { srv.close(); }
 });
 
