@@ -307,6 +307,16 @@
           "type": "number",
           "default": 7878,
           "description": "Port for the phone server."
+        },
+        "justCode.mobile.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "DANGEROUS: serve the whole board on all network interfaces (0.0.0.0) with NO token, for a phone or tablet browser. Anyone on the network can start tasks and approve permissions. Off by default."
+        },
+        "justCode.mobile.port": {
+          "type": "number",
+          "default": 7979,
+          "description": "Port for the mobile board server."
         }
       }
     }
