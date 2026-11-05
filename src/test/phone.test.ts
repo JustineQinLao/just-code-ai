@@ -286,13 +286,28 @@ test('phoneMoveError: done, busy, asking, out of done and todo-with-branch are r
   assert.equal(phoneProjectOk(['/a'], ['/a']), false);
 });
 
-test('phone page: tapping a project or move calls act(), which shows server errors and reloads', async () => {
+test('phone page: act() posts the message, alerts a server error and reloads', async () => {
+  const { srv, base } = await boot();
+  const html = await (await fetch(base + '/?t=tok')).text();
+  srv.close();
+  const src = html.match(/async function act\(m\)\{.*\}/)![0];
+  const calls: string[] = []; const alerts: string[] = [];
+  const f = new vm.Script(`(${'async function(fetch,H,alert,load){' + src + '; return act}'})`).runInThisContext();
+  const mkAct = (reply: any) => f(async (u: string, o: any) => { calls.push(u + ' ' + o.body); return { json: async () => reply }; }, () => ({}), (t: string) => alerts.push(t), () => calls.push('load'));
+  await (await mkAct({ error: 'busy' }))({ type: 'move', id: 'a', status: 'review' });
+  assert.deepEqual(calls, ['/api/act {"type":"move","id":"a","status":"review"}', 'load']);
+  assert.deepEqual(alerts, ['busy']);
+  calls.length = 0; alerts.length = 0;
+  await (await mkAct({ ok: true }))({ type: 'selectProject', path: '/p' });
+  assert.deepEqual(alerts, []); assert.equal(calls[1], 'load');
+});
+
+test('phone page: pending permission asks show and notify on every tab, not just the open one', async () => {
   const { srv, base } = await boot();
   try {
     const html = await (await fetch(base + '/?t=tok')).text();
-    assert.match(html, /async function act\(m\)\{.*if\(j\.error\)alert\(j\.error\);load\(\)\}/);
-    assert.match(html, /act\(\{type:'selectProject',path:r\}\)/);
-    assert.match(html, /act\(\{type:'move',id:t\.id,status:k\}\)/);
+    assert.match(html, /t\.status===col\|\|t\.asks\.length/);
+    assert.match(html, /for\(const t of data\.tasks\)for\(const a of t\.asks\)/);
     assert.doesNotMatch(html, /Move to done/);
   } finally { srv.close(); }
 });

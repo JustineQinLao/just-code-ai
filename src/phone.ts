@@ -119,15 +119,15 @@ try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
 const pj=$('pj');pj.textContent='Project: ';for(const r of data.roots||[])pj.append(el('button',{className:r===data.root?'':'n',onclick:()=>act({type:'selectProject',path:r})},r.split(/[\\/]/).pop()));
-const tb=$('tabs');tb.textContent='';for(const k of ['todo','doing','review','done'])tb.append(el('button',{className:k===col?'':'n',onclick:()=>{col=k;load()}},k+' ('+data.tasks.filter(t=>t.status===k).length+')'));
-for(const t of data.tasks.filter(t=>t.status===col)){const c=el('div',{className:'c',id:'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
+const tb=$('tabs');tb.textContent='';for(const k of ['todo','doing','review','done'])tb.append(el('button',{className:k===col?'':'n',onclick:()=>{col=k;load()}},k+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));
+for(const t of data.tasks.filter(t=>t.status===col||t.asks.length)){const c=el('div',{className:'c',id:'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
 if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})},'Run'));
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
 for(const a of t.asks){const d=el('div',{className:'a'},a.tool+': '+a.detail,el('br'));
 if(a.kind==='permission'){d.append(el('button',{onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'allow'})},'Approve'),el('button',{className:'n',onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'deny'})},'Deny'))}else d.append(el('i',{},'Answer this one in VS Code'));c.append(d)}
-for(const k of ['todo','doing','review'])if(k!==t.status)c.append(el('button',{className:'n',onclick:()=>act({type:'move',id:t.id,status:k})},'Move to '+k));
-if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));l.append(c);
-for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}}
+if(!t.busy&&!t.asks.length)for(const k of ['todo','doing','review'])if(k!==t.status&&t.status!=='done')c.append(el('button',{className:'n',onclick:()=>act({type:'move',id:t.id,status:k})},'Move to '+k));
+if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));l.append(c)}
+for(const t of data.tasks)for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}
 first=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);notifState()}
 catch(e){fails++;$('st').textContent='Offline, retrying in '+Math.min(3000*2**fails,30000)/1000+'s'}
 finally{busy=false;sched()}}
