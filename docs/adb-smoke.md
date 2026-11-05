@@ -21,3 +21,17 @@ adb shell am start -a android.intent.action.VIEW -d "http://localhost:7878/?toke
 adb exec-out screencap -p > /tmp/01-open.png
 ```
 Then tap (`adb shell input tap X Y`, `adb shell input text`), wait 3s, screencap each step. Clean up: `adb reverse --remove tcp:7878`.
+
+## Live extension run (real backend)
+
+The token lives in VS Code's secret storage and is only shown in the modal from *JustCode: Show Phone Pairing* (or the Phone Link QR), so this part is manual:
+
+```
+npm run compile
+code --extensionDevelopmentPath="$PWD" /path/to/a/git/project     # Extension Development Host
+# in that window: set justCode.phoneServer = true, run "JustCode: Show Phone Pairing", copy the token
+adb reverse tcp:7878 tcp:7878
+adb shell am start -a android.intent.action.VIEW -d "http://localhost:7878/?token=<TOKEN>" com.sec.android.app.sbrowser
+```
+Then repeat the steps from the scripted run, screencapping each one (`adb exec-out screencap -p > docs/smoke/live-NN.png`). Differences from the fake: the task really starts a Claude run in a branch, so the permission card depends on what the agent asks for; use a task like "run npm test" to trigger a Bash card. Clean up with `adb reverse --remove tcp:7878`.
+`scripts/adb-smoke.sh` can't drive this: it launches the fake backend and hardcodes token "tok".
