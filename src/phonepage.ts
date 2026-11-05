@@ -26,7 +26,7 @@ const $=id=>document.getElementById(id);$('t').value=localStorage.tok||new URLSe
 const H=()=>({'x-token':$('t').value,'content-type':'application/json'});
 async function act(m){const r=await fetch('/api/act',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();$('er').textContent=j.error||'';load()}
 async function board(m){const r=await fetch('/api/board',{method:'POST',headers:H(),body:JSON.stringify(m)});const j=await r.json();if(j.error)alert(j.error);load()}
-let dragging=false,redo=false;function hold(){return dragging||document.activeElement?.tagName==='SELECT'}function dragMove(c,t){let tm,on=false,sx,sy;const hl=x=>{for(const k of ['todo','doing','review','done']){const b=$('tab-'+k);if(b)b.style.outline=x===k?'2px solid #4af':''}};
+let dragging=false,redo=false,actTimer=0,actGen=0,busyIds=new Set();function hold(){return dragging||document.activeElement?.tagName==='SELECT'}function dragMove(c,t){let tm,on=false,sx,sy;const hl=x=>{for(const k of ['todo','doing','review','done']){const b=$('tab-'+k);if(b)b.style.outline=x===k?'2px solid #4af':''}};
 const at=e=>{const p=e.touches[0]||e.changedTouches[0],n=document.elementFromPoint(p.clientX,p.clientY),b=n&&n.closest('button[id^=tab-]');return b?b.id.slice(4):''};
 c.addEventListener('touchstart',e=>{if(e.target.closest('select,button'))return;sx=e.touches[0].clientX;sy=e.touches[0].clientY;tm=setTimeout(()=>{on=true;dragging=true;c.style.opacity='.6';navigator.vibrate&&navigator.vibrate(30)},500)},{passive:true});
 c.addEventListener('touchmove',e=>{if(!on){if(Math.abs(e.touches[0].clientX-sx)+Math.abs(e.touches[0].clientY-sy)>10)clearTimeout(tm);return}e.preventDefault();hl(at(e))},{passive:false});
@@ -52,12 +52,18 @@ try{const r=await fetch('/api/state',{headers:H()});const l=$('l');
 if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{className:'c'},'Not paired: '+r.status));$('t').hidden=false;return}
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
 $('t').hidden=true;const pj=$('pj');pj.textContent='';const rs=data.projects||[];if(rs.length){const ps=el('select',{title:'Project',onchange:()=>{ps.blur();act({type:'project',root:ps.value})}});for(const r of rs){const o=el('option',{value:r.root},r.name);o.selected=r.root===data.current;ps.append(o)}pj.append(ps)}
+busyIds=new Set(data.tasks.filter(t=>t.busy).map(t=>t.id));if(!selId||!data.tasks.some(t=>t.id===selId)){actGen++;clearTimeout(actTimer)}
 const wide=isWide();const tb=$('tabs');tb.textContent='';tb.hidden=wide;if(!wide)for(const k of ['todo','doing','review','done'])tb.append(el('button',{id:'tab-'+k,className:k===col?'':'n',onclick:()=>{col=k;load()}},({todo:'To do',doing:'Doing',review:'Review',done:'Done'})[k]+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));
-const detail=t=>{const d=el('div',{});fetch('/api/detail?id='+encodeURIComponent(t.id),{headers:H()}).then(r=>r.json()).then(j=>{
+const feed=(box,steps)=>{box.textContent='';if(!steps.length){box.append(el('div',{className:'s'},'No activity yet'));return}for(const x of steps){const k=x.kind||'info';box.append(el('div',{className:'s',style:'margin:2px 0;white-space:pre-wrap;word-break:break-word'+(k==='error'?';color:#f88':k==='say'?';color:#eee':'')},el('b',{},(x.time?x.time+' ':'')+k+' '),(x.text||'').slice(0,500)))}};
+const fill=(d,j)=>{
 if(j.error||!j.files)d.append(el('div',{className:'s',style:'color:#f88'},j.error||'Could not load details'));
 if(j.review){d.append(el('div',{className:'s'},'Review: '+j.review.state+(j.review.why?' · '+j.review.why:'')));for(const i of j.review.issues||[])d.append(el('div',{className:'a'},i))}
 d.append(el('div',{className:'s'},'Changed files ('+(j.files||[]).length+')'));for(const f of j.files||[])d.append(el('div',{className:'s'},f.status+' '+f.file+' +'+f.added+' -'+f.removed));
-for(const c of j.checks||[]){d.append(el('div',{className:'s'},c.name+': '+(c.ok?'pass':'fail')));if(c.tail)d.append(el('pre',{className:'s',style:'white-space:pre-wrap;word-break:break-all;margin:2px 0'},c.tail))}}).catch(e=>{d.append(el('div',{className:'s',style:'color:#f88'},'Could not load details: '+(e&&e.message||e)))});return d};
+for(const c of j.checks||[]){d.append(el('div',{className:'s'},c.name+': '+(c.ok?'pass':'fail')));if(c.tail)d.append(el('pre',{className:'s',style:'white-space:pre-wrap;word-break:break-all;margin:2px 0'},c.tail))}};
+const detail=t=>{const d=el('div',{});const act=el('div',{});const gen=++actGen;clearTimeout(actTimer);
+if(!isWide())d.append(el('button',{className:'n',onclick:()=>{selId='';actGen++;clearTimeout(actTimer);load()}},'Back'));d.append(el('div',{className:'s'},'Activity'),act);
+const rest=el('div',{});d.append(rest);let first=true;
+const tick=()=>{fetch('/api/detail?id='+encodeURIComponent(t.id),{headers:H()}).then(r=>r.json()).then(j=>{if(gen!==actGen)return;feed(act,j.steps||[]);if(first){first=false;fill(rest,j)}actTimer=setTimeout(tick,busyIds.has(t.id)?2000:6000)}).catch(e=>{if(gen!==actGen)return;if(first){first=false;rest.append(el('div',{className:'s',style:'color:#f88'},'Could not load details: '+(e&&e.message||e)))}actTimer=setTimeout(tick,4000)})};tick();return d};
 const card=(t,pane,extra)=>{const c=el('div',{className:'c',id:pane?'':'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
 if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})},'Run'));
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
