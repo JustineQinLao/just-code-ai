@@ -53,19 +53,25 @@ if(!r.ok){fails=0;$('st').textContent='';l.textContent='';l.append(el('div',{cla
 const data=await r.json();fails=0;$('st').textContent='';l.textContent='';
 $('t').hidden=true;const pj=$('pj');pj.textContent='';const rs=data.projects||[];if(rs.length){const ps=el('select',{title:'Project',onchange:()=>{ps.blur();act({type:'project',root:ps.value})}});for(const r of rs){const o=el('option',{value:r.root},r.name);o.selected=r.root===data.current;ps.append(o)}pj.append(ps)}
 const wide=isWide();const tb=$('tabs');tb.textContent='';tb.hidden=wide;if(!wide)for(const k of ['todo','doing','review','done'])tb.append(el('button',{id:'tab-'+k,className:k===col?'':'n',onclick:()=>{col=k;load()}},({todo:'To do',doing:'Doing',review:'Review',done:'Done'})[k]+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));
-const card=(t,pane)=>{const c=el('div',{className:'c',id:pane?'':'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
+const detail=t=>{const d=el('div',{});fetch('/api/detail?id='+encodeURIComponent(t.id),{headers:H()}).then(r=>r.json()).then(j=>{
+if(j.error||!j.files)d.append(el('div',{className:'s',style:'color:#f88'},j.error||'Could not load details'));
+if(j.review){d.append(el('div',{className:'s'},'Review: '+j.review.state+(j.review.why?' · '+j.review.why:'')));for(const i of j.review.issues||[])d.append(el('div',{className:'a'},i))}
+d.append(el('div',{className:'s'},'Changed files ('+(j.files||[]).length+')'));for(const f of j.files||[])d.append(el('div',{className:'s'},f.status+' '+f.file+' +'+f.added+' -'+f.removed));
+for(const c of j.checks||[]){d.append(el('div',{className:'s'},c.name+': '+(c.ok?'pass':'fail')));if(c.tail)d.append(el('pre',{className:'s',style:'white-space:pre-wrap;word-break:break-all;margin:2px 0'},c.tail))}}).catch(e=>{d.append(el('div',{className:'s',style:'color:#f88'},'Could not load details: '+(e&&e.message||e)))});return d};
+const card=(t,pane,extra)=>{const c=el('div',{className:'c',id:pane?'':'task-'+t.id},el('b',{},t.title),el('div',{className:'s'},t.status+(t.review?' · review '+t.review:'')));
 if(t.status==='todo')c.append(el('button',{onclick:()=>act({type:'run',id:t.id})},'Run'));
 if(t.busy)c.append(el('button',{className:'n',onclick:()=>act({type:'stop',id:t.id})},'Stop'));
 for(const a of t.asks){const d=el('div',{className:'a'},a.tool+': '+a.detail,el('br'));
 if(a.kind==='permission'){d.append(el('button',{onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'allow'})},'Approve'),el('button',{className:'n',onclick:()=>act({type:'answer',id:t.id,ask:a.id,choice:'deny'})},'Deny'))}else d.append(el('i',{},'Answer this one in VS Code'));c.append(d)}
 if(!t.busy&&!t.asks.length&&t.status!=='done'){const sel=el('select',{className:'n',onchange:()=>{if(sel.value){sel.blur();act({type:'move',id:t.id,status:sel.value})}}},el('option',{value:''},'Move to…'));for(const k of ['todo','doing','review'])if(k!==t.status)sel.append(el('option',{value:k},k));c.append(sel);if(!pane)dragMove(c,t)}
 if(t.canMerge)c.append(el('button',{onclick:()=>board({type:'merge',id:t.id})},'Merge'));
-if(wide&&!pane){c.style.cursor='pointer';if(t.id===selId)c.style.borderColor='#3b82f6';c.addEventListener('click',e=>{if(e.target.closest('select,button'))return;selId=t.id;load()})}
+if(extra)c.append(extra);
+if(!pane){c.style.cursor='pointer';if(t.id===selId)c.style.borderColor='#3b82f6';c.addEventListener('click',e=>{if(e.target.closest('select,button'))return;selId=wide||t.id!==selId?t.id:'';load()})}
 return c};
 const names={todo:'To do',doing:'Doing',review:'Review',done:'Done'};
 if(wide){const g=el('div',{className:'cols'});for(const k of ['todo','doing','review','done']){const cl=el('div',{className:'col'},el('button',{id:'tab-'+k,className:'n',style:'width:100%;margin:0',onclick:()=>{}},names[k]+' ('+data.tasks.filter(t=>t.status===k).length+')'+(data.tasks.some(t=>t.status===k&&t.asks.length)?' !':'')));for(const t of data.tasks.filter(t=>t.status===k))cl.append(card(t));g.append(cl)}
-const st=data.tasks.find(t=>t.id===selId);g.append(el('div',{className:'pane'},st?card(st,true):el('div',{className:'s'},'Select a task to see its details.')));l.append(g)}
-else for(const t of data.tasks.filter(t=>t.status===col||t.asks.length))l.append(card(t));
+const st=data.tasks.find(t=>t.id===selId);g.append(el('div',{className:'pane'},st?card(st,true,detail(st)):el('div',{className:'s'},'Select a task to see its details.')));l.append(g)}
+else for(const t of data.tasks.filter(t=>t.status===col||t.asks.length))l.append(card(t,false,t.id===selId?detail(t):undefined));
 for(const t of data.tasks)for(const a of t.asks)if(a.kind==='permission'&&!seen.has(a.id)){seen.add(a.id);if(!first)notify(t,a)}
 first=false;const w=new URLSearchParams(location.search).get('task');if(w)focusTask(w);notifState()}
 catch(e){fails++;$('st').textContent='Offline, retrying in '+Math.min(3000*2**fails,30000)/1000+'s'}
