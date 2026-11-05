@@ -286,14 +286,14 @@ test('phoneMoveError: done, busy, asking, out of done and todo-with-branch are r
   assert.equal(phoneProjectOk(['/a'], ['/a']), false);
 });
 
-test('phone page: act() posts the message, alerts a server error and reloads', async () => {
+test('phone page: act() posts the message, shows a server error inline and reloads', async () => {
   const { srv, base } = await boot();
   const html = await (await fetch(base + '/?t=tok')).text();
   srv.close();
   const src = html.match(/async function act\(m\)\{.*\}/)![0];
   const calls: string[] = []; const alerts: string[] = [];
-  const f = new vm.Script(`(${'async function(fetch,H,alert,load){' + src + '; return act}'})`).runInThisContext();
-  const mkAct = (reply: any) => f(async (u: string, o: any) => { calls.push(u + ' ' + o.body); return { json: async () => reply }; }, () => ({}), (t: string) => alerts.push(t), () => calls.push('load'));
+  const f = new vm.Script(`(${'async function(fetch,H,$,load){' + src + '; return act}'})`).runInThisContext();
+  const mkAct = (reply: any) => f(async (u: string, o: any) => { calls.push(u + ' ' + o.body); return { json: async () => reply }; }, () => ({}), () => ({ set textContent(t: string) { if (t) alerts.push(t); } }), () => calls.push('load'));
   await (await mkAct({ error: 'busy' }))({ type: 'move', id: 'a', status: 'review' });
   assert.deepEqual(calls, ['/api/act {"type":"move","id":"a","status":"review"}', 'load']);
   assert.deepEqual(alerts, ['busy']);

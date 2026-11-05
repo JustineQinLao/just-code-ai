@@ -38,3 +38,6 @@ Then repeat the steps from the scripted run, screencapping each one (`adb exec-o
 
 ## Smoke steps: project picker, tabs, moves
 After the main run, on the phone page: (1) the project buttons sit under the header and the current one is highlighted; tap another and the list reloads. (2) Tap each tab (todo, doing, review, done); counts match the cards. (3) On a todo card tap *Move to doing*: it leaves To do and shows under the Doing tab. (4) Confirm no card offers *Move to done*; a done move is blocked (use Merge). The scripted run and fake backend do not cover these yet.
+
+## Move menu and long-press drag
+Each non-done card has a *Move to…* select (todo/doing/review); picking one posts `{type:'move'}` to /api/act and reloads. Long-press (~0.5s) a card and drag onto a tab to do the same; the tab is outlined while hovered. Refused moves (e.g. dropping on Done) show a red message under the status line, not an alert. Not yet checked on a device or browser at phone size: run the steps above and note the result here.
