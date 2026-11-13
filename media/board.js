@@ -955,6 +955,7 @@
       f.allowedTools = h('textarea', { rows: 3, placeholder: 'One rule per line, for every project' }, (s.allowedTools || []).join('\n')),
       h('span', { class: 'muted small' }, 'Always allowed in every project.'),
       policySection(),
+      phoneSection(),
       h('div', { class: 'row' }, btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => post('apiKey'), 'ghost'), btn('Setup checklist', () => { showSetup = true; $('#dlg').close(); render(); }, 'ghost')),
       h('div', { class: 'acts' }, btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
@@ -1032,6 +1033,19 @@
       h('div', { class: 'acts' }, btn('+ Files or folders', () => post('addSource', { kind: 'file', sprintId: sprint?.id }), 'primary'), btn('+ Link', () => post('addSource', { kind: 'url', sprintId: sprint?.id })),
         btn('Project history', () => post('openArtifact', { which: 'progress' }), 'ghost', 'What merged tasks changed; later tasks read it instead of digging through git')));
     d.dataset.kind = 'sources';
+  }
+
+  // ⚙ → Phone: paired phones, how long each stays signed in, and Revoke.
+  function phoneSection() {
+    const P = S.phone;
+    if (!P || REMOTE) return '';
+    const day = ms => new Date(ms).toLocaleDateString();
+    return h('details', { class: 'adv' }, h('summary', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
+      h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code from JustCode: Show Phone Pairing.` : 'Turn on justCode.phoneServer to use the phone page or the Android app.'),
+      P.devices.length ? h('ul', { class: 'small' }, P.devices.map(d => h('li', { class: 'row' },
+        h('span', { class: 'grow' }, `Device …${d.id} · paired ${day(d.created)} · ${d.lastUsed ? `last used ${savedAgo(d.lastUsed)}` : 'not used yet'} · expires ${day(d.expires)}`),
+        btn('Revoke', () => post('phoneRevoke', { id: d.id }), 'ghost small')))) : '',
+      P.devices.length > 1 ? btn('Revoke all', () => post('phoneRevoke', { id: 'all' }), 'ghost') : '');
   }
 
   // ⚙ → Policy: what .justcode/policy.json enforces in this project, and what it denied today.

@@ -325,6 +325,12 @@
           "default": false,
           "description": "Serve the board to your phone over your local network (token protected). Off by default. Anyone with the token can start tasks and approve permissions."
         },
+        "justCode.phoneTokenDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 1,
+          "description": "Days a paired phone stays signed in. After that it is refused and must pair again with a new code. Lower is safer; higher means pairing less often."
+        },
         "justCode.phoneServerPort": {
           "type": "number",
           "default": 7878,

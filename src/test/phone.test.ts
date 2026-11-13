@@ -524,3 +524,33 @@ test('phone: /api/task is token-protected, read-only, 404 for unknown ids', asyn
   assert.deepEqual([...PHONE_ACTIONS], ['addTask', 'run', 'stop', 'answer', 'merge', 'project', 'move']);
   assert.deepEqual([...BOARD_ACTIONS], ['dialogReply', 'merge']);
 });
+
+import { pairDevice, deviceFor, memoryDevices } from '../phone';
+test('phone devices: 6-digit codes, POST /pair gives a device token, expired and revoked tokens get 401', async () => {
+  const { issuePairingCode, redeemPairingCode, startPhoneServer } = await import('../phone');
+  const code = issuePairingCode();
+  assert.match(code, /^\d{6}$/);
+  // Ten wrong codes cancel every open code.
+  for (let i = 0; i < 10; i++) redeemPairingCode('x' + i);
+  assert.equal(redeemPairingCode(code), false);
+  const store = memoryDevices();
+  const { token, device } = pairDevice(store, 7, 1000);
+  assert.equal(deviceFor(store, token, 2000)?.id, device.id);
+  assert.equal(deviceFor(store, token, 1000 + 7 * 86400_000 + 1), undefined, 'expired');
+  assert.ok(!JSON.stringify(store.list()).includes(token), 'only the hash is stored');
+  const srv = await startPhoneServer(0, { token: 'master', state: () => ({ ok: 1 }), act: async () => {}, devices: store, tokenDays: 7, allowTokenInUrl: false });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const page = await fetch(`${base}/`);
+    assert.equal(page.status, 401); assert.match(await page.text(), /Pair with JustCode/);
+    assert.equal((await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ code: '000000' }) })).status, 401);
+    const good = issuePairingCode();
+    const r = await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ code: good }) });
+    assert.equal(r.status, 200);
+    const j: any = await r.json();
+    assert.match(r.headers.get('set-cookie') ?? '', /jc_session=.*Max-Age=604800/);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { 'x-token': j.token } })).status, 200);
+    store.save(store.list().filter(d => d.expires !== j.expires)); // revoke it
+    assert.equal((await fetch(`${base}/api/state`, { headers: { 'x-token': j.token } })).status, 401);
+  } finally { srv.close(); }
+});

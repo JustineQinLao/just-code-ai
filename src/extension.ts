@@ -19,7 +19,7 @@ import { loadPolicy, policyFile } from './policy';
 import type { Actor } from './audit';
 import * as C from './checks';
 import * as D from './design';
-import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
+import { Device, DeviceStore, startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 
@@ -221,6 +221,7 @@ export function activate(context: vscode.ExtensionContext) {
       skills: discoverSkills(r.root, setting('personalSetup', false)),
       sources: A.loadSources(r.root).map(x => ({ ...x, artifact: x.kind === 'url' && A.isArtifactLink(x.ref), copy: A.hasCopy(r.root, x), savedAt: savedAt(r.root, x), saving: savingTerms.has(x.id), asking: askingTerms.has(x.id) })),
       registry: R.load(r.root),
+      phone: { on: setting('phoneServer', false), days: setting<number>('phoneTokenDays', 7), devices: phoneDevices.list().filter(d => d.expires > Date.now()).map(({ hash: _, ...d }) => d) },
       policy: (() => { const l = loadPolicy(r.root), day = new Date(); day.setHours(0, 0, 0, 0);
         return { ...l, file: policyFile(r.root), denials: Audit.read(r.root, { since: day.getTime(), event: 'policy.deny' }).slice(-50) }; })(),
       detectedChecks: C.detectChecks(r.root),
@@ -320,9 +321,14 @@ export function activate(context: vscode.ExtensionContext) {
     try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, paired: via => { const r = runner(); if (r) Audit.log(r.root, { actor: 'phone', event: 'phone.pair', detail: via }); }, board: phoneBoard, events: n => hub.events(n),
       task: async id => { const r = runner(), t = r?.store.task(id); if (!r || !t) return undefined; const l = r.live(t.id);
         return { id: t.id, ...await detailOf(id), agents: l.agents, costUsd: t.costUsd ?? 0, usage: t.usage, context: l.context }; },
-      detail: id => detailOf(id), allowTokenInUrl: false }); }
+      detail: id => detailOf(id), allowTokenInUrl: false, devices: phoneDevices, tokenDays: Math.max(1, setting<number>('phoneTokenDays', 7)) }); }
     catch (e: any) { vscode.window.showErrorMessage(`JustCode phone server could not start: ${e.message}`); }
   }
+  // Paired phones (token hashes only), kept across restarts in this machine's VS Code storage.
+  const phoneDevices: DeviceStore = {
+    list: () => context.globalState.get<Device[]>('phoneDevices', []),
+    save: list => { void context.globalState.update('phoneDevices', list).then(push); },
+  };
   async function detailOf(id: string): Promise<any> {
     const r = runner(), t = r?.store.task(id); if (!r || !t) return { files: [], checks: [], error: 'no such task' };
     {
@@ -714,6 +720,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (src) void saveArtifactSource(r.root, src).then(() => push());
         return;
       }
+      case 'phoneRevoke': phoneDevices.save(phoneDevices.list().filter(d => m.id !== 'all' && d.id !== m.id)); r.audit('phone.action', undefined, `revoked ${m.id === 'all' ? 'all devices' : `device …${m.id}`}`, 'user'); return;
       case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
       case 'exportAudit': void vscode.commands.executeCommand('justCode.exportAudit'); return;
       case 'artifactNote': { const e = R.find(r.root, String(m.url)); if (e) R.upsert(r.root, e.url, { note: String(m.note ?? '').trim() || undefined }); return push(); }
@@ -1051,8 +1058,9 @@ export function activate(context: vscode.ExtensionContext) {
       panel.webview.onDidReceiveMessage(async m => {
         if (m === 'new') return render(); // a fresh one-time link; paired devices keep working
         if (m !== 'revoke') return;
-        // Revoke all devices: a new permanent token and a restarted server drop every session.
+        // Revoke all devices: a new permanent token, no paired devices, and a restarted server.
         await context.secrets.store('justCode.phoneToken', newToken()); await loadPhoneToken();
+        phoneDevices.save([]);
         phone?.close(); phone = undefined; await syncPhone(); render();
       });
       render();
@@ -1069,7 +1077,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
       await syncPhone();
       const port = setting('phoneServerPort', 7878);
-      vscode.window.showInformationMessage(`Open this one-time link on your phone (same Wi-Fi, valid 10 minutes): ${phoneLinkUrl(lanIps()[0] ?? 'this-computer', port, issuePairingCode())}`, { modal: true });
+      const code = issuePairingCode();
+      vscode.window.showInformationMessage(`Pairing code ${code} (valid 10 minutes, one use). Type it in the JustCode app, or open this link on your phone (same Wi-Fi): ${phoneLinkUrl(lanIps()[0] ?? 'this-computer', port, code)}`, { modal: true });
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
     // A key changed in VS Code's own Settings UI replaces the board's copy of it.
