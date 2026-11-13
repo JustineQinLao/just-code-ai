@@ -318,9 +318,15 @@ export function adb(): { bin: string; devices: string[] } | undefined {
   } catch { return { bin, devices: [] }; }
 }
 
+// Headless Playwright MCP for UI work: the only way to take screenshots, saved into the task's shots folder.
+// Flags checked against `npx @playwright/mcp --help`: --headless, --isolated, --output-dir.
+export const PLAYWRIGHT_TOOLS = 'mcp__playwright__*';
+export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated', '--output-dir', shots] } });
+export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); pass filename as ${shots}/<name>.png so it lands there. Never use npx playwright, a screenshot script or a visible browser.`;
+
 // Commands the reviewer may run: read git, run tests and builds, adb, screenshots. Edits stay blocked.
 export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status', 'ls', 'cat',
-  'npm test', 'npm run', 'npx tsc', 'npx jest', 'npx vitest', 'npx playwright', 'npx eslint', 'npx ng test',
+  'npm test', 'npm run', 'npx tsc', 'npx jest', 'npx vitest', 'npx eslint', 'npx ng test',
   'yarn test', 'yarn run', 'yarn build', 'yarn lint', 'pnpm test', 'pnpm run', 'pnpm build', 'pnpm lint', 'bun test', 'bun run',
   'pytest', 'python -m pytest', 'python3 -m pytest', 'python manage.py test', 'python3 manage.py test', 'ruff', 'mypy',
   'go test', 'go build', 'go vet', 'cargo test', 'cargo build', 'cargo check', 'cargo clippy', 'make test', 'make check', 'make build',
@@ -346,7 +352,7 @@ config changes are "minor".
 In "tested", list every command you ran (or why nothing could run).`;
 
 // The review's task-specific part: the task, the builder's handoff, how to test the UI, and the diff.
-export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; handoff?: string; brief?: string; checks?: string[] } = { shots: '' }) {
+export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; web?: boolean; handoff?: string; brief?: string; checks?: string[] } = { shots: '' }) {
   const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
   return [
     test.brief ? `# Task\n${test.brief}` : `# Task: ${t.title}\n${t.description ?? ''}`,
@@ -355,7 +361,7 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
     test.adb?.devices.length
       ? `# UI checks\nAn Android device is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app with adb, ` +
         `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
-      : `# UI checks\nFor a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read it. Save screenshots only in ${test.shots}.`,
+      : test.web ? `# UI checks\nFor a web UI with a running dev server: open the page with the Playwright MCP tools, then ${SHOT_RULE(test.shots)} Read the PNG.` : '',
     `# Diff against ${base}\n\`\`\`diff\n${clipped}\n\`\`\``,
   ].filter(Boolean).join('\n\n');
 }
@@ -390,7 +396,7 @@ export const addUsage = (a: Usage | undefined, u: any): Usage => ({
   cacheRead: (a?.cacheRead ?? 0) + (u?.cache_read_input_tokens ?? 0), cacheWrite: (a?.cacheWrite ?? 0) + (u?.cache_creation_input_tokens ?? 0),
 });
 
-export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; plugins?: string[]; onRate?: (info: any) => void }
+export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; plugins?: string[]; onRate?: (info: any) => void; mcpServers?: Record<string, unknown> }
 interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage }
 
 // One unattended turn through the SDK: never asks (dontAsk denies anything not allowed), stops at the timeout or
@@ -405,6 +411,7 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   try {
     for await (const m of query({ prompt, options: {
       cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal), settings: sessionSettings() as any,
+      ...(o.mcpServers ? { mcpServers: o.mcpServers as any } : {}),
       plugins: (o.plugins ?? [path.join(o.cwd, '.justcode', 'plugin')]).map(p => ({ type: 'local' as const, path: p })),
       ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
@@ -426,14 +433,15 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
 export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage }
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
-export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
+export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
   const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
   const base = {
-    permissionMode: 'dontAsk' as const, allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
+    permissionMode: 'dontAsk' as const, allowedTools: o.web ? [...allow, PLAYWRIGHT_TOOLS] : allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
     systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
   };
+  o = o.web ? { ...o, mcpServers: playwrightMcp(o.shots) } : o;
   let r = await headless(prompt, o, { ...base, ...(o.resume ? { resume: o.resume } : {}) });
   let usage = r.usage, sessionId = r.sessionId;
   const read = (x: typeof r) => x.structured !== undefined ? toVerdict(x.structured) : parseVerdict(x.text);

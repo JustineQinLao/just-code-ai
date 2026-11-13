@@ -7,7 +7,7 @@ import { Store, Task } from './store';
 import * as g from './git';
 import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
-import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin } from './claude';
+import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, playwrightMcp, PLAYWRIGHT_TOOLS } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
 import * as C from './checks';
@@ -335,10 +335,11 @@ export class Runner {
     const s = new Session({
       bin, cwd, sessionId, resume, mode: effectiveMode(task.mode, set.bypassAll), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
+      mcpServers: A.isUiTask(task) ? playwrightMcp(A.shotsDir(this.root, id)) : undefined,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
-      allowed: [...new Set([...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
+      allowed: [...new Set([...(A.isUiTask(task) ? [PLAYWRIGHT_TOOLS] : []), ...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
       env: this.folderEnv(id, cwd), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
     });
@@ -803,12 +804,12 @@ export class Runner {
       let brief = ''; try { brief = fs.readFileSync(A.briefFile(this.root, id), 'utf8').replace(/\n## When you finish[\s\S]*$/, '').trim(); } catch { /* none yet */ }
       try { brief += `\n\n## Approved plan\n${fs.readFileSync(A.planFile(this.root, id), 'utf8').slice(0, 6000)}`; } catch { /* no plan */ }
       const passed = this.store.task(id)?.checks?.state === 'pass' ? this.store.task(id)!.checks!.results!.filter(r => r.ok).map(r => r.cmd) : [];
-      const prompt = reviewPrompt(t, t.base ?? t.startHead ?? 'HEAD', diff, { shots, adb: device, cli: this.d.cli, handoff: A.readHandoff(this.root, id), brief, checks: passed }) + (retry
+      const prompt = reviewPrompt(t, t.base ?? t.startHead ?? 'HEAD', diff, { shots, adb: device, cli: this.d.cli, web: UI_FILE.test(diff), handoff: A.readHandoff(this.root, id), brief, checks: passed }) + (retry
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
         const r = await runReview(p, { bin, cwd, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(),
-          timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli, resume });
+          timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, web: UI_FILE.test(diff), adbBin: device?.bin, cli: this.d.cli, resume });
         if (r.usage) {
           usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });
           const cur = this.store.task(id);

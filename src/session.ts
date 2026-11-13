@@ -50,6 +50,7 @@ export interface SessionOptions {
   readOnly?: boolean;         // block all edits (the planner never changes code)
   agent?: string;
   agents?: Record<string, { description: string; prompt: string; tools?: string[]; model?: string }>;
+  mcpServers?: Record<string, { type?: 'stdio'; command: string; args?: string[] }>;
   allowed: string[];          // rules approved without asking (project + settings + task)
   rules: () => string[];      // current rules, re-read on each request: "Always" on another card applies here at once
   addDirs?: string[];
@@ -140,6 +141,7 @@ export class Session {
       ...(o.readOnly ? { disallowedTools: ['Agent', 'Task', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'EnterPlanMode', 'ExitPlanMode'] } : o.subagents ? {} : { disallowedTools: ['Agent', 'Task'] }),
       ...(o.agent ? { agent: o.agent } : {}),
       ...(o.agents && Object.keys(o.agents).length ? { agents: o.agents as any } : {}),
+      ...(o.mcpServers ? { mcpServers: o.mcpServers } : {}),
       ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
       ...(o.addDirs?.length ? { additionalDirectories: o.addDirs } : {}),
       ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),

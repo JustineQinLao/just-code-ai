@@ -108,10 +108,10 @@ there today.
 3. Keep the structure and order. Translate the classes into the app's styling with the shared tokens.
 4. Check with headless Chrome, never a visible window and never by eye from the code alone. For each screen you
    built, take two screenshots at the design's \`w\`×\`h\` from \`canvas.json\` (e.g. 390×844):
-   - the design: \`npx playwright screenshot --browser=chromium --viewport-size=390,844 "file://<copy>/project/<Name>.dc.html" <shots>/<Name>-design.png\`
+   - the design: open \`file://<copy>/project/<Name>.dc.html\` with the Playwright MCP (browser_resize to the design size, then browser_take_screenshot with filename <shots>/<Name>-design.png)
      (<shots> is the absolute path under "## Screenshots go to" in your brief; the \`.dc.html\` renders close enough without the editor: its \`.css\` is beside it)
-   - the build: the same command on the app's route, signed in as the screen's role (use the project's visual
-     runner in headless mode if it has one), saved as \`<shots>/<Name>-app.png\`
+   - the build: the same on the app's route, signed in as the screen's role, saved as \`<shots>/<Name>-app.png\`
+     Never use npx playwright or any other way to take screenshots.
    Read both images and compare: sections, labels, order, colors, type, spacing. Fix what differs, then re-shoot only
    that screen. Run only the tests for the code you changed. List any difference left in the handoff, with both
    image paths. Do not re-shoot unchanged screens or re-run passing suites.

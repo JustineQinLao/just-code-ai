@@ -5,7 +5,7 @@ import { adb } from './claude';
 import { execFileSync } from 'child_process';
 
 // JustCode CLI:
-//   node cli.js screenshot <out.png> [--serial id]   saves the Android device's screen (adb screencap) without a
+//   node cli.js screenshot <out.png> [--serial id]   Android only: saves the Android device's screen (adb screencap) without a
 //                                     shell redirect, which unattended Claude sessions are not allowed to use
 
 function screenshot(out: string | undefined, serial?: string) {
@@ -28,7 +28,7 @@ function main(argv: string[]) {
     const si = rest.indexOf('--serial');
     return screenshot(rest.find((a, i) => !a.startsWith('--') && (si < 0 || i !== si + 1)), si >= 0 ? rest[si + 1] : undefined);
   }
-  console.log('Usage: cli.js screenshot <out.png> [--serial id]');
+  console.log('Usage: cli.js screenshot <out.png> [--serial id]  (Android device screen only; use the Playwright MCP for web pages)');
   return cmd ? 1 : 0;
 }
 
