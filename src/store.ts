@@ -22,6 +22,7 @@ export interface Task {
   where?: 'branch' | 'direct';  // branch (default): own worktree + PR; direct: runs in the project checkout, no merge
   startHead?: string;         // direct: HEAD when the task started
   directFiles?: string[];     // direct: files changed in the checkout during the task (git status minus what was dirty before)
+  warning?: string;           // a note on the card (e.g. a direct task has uncommitted files while this branch task runs)
   pastSessions?: string[];    // earlier sessions of this task (replaced by a fresh one when they grew big)
   sessionId?: string;         // Claude session, fixed up front with --session-id
   base?: string;              // branch the task forks from and merges back into

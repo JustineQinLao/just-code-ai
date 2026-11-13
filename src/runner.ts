@@ -231,6 +231,9 @@ export class Runner {
         throw new Error('Another task is already working in the project folder. Wait for it to finish, or run this one on its own branch.');
       if (this.busy.size) throw new Error('A merge is running. Start this task in the project folder when it finishes.');
     }
+    // A branch task started while a direct task holds uncommitted files: say so once on its card.
+    const od = t.where !== 'direct' && !t.warning ? this.openDirect(id) : undefined;
+    if (od?.directFiles?.length) this.store.updateTask(id, { warning: `"${od.title}" has uncommitted files in the project folder; merging waits until you Finish or Discard it.` });
     this.starting.add(id); // claimed before the awaits, so Run all never double-starts a task
     this.changed();
     try {
@@ -658,18 +661,27 @@ export class Runner {
     this.pumpTimer.unref?.();
   }
 
+  // The direct task (other than `except`) still working or waiting to be finished in the project folder.
+  private openDirect(except?: string) {
+    return this.store.data.tasks.find(o => o.id !== except && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done'
+      && (o.directFiles?.length || this.starting.has(o.id) || this.sessions.get(o.id)?.open));
+  }
+
   private pump() {
     if (this.disposed || this.d.limits.held() || !this.holdsLease()) return;
     const q = [...this.store.queue];
     let slots = this.d.settings().maxParallel - this.inFlight().length, changed = false;
+    const keep: string[] = [];
     while (slots > 0 && q.length) {
       const id = q.shift()!;
       changed = true;
       if (this.store.task(id)?.status !== 'todo') continue; // started by hand, moved or deleted meanwhile
+      const next = this.store.task(id)!;
+      if (next.where === 'direct' && !next.init && this.openDirect(id)) { keep.push(id); continue; } // one direct task at a time
       slots--;
       this.run(id).catch(e => { this.d.notify('error', `${this.store.task(id)?.title ?? 'Task'}: ${e.message}`, id); });
     }
-    if (changed) this.store.setQueue(q);
+    if (changed) this.store.setQueue([...keep, ...q]);
   }
 
   /* ---------- keeping cards moving ---------- */
@@ -897,6 +909,8 @@ export class Runner {
       }
       if (!t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
       if (!t.branch || !t.base) throw new Error('Nothing to merge yet');
+      const dirty = this.openDirect(id);
+      if (dirty?.directFiles?.length) throw new Error(`"${dirty.title}" has uncommitted files in the project folder. Finish or Discard it first, then merge.`);
       const s = this.sessions.get(id);
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
       if (this.checking.has(id)) throw new Error('The checks are still running in this task\'s folder. Merge when they finish.');

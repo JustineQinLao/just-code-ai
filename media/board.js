@@ -97,7 +97,7 @@
     if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : t.asks[0].kind === 'plan' ? 'Plan ready for your OK' : 'Claude needs your approval', tone: 'warn' };
     if (t.phase) return { text: t.phase, tone: 'run' };
     if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run' };
-    if (t.run === 'running') return { text: `Working${lastTool(t)}`, tone: 'run', action: ['Open', () => openTask(t.id)] };
+    if (t.run === 'running') return { text: `Working${lastTool(t)}${t.warning ? ` · ⚠ ${t.warning}` : ''}`, tone: 'run', action: ['Open', () => openTask(t.id)] };
     if (t.remote) return { text: 'In Remote Control: continue in the Claude app or claude.ai/code. Close its terminal to bring it back.', tone: 'run' };
     if (t.limited) return { text: 'Paused by the usage limit. Continues by itself after the reset.', tone: 'muted' };
     if (t.error) return { text: `Stopped: ${t.error}`, tone: 'err', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
