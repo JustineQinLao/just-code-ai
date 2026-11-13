@@ -94,3 +94,20 @@ test('runner with a fake SDK: a direct task edits the checkout, is reviewed, and
   assert.match(sh('status', '--porcelain'), /\?\? mine\.txt/);
   r.dispose();
 });
+
+test('runner with a fake SDK: a quick task runs in the checkout with no review, and Finish commits its files', async () => {
+  const { root, sh } = repo();
+  const { store, r } = runner(root, []);
+  const before = reviews;
+  const t = store.addTask({ title: 'Quick d', description: 'File: d.txt', mode: 'auto', where: 'direct', quick: true });
+  await r.run(t.id);
+  await until('turn end', () => store.task(t.id)?.status === 'review');
+  await new Promise(res => setTimeout(res, 300));
+  assert.equal(reviews, before, 'no AI review');
+  assert.equal(store.task(t.id)!.review, undefined);
+  assert.deepEqual(store.task(t.id)!.directFiles, ['d.txt']);
+  await r.merge(t.id);
+  assert.equal(store.task(t.id)!.status, 'done');
+  assert.match(sh('log', '--format=%s', '-n', '1'), /^Quick d/);
+  r.dispose();
+});

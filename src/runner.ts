@@ -481,7 +481,7 @@ export class Runner {
     const cur = this.store.task(id);
     // An artifact task's page is published (again, after a change) once Claude has written it.
     if (cur?.output === 'artifact' && fs.existsSync(A.artifactFile(this.root, id))) { this.d.publish?.(id); return; }
-    if (cur?.status !== 'review' || !(cur.branch || (cur.where === 'direct' && !cur.init)) || this.emptyAt.has(id)) return;
+    if (cur?.status !== 'review' || !(cur.branch || (cur.where === 'direct' && !cur.init)) || this.emptyAt.has(id) || cur.quick) return;
     if (await this.check(id) === 'fail') return;
     if (this.d.settings().review.auto) await this.review(id);
   }

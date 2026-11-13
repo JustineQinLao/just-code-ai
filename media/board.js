@@ -109,7 +109,8 @@
           if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTask(e.metaKey || e.ctrlKey); }
         }, onpaste: pasteImages })),
         btn('Details ▾', () => toggleMore(), 'ghost', 'Details, a "Done when" checklist, files, sprint'),
-        btn('Add', () => addTask(false), 'primary', 'Adds to To do. ⌘/Ctrl+Enter adds and runs it.')),
+        btn('⚡ Quick', () => addTask(true, true), '', 'Run it now in your workspace: no branch, no checks, no AI review. Then Finish (commit) or Discard. For questions and small edits.'),
+        btn('Add', () => addTask(false), 'primary', 'Adds to To do: its own branch or the workspace, checked and reviewed. ⌘/Ctrl+Enter adds and runs it.')),
       h('div', { id: 'more', class: 'more', hidden: true },
         complete(h('textarea', { id: 'desc', rows: 2, placeholder: 'Goal and details. / skills · @ files · paste screenshots', onpaste: pasteImages })),
         h('textarea', { id: 'done', rows: 2, placeholder: 'Done when (one check per line), e.g.\nthe toggle persists after a reload\nnpm test passes' }),
@@ -241,7 +242,7 @@
   function drawFiles() {
     $('#files').replaceChildren(...files.map((f, i) => h('span', { class: 'chip', title: f }, base(f), btn('×', () => { files.splice(i, 1); drawFiles(); }, 'x', 'Remove'))));
   }
-  function addTask(start) {
+  function addTask(start, quick = false) {
     const title = $('#title').value.trim();
     if (!title) return $('#title').focus();
     const sprint = $('#sprintSel').value;
@@ -250,7 +251,7 @@
     // "make an artifact…", "artifact of the API": the result is a published page, not a code change.
     const output = $('#output').value;   // '' = automatic: the host decides from the text (resolveOutput)
     post('addTask', { title, description, output, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
-      sprintId: sprint || undefined, images, files, sources: sprintSrcs(sprint).map(s => s.id).filter(id => !srcOff.has(id)), start });
+      sprintId: sprint || undefined, images, files, sources: sprintSrcs(sprint).map(s => s.id).filter(id => !srcOff.has(id)), start, ...(quick ? { quick: true } : {}) });
     $('#title').value = ''; $('#desc').value = ''; $('#done').value = ''; $('#output').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
   }
 

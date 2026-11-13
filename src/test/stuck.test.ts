@@ -117,3 +117,17 @@ test('output: automatic picks an artifact page for a mockup, the form can force 
   assert.equal(resolveOutput('code', 'mockup data for tests'), undefined);
   assert.equal(resolveOutput('artifact', 'Q3 numbers'), 'artifact');
 });
+
+test('quick: done without checks or review; Finish commits, Close when nothing changed', () => {
+  const settings = { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 };
+  const posts: any[] = [];
+  const c = { settings, queue: { queued: [] }, post: (type: string, m: any) => posts.push({ type, ...m }), open: () => {}, dur: () => '', lastTool: () => '' };
+  const files = { id: 'q', title: 'Q', status: 'review', where: 'direct', quick: true, run: 'idle', directFiles: ['a.ts'], reply: 'Renamed it.' };
+  const n = status.nextStep(files, c);
+  assert.match(n.text, /⚡ Done: changed 1 file/);
+  assert.equal(n.actions[0][0], '✓ Finish (commit)');
+  assert.equal(status.lane(files, settings), 'review');
+  const answer = status.nextStep({ ...files, directFiles: [], reply: 'The retry limit is 3.' }, c);
+  assert.match(answer.text, /⚡ The retry limit is 3\./);
+  assert.deepEqual(answer.actions.map((a: any) => a[0]), ['Reply', '✓ Close']);
+});

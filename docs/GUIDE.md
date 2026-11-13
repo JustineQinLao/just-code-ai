@@ -77,6 +77,8 @@ It never touches `CLAUDE.md`, `.claude/`, `docs/` or your own task files. Existi
 
 ## 3. Adding tasks
 
+**⚡ Quick** (next to **Add**) runs the prompt at once in your workspace: no branch, no checks, no AI review. Use it for a question or a small edit. When Claude finishes, the card shows its answer and the files it changed: **Finish** commits them on the current branch, **Discard** reverts them, **Close** when nothing changed.
+
 Type what you want in the box at the top:
 
 - **Enter** or **Add** adds the task to **To do**.

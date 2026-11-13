@@ -93,7 +93,7 @@ export async function handle(m: any, remote = false) {
       const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
       const output = resolveOutput(m.output, `${m.title}\n${m.description ?? ''}`);
       const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-        mode: m.mode || setting('defaultMode', 'auto'), where: resolveWhere({ where: m.where, artifact: !!output, setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote }),
+        mode: m.mode || setting('defaultMode', 'auto'), ...(m.quick ? { quick: true } : {}), where: m.quick ? 'direct' : resolveWhere({ where: m.where, artifact: !!output, setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote }),
         output,
         files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
       A.logPrompt(r.root, { kind: 'task', text: [task.title, task.description].filter(Boolean).join('\n\n'), taskId: task.id, title: task.title });
@@ -212,7 +212,7 @@ export async function handle(m: any, remote = false) {
     case 'openFile': return openTaskFile(r, t, m.file);
     case 'openFolder': if (t?.worktree) void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); return;
     case 'merge':
-      if (t && t.where === 'direct' && !t.init) { if (await confirm(`Finish "${t.title}"? Its ${t.directFiles?.length ?? 0} file(s) are committed on the current branch.`, 'Finish')) await r.merge(m.id, false, who); return; }
+      if (t && t.where === 'direct' && !t.init) { if (!t.directFiles?.length || await confirm(`Finish "${t.title}"? Its ${t.directFiles?.length ?? 0} file(s) are committed on the current branch.`, 'Finish')) await r.merge(m.id, false, who); return; }
       if (t && await confirm(`Merge "${t.title}" (${t.branch}) into ${t.base}?`, 'Merge')) await r.merge(m.id, false, who);
       return;
     case 'mergeReady': {

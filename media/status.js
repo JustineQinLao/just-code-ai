@@ -18,6 +18,7 @@
     if (t.status === 'review' && t.review?.state === 'error' && !t.reviewing) return 'needs';
     if (t.status === 'review' && t.review?.state === 'pass' && t.review.hold) return 'needs';
     if (t.phase) return 'work';
+    if (t.quick && t.status === 'review' && !busy(t)) return 'review';   // ⚡ Quick: done, nothing to review
     // Claude finished but changed nothing to review (a branch with no new commits, a workspace task with no files).
     if (t.status === 'review' && !t.review && !t.reviewing && t.reply && !busy(t) && (t.where !== 'direct' || !(t.directFiles || []).length)) return 'needs';
     if (t.run && t.run !== 'idle' || t.remote || t.limited || t.status === 'doing') return 'work';
@@ -57,6 +58,12 @@
     }
     if (t.reviewing) return { text: `AI reviewer is testing it · ${c.dur(t.reviewing)}`, tone: 'run', actions: [] };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Claude is fixing ${open(r).length} review issue(s) (round ${r.attempts} of ${max})`, tone: 'run', actions: [] } : { text: 'Paused', tone: 'muted', actions: [resume] };
+    if (t.quick && t.status === 'review') {
+      const n = (t.directFiles || []).length;
+      return n ? { text: `⚡ Done: changed ${n} file(s)${t.reply ? `. "${t.reply.slice(0, 120)}"` : ''}`, tone: 'ok',
+          actions: [['✓ Finish (commit)', () => post('merge', { id })], ['See changes', () => c.open(id, 'changes')], ['Reply', () => c.open(id, 'activity')], discard] }
+        : { text: `⚡ ${t.reply ? t.reply.slice(0, 200) : 'Done, no files changed'}`, tone: 'ok', actions: [['Reply', () => c.open(id, 'activity')], ['✓ Close', () => post('merge', { id })]] };
+    }
     if (t.output === 'artifact') {
       if (t.publishing) return { text: 'Publishing the page to claude.ai…', tone: 'run', actions: [] };
       if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', actions: [['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], ['Finish', () => post('move', { id, status: 'done' })]] };
