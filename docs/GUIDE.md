@@ -86,8 +86,9 @@ Type what you want in the box at the top:
   - **Advanced**:
     - **Agent**: an agent from `.claude/agents`. *Default* is plain Claude.
     - **Permissions**: see section 7.
-    - **Runs in**: *Own branch* (default, reviewed and merged) or *Project folder* (for deploys, syncs and
-      releases; finish it with **✓ Done**).
+    - **Runs in**: *Direct* or *Own branch*. A **direct** task works in your checkout and is the default for tasks
+      outside a sprint (deploys, syncs, small edits). A **branch** task gets its own branch and folder, and is the
+      default inside a sprint. Only one direct task runs at a time.
 
 A good task is one change that can be built, reviewed and merged on its own, with a *Done when* a reviewer can check.
 
@@ -238,6 +239,11 @@ When Claude finishes a turn:
    issues remain after that, the card waits under **Needs you**.
 5. If the review passes, press **✓ Merge**, or turn on *Merge automatically* in ⚙. A change the reviewer flags as
    critical is never merged automatically. A task is never merged while its checks are still running.
+
+**Direct tasks** have no branch: their changed files stay uncommitted in your checkout. They get the same checks and
+AI review, then **Finish** commits just those files, or **Discard** reverts them. While a direct task holds
+uncommitted files, a branch task's **Merge** is refused (Finish or Discard it first), a branch task started meanwhile
+shows a one-time warning on its card, and Run all starts only one direct task at a time.
 
 Merging brings the latest base into the task branch first, inside the task's folder. If that conflicts, the card lists
 the files; press **Resolve with Claude**, or fix them yourself and press **Mark resolved**. Your own checkout is never

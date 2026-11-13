@@ -330,6 +330,30 @@ test('requestRun: honors the one-at-a-time limit, queues the rest', async () => 
   r.dispose();
 });
 
+test('direct tasks: merge refused while one holds files; pump starts only one', async () => {
+  const root = tmp();
+  const store = new Store(root);
+  const settings: any = { maxParallel: 3, review: { auto: false } };
+  const msgs: string[] = [];
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: (_k: string, m: string) => { msgs.push(m); }, choose: async () => 'x', cli: '' });
+  const calls: string[] = [];
+  r.run = async (id: string) => { calls.push(id); };
+  const d1 = store.addTask({ title: 'D1', mode: 'auto', where: 'direct' } as any), d2 = store.addTask({ title: 'D2', mode: 'auto', where: 'direct' } as any);
+  store.updateTask(d1.id, { status: 'review', directFiles: ['a.txt'] });
+  const b = store.addTask({ title: 'B', mode: 'auto', where: 'branch' } as any);
+  store.updateTask(b.id, { status: 'review', branch: 'jc/b', base: 'main', worktree: path.join(root, 'wt') });
+  await r.merge(b.id);
+  assert.ok(msgs.some(m => /"D1" has uncommitted files.*Finish or Discard/.test(m)), msgs.join('|'));
+  store.setQueue([d2.id]);
+  r.pump();
+  assert.deepEqual(calls, []);
+  assert.deepEqual(store.queue, [d2.id]);
+  store.updateTask(d1.id, { status: 'done' });
+  r.pump();
+  assert.deepEqual(calls, [d2.id]);
+  r.dispose();
+});
+
 test('setup skill: only writes under .justcode and runs no CLI command', () => {
   const skill = setupSkill();
   assert.ok(skill.includes('name: just-code-setup') && skill.includes('disable-model-invocation: true'));
