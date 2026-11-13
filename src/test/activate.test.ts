@@ -43,11 +43,12 @@ test('extension: activates, opens the board, handles messages, writes only .just
     assert.equal(handlers.length, 1);
     const send = (m: any) => handlers[0]({ root, ...m });
     await send({ type: 'ready' });
-    await send({ type: 'addTask', title: 'Smoke task' });
+    await send({ type: 'addTask', title: 'Smoke task', mode: 'bypassPermissions' });
     await send({ type: 'phoneRevoke', id: 'all' });
     await new Promise(r => setTimeout(r, 200));
     const state = posted.filter(m => m?.type === 'state').pop();
     assert.deepEqual(state.board.tasks.map((t: any) => t.title), ['Smoke task']);
+    assert.equal(state.board.tasks[0].mode, 'bypassPermissions', 'a task with no session keeps its own mode in the board state');
     assert.ok(state.policy && Array.isArray(state.registry) && state.phone);
     assert.deepEqual(fs.readdirSync(root).sort(), ['.git', '.justcode']);
     ext.deactivate();

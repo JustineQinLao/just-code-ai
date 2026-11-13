@@ -177,7 +177,9 @@ export class Runner {
       phase: this.phase.get(id),
       run: this.starting.has(id) ? 'starting' : s?.open ? s.state : undefined,
       asks: s ? [...s.asks.values()] : [], agents: s ? [...s.agents.values()] : [],
-      context: s?.context ?? 0, output: s?.output ?? 0, modeNote: s?.modeNote, mode: s?.mode, modelUsed: s?.model,
+      context: s?.context ?? 0, output: s?.output ?? 0, modeNote: s?.modeNote, modelUsed: s?.model,
+      // The session's mode only while one runs: board state spreads this over the task, and `mode: undefined` would hide the task's own mode.
+      ...(s?.mode ? { mode: s.mode } : {}),
       reviewing: r?.started, busy: this.busy.has(id), queued: this.store.queue.includes(id),
     };
   }
