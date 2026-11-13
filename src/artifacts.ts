@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Task } from './store';
+import * as R from './registry';
 
 // Artifacts are the basis of every task: small written files each step reads instead of re-exploring the code or
 // carrying a long history. All live under the project's .justcode/ (outside git):
@@ -29,6 +30,7 @@ export function addLinkSources(root: string, text: string) {
   const all = loadSources(root), have = new Set(all.map(s => artifactKey(s.ref)));
   const add = artifactLinksIn(text).filter(l => !have.has(l)).map(ref => ({ id: Math.random().toString(16).slice(2, 10), kind: 'url' as const, ref, note: 'claude.ai artifact from a prompt' }));
   if (add.length) saveSources(root, [...all, ...add]);
+  try { for (const l of artifactLinksIn(text)) R.upsert(root, l, { kind: 'input' }); } catch { /* the registry is a convenience */ }
   return add;
 }
 // The sources section of a planning chat's first message: where each one is, as a task's brief lists them.

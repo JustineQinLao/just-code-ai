@@ -3,7 +3,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { Store, Task, resolveWhere } from './store';
 import { Runner, RunnerSettings } from './runner';
@@ -13,6 +13,7 @@ import { agentLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discover
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
+import * as R from './registry';
 import * as C from './checks';
 import * as D from './design';
 import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
@@ -867,6 +868,11 @@ export function activate(context: vscode.ExtensionContext) {
     const done = (url?: string) => {
       clearInterval(timer); sub.dispose(); publishing.delete(key);
       r.store.updateTask(id, { publishing: undefined, ...(url ? { artifactUrl: url } : {}) });
+      if (url) try {
+        const html = fs.readFileSync(file, 'utf8');
+        R.link(root, url, id, t.sprintId, 'output');
+        R.upsert(root, url, { title: R.titleOf(html), sha256: createHash('sha256').update(html).digest('hex') });
+      } catch { /* the registry is a convenience */ }
       out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] info: ${url ? `Artifact for "${t.title}": ${url}` : `No artifact link for "${t.title}"`}`);
       if (url) {
         term.dispose();
@@ -943,6 +949,7 @@ export function activate(context: vscode.ExtensionContext) {
         fs.rmSync(dir, { recursive: true, force: true });
         fs.rmSync(`${dir}.html`, { force: true }); // the single-page copy older versions saved
         fs.renameSync(tmp, dir);
+        try { R.recordSaved(root, src.ref, src.id); } catch { /* the registry is a convenience */ }
         term.dispose();
       } else fs.rmSync(tmp, { recursive: true, force: true });
       push();

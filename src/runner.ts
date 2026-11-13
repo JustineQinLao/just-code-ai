@@ -7,6 +7,7 @@ import { Store, Task } from './store';
 import * as g from './git';
 import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
+import * as R from './registry';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
@@ -325,6 +326,16 @@ export class Runner {
     });
   }
 
+  // The registry learns which artifacts a task is built on: its artifact sources and any links in its text.
+  private linkArtifacts(t: Task, sources: A.Source[]) {
+    try {
+      const picked = t.sources ? sources.filter(s => t.sources!.includes(s.id)) : sources;
+      const urls = [...picked.filter(s => s.kind === 'url' && A.isArtifactLink(s.ref)).map(s => s.ref),
+        ...A.artifactLinksIn([t.title, t.description ?? '', ...(t.files ?? [])].join('\n'))];
+      for (const u of new Set(urls.map(A.artifactKey))) R.link(this.root, u, t.id, t.sprintId);
+    } catch { /* the registry is a convenience */ }
+  }
+
   private async start(t: Task, bin: string, cwd: string, patch: Partial<Task>, prompt?: string) {
     const id = t.id;
     const sessionId = t.sessionId ?? randomUUID();
@@ -333,6 +344,7 @@ export class Runner {
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
     const sources = A.sprintSources(A.loadSources(this.root), t.sprintId ? this.store.data.sprints.find(x => x.id === t.sprintId) : undefined);
     const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), t.init ? setupSkillBody() : '', t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!installedPlugin('frontend-design', undefined, 'skills')) : '', prompt].filter(Boolean).join('\n\n');
+    if (!resume) this.linkArtifacts(t, sources);
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
     const carry = carryOver(this.root, cwd);
@@ -1069,6 +1081,7 @@ export class Runner {
     await this.serial(() => this.cleanup(t)).catch(e => this.d.notify('error', e.message));
     fs.rmSync(path.join(this.root, '.justcode', 'attachments', id), { recursive: true, force: true });
     A.removeTaskDir(this.root, id);
+    try { R.unlinkTask(this.root, id); } catch { /* the registry is a convenience */ }
     this.store.deleteTask(id);
   }
 
