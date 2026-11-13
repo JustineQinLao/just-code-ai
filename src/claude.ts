@@ -323,7 +323,12 @@ export function adb(): { bin: string; devices: string[] } | undefined {
 // The server-level rule allows all of the server's tools.
 export const PLAYWRIGHT_TOOLS = 'mcp__playwright';
 export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@0.0.85', '--headless', '--isolated', '--output-dir', shots] } });
-export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); pass filename as ${shots}/<name>.png so it lands there. Never use npx playwright, a screenshot script or a visible browser.`;
+export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); pass just filename "<name>.png" (the server saves it into ${shots}). If the browser is missing, call browser_install once and retry. Never use npx playwright, a screenshot script or a visible browser.`;
+
+// Tool options for a UI session or review: the MCP server and its allow rule are added together, or not at all.
+export function webOptions(on: boolean, shots: string, allowed: string[]) {
+  return on ? { allowed: [PLAYWRIGHT_TOOLS, ...allowed], mcpServers: playwrightMcp(shots) } : { allowed, mcpServers: undefined };
+}
 
 // Commands the reviewer may run: read git, run tests and builds, adb, screenshots. Edits stay blocked.
 export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status', 'ls', 'cat',
@@ -435,14 +440,15 @@ export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
 export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
-  const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
+  const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)]);
+  const allow = w.allowed;
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
   const base = {
-    permissionMode: 'dontAsk' as const, allowedTools: o.web ? [...allow, PLAYWRIGHT_TOOLS] : allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
+    permissionMode: 'dontAsk' as const, allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
     systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
   };
-  o = o.web ? { ...o, mcpServers: playwrightMcp(o.shots) } : o;
+  o = { ...o, mcpServers: w.mcpServers };
   let r = await headless(prompt, o, { ...base, ...(o.resume ? { resume: o.resume } : {}) });
   let usage = r.usage, sessionId = r.sessionId;
   const read = (x: typeof r) => x.structured !== undefined ? toVerdict(x.structured) : parseVerdict(x.text);

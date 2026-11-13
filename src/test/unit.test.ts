@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
+import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store, resolveWhere } from '../store';
 import { projectSetup } from '../setup';
@@ -1165,4 +1165,12 @@ test('playwright MCP: pinned, headless, saves into shots; review prompt UI secti
   const none = reviewPrompt(task, 'main', 'd', { shots: '/s' });
   assert.doesNotMatch(none, /# UI checks/);
   assert.doesNotMatch(reviewPrompt(task, 'main', 'd', { shots: '/s', adb: { bin: 'adb', devices: ['a'] }, cli: 'c.js' }), /browser_take_screenshot/);
+});
+
+test('webOptions: MCP server and allow rule come together', () => {
+  const on = webOptions(true, '/s', ['Read']);
+  assert.deepEqual(on.allowed, [PLAYWRIGHT_TOOLS, 'Read']); assert.ok(on.mcpServers?.playwright);
+  const off = webOptions(false, '/s', ['Read']);
+  assert.deepEqual(off.allowed, ['Read']); assert.equal(off.mcpServers, undefined);
+  assert.match(reviewPrompt({ id: 'x', title: 't' } as any, 'm', 'd', { shots: '/s', web: true }), /browser_install/);
 });
