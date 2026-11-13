@@ -46,6 +46,23 @@ export const artifactFile = (root: string, id: string) => path.join(taskDir(root
 export const shotsDir = (root: string, id: string) => path.join(taskDir(root, id), 'shots');
 export const reviewFile = (root: string, id: string) => path.join(taskDir(root, id), 'review.md');
 export const checksLog = (root: string, id: string) => path.join(taskDir(root, id), 'checks.log');
+export const transcriptFile = (root: string, id: string) => path.join(taskDir(root, id), 'transcript.jsonl');
+// Copies the new lines of a session's transcript into the task's own archive, which outlives the task folder and
+// Claude Code's per-folder session store. Several sessions (fresh fix rounds) append to the same file in order.
+export function archiveTranscript(root: string, id: string, source: string, sessionId: string) {
+  let text: string;
+  try { text = fs.readFileSync(source, 'utf8'); } catch { return 0; }
+  const lines = text.split('\n').filter(Boolean);
+  const mark = path.join(taskDir(root, id), '.transcript.json');
+  let seen: Record<string, number> = {};
+  try { seen = JSON.parse(fs.readFileSync(mark, 'utf8')) ?? {}; } catch { /* first copy */ }
+  const from = seen[sessionId] ?? 0;
+  if (lines.length <= from) return 0;
+  fs.mkdirSync(taskDir(root, id), { recursive: true });
+  fs.appendFileSync(transcriptFile(root, id), lines.slice(from).join('\n') + '\n');
+  fs.writeFileSync(mark, JSON.stringify({ ...seen, [sessionId]: lines.length }));
+  return lines.length - from;
+}
 export const planFile = (root: string, id: string) => path.join(taskDir(root, id), 'plan.md');
 export const writePlan = (root: string, id: string, plan: string) => write(planFile(root, id), plan.trim() + '\n');
 export const progressFile = (root: string) => jc(root, 'progress.md');

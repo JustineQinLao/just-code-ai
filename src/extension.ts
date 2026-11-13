@@ -9,7 +9,7 @@ import { Store, Task, resolveWhere } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
 import { pluginDir } from './plugin';
-import { agentLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
+import { agentLog, archivedLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
@@ -203,7 +203,7 @@ export function activate(context: vscode.ExtensionContext) {
     const r = runner();
     if (!r) { emit({ type: 'state', empty: true, roots: [], setup, version: context.extension.packageJSON.version }); return; }
     const tasks = r.store.data.tasks.map(t => ({ ...t, ...r.live(t.id),
-      artifacts: { plan: fs.existsSync(A.planFile(r.root, t.id)), brief: fs.existsSync(A.briefFile(r.root, t.id)), handoff: fs.existsSync(A.handoffFile(r.root, t.id)), review: fs.existsSync(A.reviewFile(r.root, t.id)) } }));
+      artifacts: { plan: fs.existsSync(A.planFile(r.root, t.id)), brief: fs.existsSync(A.briefFile(r.root, t.id)), handoff: fs.existsSync(A.handoffFile(r.root, t.id)), review: fs.existsSync(A.reviewFile(r.root, t.id)), transcript: fs.existsSync(A.transcriptFile(r.root, t.id)) } }));
     const s = runnerSettings();
     emit({
       type: 'state',
@@ -232,13 +232,20 @@ export function activate(context: vscode.ExtensionContext) {
     sendSteps();
   }
 
+  // A closed task's activity: Claude Code's saved transcript, or the task's own archive once that is gone.
+  function savedLog(r: Runner, t: Task) {
+    if (!t.sessionId) return [];
+    const dir = r.sessionDir(t.sessionId, t);
+    return dir ? sessionLog(dir, t.sessionId) : archivedLog(A.transcriptFile(r.root, t.id));
+  }
+
   // The open task's activity: live from its session, or from Claude Code's saved transcript once it has closed.
   function sendSteps(force = false) {
     if (!sinks.size || !watching) return;
     const r = runners.get(watching.root), t = r?.store.task(watching.id);
     if (!r || !t) return;
     const live = r.steps(t.id);
-    const steps = live ?? (t.sessionId ? sessionLog(r.sessionDir(t.sessionId, t) ?? r.root, t.sessionId) : []);
+    const steps = live ?? savedLog(r, t);
     const last = steps.length ? steps[steps.length - 1].time + steps[steps.length - 1].text.slice(0, 40) : '';
     if (!force && steps.length === watching.n && last === watching.last) return;
     watching.n = steps.length; watching.last = last;
@@ -312,7 +319,7 @@ export function activate(context: vscode.ExtensionContext) {
   async function detailOf(id: string): Promise<any> {
     const r = runner(), t = r?.store.task(id); if (!r || !t) return { files: [], checks: [], error: 'no such task' };
     {
-        const steps = phoneSteps(r.steps(t.id) ?? (t.sessionId ? sessionLog(r.sessionDir(t.sessionId, t) ?? r.root, t.sessionId) : []));
+        const steps = phoneSteps(r.steps(t.id) ?? savedLog(r, t));
         return { steps, ...await phoneDetail(t, async dir => {
           const base = t.base ?? 'HEAD', stat = new Map<string, [number, number]>();
           const num = await g.git(dir, ['diff', '--numstat', '--no-renames', '-z', `${base}...HEAD`]).catch(() => '');
@@ -742,8 +749,8 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       case 'openArtifact': {
-        const f = { brief: A.briefFile, handoff: A.handoffFile, review: A.reviewFile, plan: A.planFile, checks: A.checksLog,
-          setup: (root: string, id: string) => path.join(A.taskDir(root, id), 'setup.log') }[m.which as 'brief' | 'handoff' | 'review' | 'plan' | 'checks' | 'setup']?.(r.root, m.id) ?? (m.which === 'progress' ? A.progressFile(r.root) : undefined);
+        const f = { brief: A.briefFile, handoff: A.handoffFile, review: A.reviewFile, plan: A.planFile, checks: A.checksLog, transcript: A.transcriptFile,
+          setup: (root: string, id: string) => path.join(A.taskDir(root, id), 'setup.log') }[m.which as 'brief' | 'handoff' | 'review' | 'plan' | 'checks' | 'setup' | 'transcript']?.(r.root, m.id) ?? (m.which === 'progress' ? A.progressFile(r.root) : undefined);
         if (f && fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f), { preview: true });
         else say('Not written yet.');
         return;

@@ -176,7 +176,7 @@ export const systemPrompt = (append?: string) => ({ type: 'preset' as const, pre
 export const OUTPUT_CAPS = { BASH_MAX_OUTPUT_LENGTH: '20000' };
 
 // Claude Code stores sessions in ~/.claude/projects/<cwd with non-alphanumerics → '-'>/<id>.jsonl
-const transcript = (cwd: string, id: string) =>
+export const transcript = (cwd: string, id: string) =>
   path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl');
 export const sessionExists = (cwd: string, id: string) => fs.existsSync(transcript(cwd, id));
 
@@ -229,6 +229,8 @@ export interface LogStep { kind: 'user' | 'say' | 'tool' | 'result' | 'error' | 
 export function sessionLog(cwd: string, sessionId: string): LogStep[] {
   return logOf(transcript(cwd, sessionId), false);
 }
+// The same from a task's archived transcript (.justcode/tasks/<id>/transcript.jsonl), once its session store is gone.
+export const archivedLog = (file: string) => logOf(file, false);
 
 // Subagents' transcripts sit next to the session's: <session>/subagents/agent-<id>.jsonl, with a .meta.json each.
 export interface SavedAgent { id: string; toolUseId?: string; name: string; description: string; finished: boolean }

@@ -81,3 +81,16 @@ test('runner: an artifact task naming a published page updates that page (same l
   assert.equal(r.publishedNamedIn({ title: 'Build a new pricing page', output: 'artifact' }), undefined);
   r.dispose();
 });
+
+test('transcript archive: appends only new lines, across sessions', () => {
+  const root = tmp(), src = path.join(tmp(), 's.jsonl');
+  fs.writeFileSync(src, '{"a":1}\n{"a":2}\n');
+  assert.equal(A.archiveTranscript(root, 't', src, 's1'), 2);
+  assert.equal(A.archiveTranscript(root, 't', src, 's1'), 0);
+  fs.appendFileSync(src, '{"a":3}\n');
+  assert.equal(A.archiveTranscript(root, 't', src, 's1'), 1);
+  const src2 = path.join(tmp(), 's2.jsonl'); fs.writeFileSync(src2, '{"b":1}\n');
+  assert.equal(A.archiveTranscript(root, 't', src2, 's2'), 1);
+  assert.deepEqual(fs.readFileSync(A.transcriptFile(root, 't'), 'utf8').trim().split('\n'), ['{"a":1}', '{"a":2}', '{"a":3}', '{"b":1}']);
+  assert.equal(A.archiveTranscript(root, 't', '/nope', 's3'), 0);
+});

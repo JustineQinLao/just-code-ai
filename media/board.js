@@ -666,7 +666,7 @@
         (arts => arts.length ? h('p', { class: 'small' }, 'Artifacts: ', ...arts.map((e, i) => [i ? ', ' : '', h('a', { onclick: () => post('openUrl', { url: e.url }), title: e.url }, `${e.title || e.url.replace(/^https?:\/\//, '')} (${e.kind === 'output' ? 'published' : 'used'})`)])) : '')((S.registry || []).filter(e => e.taskIds.includes(t.id))),
         t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
         h('details', { class: 'adv' }, h('summary', {}, 'Files Claude wrote, logs and tokens'),
-          h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => btn(l, () => post('openArtifact', { id: t.id, which: k }), 'ghost')),
+          h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => btn(l, () => post('openArtifact', { id: t.id, which: k }), 'ghost')),
             t.worktree ? btn('Setup log', () => post('openArtifact', { id: t.id, which: 'setup' }), 'ghost') : ''),
           usageTotal(t) ? h('pre', { class: 'small' }, usageTitle(t) + '\nCached re-reads are context re-sent at every step and cost about a tenth.') : ''),
         btn('🕘 Prompts and sessions', () => historyDialog(t.id), 'ghost', 'Every prompt you sent this task, and each session\'s conversation'),

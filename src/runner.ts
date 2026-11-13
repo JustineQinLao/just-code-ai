@@ -9,6 +9,7 @@ import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
+import { transcript } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -487,6 +488,7 @@ export class Runner {
         return this.d.notify('error', `"${t.title}": ${e.message}`, id);
       }
     }
+    if (t.sessionId) try { A.archiveTranscript(this.root, id, transcript(t.worktree ?? this.root, t.sessionId), t.sessionId); } catch { /* the archive is a convenience */ }
     const reply = turn.text.trim().slice(-4000) || undefined;
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
     else this.store.updateTask(id, { status: t.status === 'done' ? 'done' : 'review', live: undefined, reply, costUsd: cost });
