@@ -397,7 +397,8 @@ test('runner: writes the plugin on creation and hands it to every session', () =
   fs.rmSync(pluginDir(root), { recursive: true });
   r.plugins();
   assert.ok(fs.existsSync(pj));
-  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'runner.ts'), 'utf8');
+  // The Runner and its method files (queue, checks, review, merge, planner, sessions, guards).
+  const src = ['runner', 'planner', 'reviewflow'].map(f => fs.readFileSync(path.join(__dirname, '..', '..', 'src', `${f}.ts`), 'utf8')).join('\n');
   assert.equal((src.match(/new Session\(\{[\s\S]*?\n    \}\);|new Session\(\{/g) ?? []).length, 2);
   assert.equal((src.match(/plugins: this\.plugins\(/g) ?? []).length, 3); // task, planner, review
   r.dispose();
