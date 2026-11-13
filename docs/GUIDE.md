@@ -27,6 +27,21 @@ what tasks need:
 After a fix, close its terminal or press **Check again**. You can reopen the checklist at any time with
 **JustCode: Check Setup**, or from ⚙ → *Setup checklist*.
 
+### Recommended tools
+
+Below the required checks, four rows marked **Recommended** are optional. The board works without them, and each
+row keeps its button until it is done.
+
+| Row | What it adds | Install (the button runs it in a terminal) |
+|---|---|---|
+| frontend-design plugin | A design skill for UI and artifact tasks: a deliberate palette, type and layout | `claude plugin install frontend-design@claude-plugins-official` |
+| superpowers plugin | Brainstorming and planning skills for the planner; test-first and verify-before-done skills for tasks. Turn it off in ⚙ (*superpowers plugin in sessions*) to save the tokens its skills add to every request | `claude plugin marketplace add obra/superpowers-marketplace` then `claude plugin install superpowers@superpowers-marketplace` |
+| Playwright | Headless screenshots for UI tasks and reviews. JustCode starts the Playwright MCP server in those sessions by itself; screenshots land in `.justcode/tasks/<id>/shots/` | `claude plugin install playwright@claude-plugins-official`. To use it in your own Claude Code sessions as well: `claude mcp add --scope user playwright -- npx @playwright/mcp@latest` |
+| DESIGN.md | A design system that UI tasks follow (colors, type, spacing, components) | **Pick a design**: choose one from awesome-design-md or use your own file. It is saved to `.justcode/design/DESIGN.md` |
+
+If an install fails in the terminal, type the same steps inside Claude Code (`/plugin marketplace add …`,
+`/plugin install …`).
+
 **Projects.** The folders open in VS Code become projects automatically. **+** adds any other folder; it is
 remembered across windows. **×** removes a project from the board, and its files are kept. The phone page only lists these known projects: add a folder in VS Code (**JustCode: Add Project**) for it to appear on the phone.
 

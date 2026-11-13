@@ -32,6 +32,7 @@ export interface RunnerSettings {
   worktreeCopy: string[];
   idleMinutes: number;
   bypassAll?: boolean;   // justCode.bypassAll: every task runs with bypassPermissions
+  superpowers: boolean;     // load the installed superpowers plugin into task, planner and review sessions
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
   taskEffort: string; plannerModel: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
@@ -88,10 +89,13 @@ export class Runner {
   private leading = false;
   private leaseTimer?: NodeJS.Timeout;
 
-  // The JustCode plugin (skills, agents) every session loads, rewritten first if it is missing or from another version.
+  // The JustCode plugin (skills, agents) every session loads, rewritten first if it is missing or from another version,
+  // plus superpowers when it is installed and on (lean sessions do not load the user's plugins; personal ones do).
   private plugins(extra: Array<string | undefined> = []) {
     try { ensurePlugin(this.root, this.d.version ?? '0.0.0'); } catch { /* a read-only folder: sessions still run */ }
-    return [pluginDir(this.root), ...extra.filter((p): p is string => !!p)];
+    const set = this.d.settings();
+    const sp = set.superpowers && !set.personalSetup ? installedPlugin('superpowers') : undefined;
+    return [...new Set([pluginDir(this.root), ...[...extra, sp].filter((p): p is string => !!p)])];
   }
 
   constructor(readonly store: Store, private d: RunnerDeps) {

@@ -54,7 +54,7 @@ export function activate(context: vscode.ExtensionContext) {
     maxParallel: setting('maxParallel', 1), taskModel: setting('taskModel', 'sonnet'), allowedTools: setting<string[]>('allowedTools', []),
     worktreeCopy: setting<string[]>('worktreeCopy', ['.env', '.env.local']), idleMinutes: setting('idleMinutes', 10),
     taskEffort: setting('taskEffort', 'low'), plannerModel: setting('plannerModel', 'opus'), plannerEffort: setting('plannerEffort', 'low'), subagents: setting('allowSubagents', false),
-    bypassAll: bypassAllOn(), personalSetup: setting('personalSetup', false), freshAfterTokens: setting('freshSessionTokens', 120000),
+    bypassAll: bypassAllOn(), personalSetup: setting('personalSetup', false), superpowers: setting('superpowers', true), freshAfterTokens: setting('freshSessionTokens', 120000),
     checks: setting('checks', 'auto'), setup: setting('folderSetup', 'auto'), maxCheckRounds: setting('maxCheckRounds', 3), checkTimeoutMinutes: setting('checkTimeoutMinutes', 10),
     review: { auto: setting('autoReview', true), model: setting('reviewModel', 'sonnet'), effort: setting('reviewEffort', 'medium'), lightModel: setting('reviewLightModel', 'sonnet'), triage: setting('reviewTriage', true), maxAttempts: setting('maxReviews', 3), autoMerge: setting('autoMerge', false), mergeIfCannotRun: setting('mergeIfReviewCannotRun', true),
       commands: setting<string[]>('reviewCommands', []), timeoutMinutes: setting('reviewTimeoutMinutes', 20) },

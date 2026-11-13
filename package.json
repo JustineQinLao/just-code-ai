@@ -288,6 +288,11 @@
           "minimum": 1,
           "description": "A task's Claude process that has been idle this long is closed to free memory. It resumes with its full history when needed."
         },
+        "justCode.superpowers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Load the superpowers plugin (when installed) into task, planner and review sessions: planning, test-driven development and verification skills. Off: sessions run without it, which saves the tokens its skills add to every request."
+        },
         "justCode.personalSetup": {
           "type": "boolean",
           "default": false,

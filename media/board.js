@@ -958,6 +958,7 @@
         field('setupCustom', 'My setup command', h('input', { value: s.setup !== 'auto' ? s.setup : '', placeholder: 'pnpm install' })),
         field('reviewTriage', 'Review size', sel(s.review.triage, [[true, 'Fit to the change (saves tokens)'], [false, 'Always the full reviewer']]), 'Docs-only: no review. Small, non-sensitive: lighter model.'),
         field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
+        field('superpowers', 'superpowers plugin in sessions', sel(s.superpowers, [[true, 'On (when installed)'], [false, 'Off: saves tokens on every step']])),
         field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
         field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
       h('label', { class: 'blk' }, h('span', {}, `Always allowed in ${S.roots.find(r => r.path === S.root)?.name ?? 'this project'}`),
@@ -974,7 +975,7 @@
           idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
           checks: f.checks.value === 'auto' ? 'auto' : f.checks.value === 'off' ? '' : f.checksCustom.value.trim(),
           folderSetup: f.folderSetup.value === 'auto' ? 'auto' : f.folderSetup.value === 'off' ? '' : f.setupCustom.value.trim(),
-          reviewTriage: f.reviewTriage.value === 'true', reviewLightModel: f.reviewLightModel.value.trim(), personalSetup: f.personalSetup.value === 'true',
+          reviewTriage: f.reviewTriage.value === 'true', reviewLightModel: f.reviewLightModel.value.trim(), personalSetup: f.personalSetup.value === 'true', superpowers: f.superpowers.value === 'true',
           freshSessionTokens: Math.max(0, +f.freshSessionTokens.value || 0),
         } });
         post('rules', { rules: lines(rules) });

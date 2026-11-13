@@ -142,7 +142,8 @@ Work efficiently: read only the files the task needs, prefer Grep/Glob over broa
 Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
 (e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
-When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).`;
+When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
+If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;
 
 // Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
 // not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
@@ -512,7 +513,7 @@ export const PLANNER_APPEND = `You are planning tasks for a kanban board where e
 
 How to plan:
 1. If the goal is vague (no clear outcome, scope or way to check it), first ask 2-4 short multiple-choice questions with AskUserQuestion. Do not ask what the code already answers.
-2. Read only the code you need (Grep/Glob first). Name real files.
+2. Read only the code you need (Grep/Glob first). Name real files. If the superpowers plugin is loaded, use its brainstorming and writing-plans skills before proposing tasks.
 3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
 4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
 5. Build order: foundations first (models, tokens, shared components, layout), features next, and tasks that verify or document the whole (captures, PDFs, e2e reports) last. A task never depends on a later one. If the project has a plan-tasks skill, follow it.
