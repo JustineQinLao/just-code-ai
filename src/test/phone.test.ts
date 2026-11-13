@@ -24,7 +24,7 @@ test('phone merge is never looser than bulk merge', () => {
   assert.equal(canPhoneMerge(ok), true);
   assert.equal(canPhoneMerge({ ...ok, review: { state: 'pass', risk: 'critical' } }), false);
   assert.equal(canPhoneMerge({ ...ok, status: 'doing' }), false);
-  assert.equal(canPhoneMerge({ ...ok, where: 'root' }), false);
+  assert.equal(canPhoneMerge({ ...ok, where: 'direct' }), false);
   assert.equal(canPhoneMerge({ ...ok, worktree: undefined }), false);
   assert.equal(canPhoneMerge({ ...ok, review: { state: 'fail' } }), false);
 });
@@ -485,7 +485,7 @@ test('phone board: dialogReply and merge relay as remote, bad token rejected', a
 
 import { phoneDetail } from '../phone';
 test('phoneDetail: no worktree gives an empty file list and no error; files and checks are mapped', async () => {
-  const d = await phoneDetail({ review: { state: 'fail', why: 'w', issues: ['i'] } }, async () => { throw new Error('should not run'); });
+  const d = await phoneDetail({ review: { state: 'fail', why: 'w', issues: [{ text: 'i' }, { text: 'ok', accepted: true }] } }, async () => { throw new Error('should not run'); });
   assert.deepEqual(d.files, []); assert.equal(d.error, undefined); assert.deepEqual(d.review, { state: 'fail', why: 'w', issues: ['i'] });
   const e = await phoneDetail({ worktree: '/x', checks: { results: [{ name: 'test', ok: false, tail: 'boom' }] } }, async () => [{ file: 'a.ts', status: 'M', added: 2, removed: 1 }]);
   assert.equal(e.files[0].added, 2); assert.deepEqual(e.checks, [{ name: 'test', ok: false, tail: 'boom' }]);
@@ -523,4 +523,57 @@ test('phone: /api/task is token-protected, read-only, 404 for unknown ids', asyn
   } finally { srv.close(); }
   assert.deepEqual([...PHONE_ACTIONS], ['addTask', 'run', 'stop', 'answer', 'merge', 'project', 'move']);
   assert.deepEqual([...BOARD_ACTIONS], ['dialogReply', 'merge']);
+});
+
+import { pairDevice, deviceFor, memoryDevices } from '../phone';
+test('phone devices: 6-digit codes, POST /pair gives a device token, expired and revoked tokens get 401', async () => {
+  const { issuePairingCode, redeemPairingCode, startPhoneServer } = await import('../phone');
+  const code = issuePairingCode();
+  assert.match(code, /^\d{6}$/);
+  // Ten wrong codes cancel every open code.
+  for (let i = 0; i < 10; i++) redeemPairingCode('x' + i);
+  assert.equal(redeemPairingCode(code), false);
+  const store = memoryDevices();
+  const { token, device } = pairDevice(store, 7, 1000);
+  assert.equal(deviceFor(store, token, 2000)?.id, device.id);
+  assert.equal(deviceFor(store, token, 1000 + 7 * 86400_000 + 1), undefined, 'expired');
+  assert.ok(!JSON.stringify(store.list()).includes(token), 'only the hash is stored');
+  const srv = await startPhoneServer(0, { token: 'master', state: () => ({ ok: 1 }), act: async () => {}, devices: store, tokenDays: 7, allowTokenInUrl: false });
+  const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+  try {
+    const page = await fetch(`${base}/`);
+    assert.equal(page.status, 401); assert.match(await page.text(), /Pair with JustCode/);
+    assert.equal((await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ code: '000000' }) })).status, 401);
+    const good = issuePairingCode();
+    const r = await fetch(`${base}/pair`, { method: 'POST', body: JSON.stringify({ code: good }) });
+    assert.equal(r.status, 200);
+    const j: any = await r.json();
+    assert.match(r.headers.get('set-cookie') ?? '', /jc_session=.*Max-Age=604800/);
+    assert.equal((await fetch(`${base}/api/state`, { headers: { 'x-token': j.token } })).status, 200);
+    store.save(store.list().filter(d => d.expires !== j.expires)); // revoke it
+    assert.equal((await fetch(`${base}/api/state`, { headers: { 'x-token': j.token } })).status, 401);
+  } finally { srv.close(); }
+});
+
+test('phone TLS: a self-signed certificate is made once, served over HTTPS, and its fingerprint goes in the link', async () => {
+  const { ensureCert, fingerprintOf } = await import('../phonecert');
+  const { startPhoneServer, phoneLinkUrl } = await import('../phone');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-cert-'));
+  const c = await ensureCert(dir);
+  assert.match(c.fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal((await ensureCert(dir)).fingerprint, c.fingerprint, 'reused while valid');
+  assert.equal(fingerprintOf(c.cert), c.fingerprint);
+  assert.equal(phoneLinkUrl('h', 1, '123456', c.fingerprint), `https://h:1/?pair=123456&fp=${c.fingerprint}`);
+  assert.equal(phoneLinkUrl('h', 1, '123456'), 'http://h:1/?pair=123456');
+  const srv = await startPhoneServer(0, { token: 'master', state: () => ({}), act: async () => {}, tls: c });
+  try {
+    const https = await import('https');
+    const fp = await new Promise<string>((resolve, reject) => {
+      const req = https.request({ host: '127.0.0.1', port: (srv.address() as any).port, path: '/api/state', rejectUnauthorized: false, headers: { 'x-token': 'master' } }, res => {
+        resolve((res.socket as any).getPeerCertificate().fingerprint256.replace(/:/g, '').toLowerCase()); res.resume();
+      });
+      req.on('error', reject); req.end();
+    });
+    assert.equal(fp, c.fingerprint);
+  } finally { srv.close(); }
 });

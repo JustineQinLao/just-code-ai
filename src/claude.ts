@@ -57,7 +57,8 @@ function readAgents(dir: string, scope: AgentDef['scope']): AgentDef[] {
 
 // Project agents shadow user agents of the same name, as in Claude Code.
 export function discoverAgents(root: string): AgentDef[] {
-  const project = readAgents(path.join(root, '.claude', 'agents'), 'project');
+  const seenP = new Set<string>();
+  const project = [...readAgents(path.join(root, '.justcode', 'plugin', 'agents'), 'project'), ...readAgents(path.join(root, '.claude', 'agents'), 'project')].filter(a => !seenP.has(a.name) && (seenP.add(a.name), true));
   const names = new Set(project.map(a => a.name));
   return [...project, ...readAgents(path.join(os.homedir(), '.claude', 'agents'), 'user').filter(a => !names.has(a.name))];
 }
@@ -89,18 +90,18 @@ export function discoverSkills(root: string, personal: boolean): SkillDef[] {
   };
   const all = [...read(root, 'project'), ...(personal ? read(os.homedir(), 'user') : [])];
   const seen = new Set<string>();
-  return all.filter(k => !/^lex-?code|^just-code-ai-sync$/i.test(k.name) && !seen.has(k.name) && (seen.add(k.name), true));
+  return all.filter(k => !/^lex-?code|^just-code-setup$/i.test(k.name) && !seen.has(k.name) && (seen.add(k.name), true));
 }
 
 // Everything a session here can run with /: built-in commands, bundled skills, plugins, project and (with personal
 // setup) your own skills. Asks the CLI itself; no prompt is sent, so it costs no tokens.
 export function usableCommands(all: { name: string; description?: string }[]) {
-  return all.filter(c => !/^__|^lex-?code|^just-code-ai-sync$/i.test(c.name)).map(c => ({ name: c.name, description: c.description ?? '' }));
+  return all.filter(c => !/^__|^lex-?code|^just-code-setup$/i.test(c.name)).map(c => ({ name: c.name, description: c.description ?? '' }));
 }
-export async function slashCommands(o: { bin: string; cwd: string; env: Record<string, string | undefined>; personal: boolean }) {
+export async function slashCommands(o: { bin: string; cwd: string; env: Record<string, string | undefined>; personal: boolean; plugins?: string[] }) {
   const { query } = await sdk();
   async function* never(): AsyncGenerator<never> { await new Promise(() => {}); }
-  const q = query({ prompt: never(), options: { cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: o.env, settingSources: settingSources(o.personal) } });
+  const q = query({ prompt: never(), options: { cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: o.env, settingSources: settingSources(o.personal), ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}) } });
   try {
     const timeout = new Promise<never>((_, no) => setTimeout(() => no(new Error('timed out')), 15_000).unref());
     return usableCommands(await Promise.race([q.supportedCommands(), timeout]));
@@ -121,8 +122,6 @@ export function carryOver(root: string, worktree: string) {
       ...(a.tools && { tools: a.tools.split(',').map(t => t.trim()).filter(Boolean) }), ...(a.model && { model: a.model }),
     }]));
   }
-  // Claude Code loads .claude/skills from an added directory (the project folder itself, for uncommitted skills).
-  if (fs.existsSync(path.join(root, '.claude', 'skills')) && !fs.existsSync(path.join(worktree, '.claude', 'skills'))) out.addDirs.push(root);
   const local = path.join(root, '.claude', 'settings.local.json');
   if (fs.existsSync(local) && !fs.existsSync(path.join(worktree, '.claude', 'settings.local.json'))) out.settingsFile = local;
   return out;
@@ -131,7 +130,7 @@ export function carryOver(root: string, worktree: string) {
 // The task as the first message: its brief (see artifacts.ts) plus where it runs.
 export function taskPrompt(t: Task, brief: string) {
   return [brief,
-    t.where !== 'root' && 'You work in this task\'s own copy of the project (a git worktree on its own branch). Stay inside the current directory. ' +
+    t.where !== 'direct' && 'You work in this task\'s own copy of the project (a git worktree on its own branch). Stay inside the current directory. ' +
       'JustCode commits your changes when you finish; do not commit or push yourself.']
     .filter(Boolean).join('\n\n');
 }
@@ -143,7 +142,8 @@ Work efficiently: read only the files the task needs, prefer Grep/Glob over broa
 Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
 (e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
-When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).`;
+When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
+If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;
 
 // Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
 // not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
@@ -176,7 +176,7 @@ export const systemPrompt = (append?: string) => ({ type: 'preset' as const, pre
 export const OUTPUT_CAPS = { BASH_MAX_OUTPUT_LENGTH: '20000' };
 
 // Claude Code stores sessions in ~/.claude/projects/<cwd with non-alphanumerics → '-'>/<id>.jsonl
-const transcript = (cwd: string, id: string) =>
+export const transcript = (cwd: string, id: string) =>
   path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'), id + '.jsonl');
 export const sessionExists = (cwd: string, id: string) => fs.existsSync(transcript(cwd, id));
 
@@ -186,29 +186,39 @@ export function artifactUrlIn(cwd: string, id: string) {
   try { return ARTIFACT_URL.exec(fs.readFileSync(transcript(cwd, id), 'utf8'))?.[0]; } catch { return undefined; }
 }
 
-// The frontend-design plugin, if Claude Code has it installed (/plugin install frontend-design@claude-plugins-official).
-// Lean task sessions do not load your plugins, so artifact tasks are given this one by path.
-export function frontendDesignPlugin(file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'plugins', 'installed_plugins.json')) {
+// Plugins Claude Code has installed (plugins/installed_plugins.json): name (without @marketplace) → install path.
+// With several scopes the user scope wins; entries whose folder is missing are ignored (`need`: a subfolder that must exist, e.g. 'skills').
+const pluginsFile = () => path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'plugins', 'installed_plugins.json');
+export function installedPlugins(file = pluginsFile(), need?: string): Record<string, string> {
+  const found: Record<string, string> = {};
   try {
     const all = JSON.parse(fs.readFileSync(file, 'utf8'))?.plugins ?? {};
-    const key = Object.keys(all).find(k => /^frontend-design@/.test(k));
-    const entries: { scope?: string; installPath?: string }[] = key ? all[key] : [];
-    const ok = (e: { installPath?: string }) => !!e.installPath && fs.existsSync(path.join(e.installPath, 'skills'));
-    return (entries.find(e => e.scope === 'user' && ok(e)) ?? entries.find(ok))?.installPath;
-  } catch { return undefined; }
+    const ok = (e: { installPath?: string }) => !!e.installPath && fs.existsSync(need ? path.join(e.installPath, need) : e.installPath);
+    for (const [key, list] of Object.entries<{ scope?: string; installPath?: string }[]>(all)) {
+      const entries = Array.isArray(list) ? list : [];
+      const hit = entries.find(e => e.scope === 'user' && ok(e)) ?? entries.find(ok);
+      const name = key.split('@')[0];
+      if (hit?.installPath && !(name in found)) found[name] = hit.installPath;
+    }
+  } catch { /* no plugins file */ }
+  return found;
 }
+// One installed plugin's folder, e.g. installedPlugin('frontend-design'). Lean task sessions do not load your plugins,
+// so artifact tasks are given the design plugin by path.
+export const installedPlugin = (name: string, file?: string, need?: string) => installedPlugins(file, need)[name];
 
 // What an artifact task is told: build one page with the design skill, in the shape claude.ai artifacts accept.
-export function artifactBrief(file: string, design: boolean) {
+export function artifactBrief(file: string, design: boolean, update?: { url: string; title?: string; file?: string }) {
   return [`## Result: a page, published as a claude.ai artifact`,
     `This task's result is one web page, not a code change. Write it as a single self-contained HTML file at ${file} (create or overwrite it).`,
+    update ? `This task updates the existing artifact "${update.title ?? update.url}" (${update.url}): JustCode republishes it to the same link.${update.file ? ` Start from its current page, ${update.file} (copy it to the file above, then change it).` : ''}` : '',
     design ? 'Use the frontend-design skill (/frontend-design:frontend-design) for the visual design: a deliberate palette, typography and layout, not a generic template.' :
       'Give it a deliberate visual design: a clear palette, typography and layout, not a generic template.',
     'The page must follow the artifact rules: a <title> of two to four words; all CSS and JavaScript inline; images as inline SVG or data URIs; ' +
       'scripts only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm, unpkg.com, cdn.tailwindcss.com or code.jquery.com with an exact version; fonts only from Google Fonts; ' +
       'no fetch to other hosts; no relative links; colors as CSS variables with a dark mode (prefers-color-scheme); works at phone width; under 16 MB.',
     'Build the content from the project and the task (read the code or data you need). Do not publish it yourself: when you finish, JustCode publishes the file and puts the link on the card. ' +
-      'If the user asks for changes later, edit the same file.'].join('\n');
+      'If the user asks for changes later, edit the same file.'].filter(Boolean).join('\n');
 }
 export const sessionSize = (cwd: string, id: string) => { try { return fs.statSync(transcript(cwd, id)).size; } catch { return 0; } };
 
@@ -219,6 +229,8 @@ export interface LogStep { kind: 'user' | 'say' | 'tool' | 'result' | 'error' | 
 export function sessionLog(cwd: string, sessionId: string): LogStep[] {
   return logOf(transcript(cwd, sessionId), false);
 }
+// The same from a task's archived transcript (.justcode/tasks/<id>/transcript.jsonl), once its session store is gone.
+export const archivedLog = (file: string) => logOf(file, false);
 
 // Subagents' transcripts sit next to the session's: <session>/subagents/agent-<id>.jsonl, with a .meta.json each.
 export interface SavedAgent { id: string; toolUseId?: string; name: string; description: string; finished: boolean }
@@ -310,9 +322,21 @@ export function adb(): { bin: string; devices: string[] } | undefined {
   } catch { return { bin, devices: [] }; }
 }
 
+// Headless Playwright MCP for UI work: the only way to take screenshots, saved into the task's shots folder.
+// Pinned version; flags checked against `npx @playwright/mcp@0.0.85 --help`: --headless, --isolated, --output-dir.
+// The server-level rule allows all of the server's tools.
+export const PLAYWRIGHT_TOOLS = 'mcp__playwright';
+export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@0.0.85', '--headless', '--isolated', '--output-dir', shots] } });
+export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); always pass filename as the absolute path "${shots}/<name>.png" (a bare name lands in the project folder). If the browser is missing, call browser_install once and retry. Never use npx playwright, a screenshot script or a visible browser.`;
+
+// Tool options for a UI session or review: the MCP server and its allow rule are added together, or not at all.
+export function webOptions(on: boolean, shots: string, allowed: string[]) {
+  return on ? { allowed: [PLAYWRIGHT_TOOLS, ...allowed], mcpServers: playwrightMcp(shots) } : { allowed, mcpServers: undefined };
+}
+
 // Commands the reviewer may run: read git, run tests and builds, adb, screenshots. Edits stay blocked.
 export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status', 'ls', 'cat',
-  'npm test', 'npm run', 'npx tsc', 'npx jest', 'npx vitest', 'npx playwright', 'npx eslint', 'npx ng test',
+  'npm test', 'npm run', 'npx tsc', 'npx jest', 'npx vitest', 'npx eslint', 'npx ng test',
   'yarn test', 'yarn run', 'yarn build', 'yarn lint', 'pnpm test', 'pnpm run', 'pnpm build', 'pnpm lint', 'bun test', 'bun run',
   'pytest', 'python -m pytest', 'python3 -m pytest', 'python manage.py test', 'python3 manage.py test', 'ruff', 'mypy',
   'go test', 'go build', 'go vet', 'cargo test', 'cargo build', 'cargo check', 'cargo clippy', 'make test', 'make check', 'make build',
@@ -328,6 +352,10 @@ You do not change code: never edit or write project files. You run unattended: n
 If the task has a "Done when" list, check every item; each unmet item is a blocking issue. Judge correctness only: does the change do what the task asks, completely; bugs, unhandled errors, edge cases, regressions in callers;
 missing tests for new behaviour; security (validation, authorization, data isolation, injection, secrets). Do not report style or naming.
 Report only issues that should block the merge, at most 8, each specific and actionable (file, line, what to change). If the change is sound, pass it.
+Report only problems this diff introduces or touches, not older code it leaves alone. A "Done when" item that only a person can check
+(a manual run by hand, a device or account you do not have) is not an issue: say in "tested" that it is left for the user.
+Never re-report an issue listed under "Accepted by the user". If the builder explained why it left an issue from the previous round,
+judge the explanation: drop the issue when the reason is sound.
 Verify, do not only read: the builder's handoff lists what it ran. Re-run the tests that cover the changed files (and the build or type check if quick)
 to confirm; do not re-run the whole suite unless the change is broad, and do not explore unrelated code.
 Run each command on its own, as written: no cd, &&, ;, pipes or redirects. Every command must finish by itself within a few minutes:
@@ -338,7 +366,7 @@ config changes are "minor".
 In "tested", list every command you ran (or why nothing could run).`;
 
 // The review's task-specific part: the task, the builder's handoff, how to test the UI, and the diff.
-export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; handoff?: string; brief?: string; checks?: string[] } = { shots: '' }) {
+export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; web?: boolean; handoff?: string; brief?: string; checks?: string[]; accepted?: string[]; fixNote?: string } = { shots: '' }) {
   const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
   return [
     test.brief ? `# Task\n${test.brief}` : `# Task: ${t.title}\n${t.description ?? ''}`,
@@ -347,7 +375,9 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
     test.adb?.devices.length
       ? `# UI checks\nAn Android device is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app with adb, ` +
         `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
-      : `# UI checks\nFor a web UI with a running dev server and Playwright installed: \`npx playwright screenshot <url> ${test.shots}/<name>.png\`, then Read it. Save screenshots only in ${test.shots}.`,
+      : test.web ? `# UI checks\nFor a web UI with a running dev server: open the page with the Playwright MCP tools, then ${SHOT_RULE(test.shots)} Read the PNG.` : '',
+    test.accepted?.length ? `# Accepted by the user (not blocking; do not report again)\n${test.accepted.map(a => `- ${a}`).join('\n')}` : '',
+    test.fixNote ? `# The builder's reply to the previous review round\n${test.fixNote}` : '',
     `# Diff against ${base}\n\`\`\`diff\n${clipped}\n\`\`\``,
   ].filter(Boolean).join('\n\n');
 }
@@ -382,8 +412,8 @@ export const addUsage = (a: Usage | undefined, u: any): Usage => ({
   cacheRead: (a?.cacheRead ?? 0) + (u?.cache_read_input_tokens ?? 0), cacheWrite: (a?.cacheWrite ?? 0) + (u?.cache_creation_input_tokens ?? 0),
 });
 
-export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; onRate?: (info: any) => void }
-interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage }
+export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; plugins?: string[]; onRate?: (info: any) => void; mcpServers?: Record<string, unknown> }
+interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage; costUsd: number }
 
 // One unattended turn through the SDK: never asks (dontAsk denies anything not allowed), stops at the timeout or
 // when `signal` aborts. `resume` continues an earlier headless session, whose context is still cached.
@@ -397,6 +427,8 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   try {
     for await (const m of query({ prompt, options: {
       cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal), settings: sessionSettings() as any,
+      ...(o.mcpServers ? { mcpServers: o.mcpServers as any } : {}),
+      plugins: (o.plugins ?? [path.join(o.cwd, '.justcode', 'plugin')]).map(p => ({ type: 'local' as const, path: p })),
       ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
       if (m.type === 'rate_limit_event') o.onRate?.((m as any).rate_limit_info);
@@ -411,33 +443,36 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   }
   if (!result) throw new Error('Claude ended without a reply');
   if (result.subtype !== 'success' || result.is_error) throw new Error(String(result.errors?.join('; ') || result.result || result.subtype));
-  return { text: String(result.result ?? ''), structured: result.structured_output, sessionId: result.session_id, usage: addUsage(undefined, result.usage) };
+  return { text: String(result.result ?? ''), structured: result.structured_output, sessionId: result.session_id, usage: addUsage(undefined, result.usage), costUsd: Number(result.total_cost_usd ?? 0) };
 }
 
-export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage }
+export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage; costUsd?: number }
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
-export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
-  const allow = ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)];
+export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
+  const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)]);
+  const allow = w.allowed;
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
   const base = {
     permissionMode: 'dontAsk' as const, allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
     systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
   };
+  o = { ...o, mcpServers: w.mcpServers };
   let r = await headless(prompt, o, { ...base, ...(o.resume ? { resume: o.resume } : {}) });
-  let usage = r.usage, sessionId = r.sessionId;
+  let usage = r.usage, sessionId = r.sessionId, costUsd = r.costUsd;
   const read = (x: typeof r) => x.structured !== undefined ? toVerdict(x.structured) : parseVerdict(x.text);
   // The reviewer sometimes ends without a clean verdict (it wrote prose, or the JSON was malformed). Rather than fail
   // the whole review, ask the same session (its context is cached, so this is cheap) for just the verdict, twice.
   for (let i = 0; ; i++) {
-    try { return { verdict: read(r), sessionId, usage }; }
+    try { return { verdict: read(r), sessionId, usage, costUsd }; }
     catch (e) {
       if (i >= 2 || !sessionId) throw e;
       r = await headless('Reply with ONLY the JSON verdict, nothing else: {"pass": <true|false>, "issues": [<strings>], "risk": "minor"|"critical", "tested": [<commands you ran>]}. A failing verdict must list at least one issue.',
         o, { ...base, resume: sessionId });
       usage = addUsage(usage, { input_tokens: r.usage?.input, output_tokens: r.usage?.output, cache_read_input_tokens: r.usage?.cacheRead, cache_creation_input_tokens: r.usage?.cacheWrite });
       sessionId = r.sessionId ?? sessionId;
+      costUsd += r.costUsd;
     }
   }
 }
@@ -460,7 +495,7 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
 // Refines existing To do tasks with an instruction: Claude reads the code read-only and returns the task list it
 // proposes. Each item keeps `ref` (an existing task's id) when it is that task reworded, or omits it for a new task.
 // An existing id in none of the items is proposed for removal. This covers edit, split, merge, reorder and add.
-export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string }
+export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string; after?: string[] }
 export async function refine(tasks: { id: string; title: string; description?: string }[], instruction: string, o: HeadlessOpts): Promise<RefineResult[]> {
   const prompt = `These are the To do tasks on a board (id, title, details). Rework them following the instruction, using the codebase to make them accurate.\n\n` +
     `## Current tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` +
@@ -488,7 +523,7 @@ export const PLANNER_APPEND = `You are planning tasks for a kanban board where e
 
 How to plan:
 1. If the goal is vague (no clear outcome, scope or way to check it), first ask 2-4 short multiple-choice questions with AskUserQuestion. Do not ask what the code already answers.
-2. Read only the code you need (Grep/Glob first). Name real files.
+2. Read only the code you need (Grep/Glob first). Name real files. If the superpowers plugin is loaded, use its brainstorming and writing-plans skills before proposing tasks.
 3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
 4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
 5. Build order: foundations first (models, tokens, shared components, layout), features next, and tasks that verify or document the whole (captures, PDFs, e2e reports) last. A task never depends on a later one. If the project has a plan-tasks skill, follow it.
@@ -498,6 +533,7 @@ After every turn, end your message with the FULL proposed To do list as one JSON
 \`\`\`tasks
 [{"ref": "<existing task id, or omit for a new task>", "title": "short imperative title", "goal": "the outcome in one sentence", "files": ["path/likely/changed.ts"], "done": ["a check the reviewer can verify", "the test or command that must pass"], "sprint": "Sprint 1: <goal>"}]
 \`\`\`
+Add "after": ["<title of an earlier task in this list or on the board>"] when a task cannot start before another is done (Run all waits for it); omit it otherwise.
 Every task needs a goal and 1-4 "done" items that are concrete and testable (not "works well"). "files" are your best guess. Omit "sprint" for backlog tasks.
 Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.
 Started and done tasks (listed separately, when there are any) are never removed. Check each against the request and the code: include one, with its id in "ref" and the updated text, only when it must change. A done one then goes back to To do and is built again on top of its merged work; a working or in-review one gets the change as a message. Leave out the ones that are fine.`;
@@ -517,7 +553,7 @@ export function plannerFirst(tasks: { id: string; title: string; description?: s
   return `${sp}${target}${list}${started}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
 }
 
-// A task's details as stored on the board and in TASKS.md: the reviewer checks the work against "Done when".
+// A task's details as stored on the board: the reviewer checks the work against "Done when".
 export function taskText(t: { goal?: string; files?: string[]; done?: string[]; description?: string }) {
   const parts = [t.goal?.trim() && `Goal: ${t.goal.trim()}`, t.files?.length && `Files: ${t.files.join(', ')}`,
     t.done?.length && `Done when:\n${t.done.map(d => `- ${d}`).join('\n')}`, t.description?.trim()].filter(Boolean);
@@ -537,6 +573,7 @@ export function parseProposals(text: string, taskIds: Set<string>): RefineResult
       title: t.title.trim(),
       description: taskText({ goal: typeof t.goal === 'string' ? t.goal : undefined, files: strs(t.files), done: strs(t.done), description: typeof t.description === 'string' ? t.description : undefined }),
       sprint: typeof t.sprint === 'string' && t.sprint.trim() ? t.sprint.trim() : undefined,
+      ...(strs(t.after).length ? { after: strs(t.after) } : {}),
     }));
   } catch { return; }
 }

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Task } from './store';
+import * as R from './registry';
 
 // Artifacts are the basis of every task: small written files each step reads instead of re-exploring the code or
 // carrying a long history. All live under the project's .justcode/ (outside git):
@@ -29,6 +30,7 @@ export function addLinkSources(root: string, text: string) {
   const all = loadSources(root), have = new Set(all.map(s => artifactKey(s.ref)));
   const add = artifactLinksIn(text).filter(l => !have.has(l)).map(ref => ({ id: Math.random().toString(16).slice(2, 10), kind: 'url' as const, ref, note: 'claude.ai artifact from a prompt' }));
   if (add.length) saveSources(root, [...all, ...add]);
+  try { for (const l of artifactLinksIn(text)) R.upsert(root, l, { kind: 'input' }); } catch { /* the registry is a convenience */ }
   return add;
 }
 // The sources section of a planning chat's first message: where each one is, as a task's brief lists them.
@@ -41,11 +43,39 @@ export const taskDir = (root: string, id: string) => jc(root, 'tasks', id);
 export const briefFile = (root: string, id: string) => path.join(taskDir(root, id), 'brief.md');
 export const handoffFile = (root: string, id: string) => path.join(taskDir(root, id), 'handoff.md');
 export const artifactFile = (root: string, id: string) => path.join(taskDir(root, id), 'artifact.html');
+export const shotsDir = (root: string, id: string) => path.join(taskDir(root, id), 'shots');
 export const reviewFile = (root: string, id: string) => path.join(taskDir(root, id), 'review.md');
 export const checksLog = (root: string, id: string) => path.join(taskDir(root, id), 'checks.log');
+export const transcriptFile = (root: string, id: string) => path.join(taskDir(root, id), 'transcript.jsonl');
+// Copies the new lines of a session's transcript into the task's own archive, which outlives the task folder and
+// Claude Code's per-folder session store. Several sessions (fresh fix rounds) append to the same file in order.
+export function archiveTranscript(root: string, id: string, source: string, sessionId: string) {
+  let text: string;
+  try { text = fs.readFileSync(source, 'utf8'); } catch { return 0; }
+  const lines = text.split('\n').filter(Boolean);
+  const mark = path.join(taskDir(root, id), '.transcript.json');
+  let seen: Record<string, number> = {};
+  try { seen = JSON.parse(fs.readFileSync(mark, 'utf8')) ?? {}; } catch { /* first copy */ }
+  const from = seen[sessionId] ?? 0;
+  if (lines.length <= from) return 0;
+  fs.mkdirSync(taskDir(root, id), { recursive: true });
+  fs.appendFileSync(transcriptFile(root, id), lines.slice(from).join('\n') + '\n');
+  fs.writeFileSync(mark, JSON.stringify({ ...seen, [sessionId]: lines.length }));
+  return lines.length - from;
+}
 export const planFile = (root: string, id: string) => path.join(taskDir(root, id), 'plan.md');
 export const writePlan = (root: string, id: string, plan: string) => write(planFile(root, id), plan.trim() + '\n');
 export const progressFile = (root: string) => jc(root, 'progress.md');
+export const projectFile = (root: string) => jc(root, 'project.md');
+export const designMdFile = (root: string) => jc(root, 'design', 'DESIGN.md');
+// Points a session at the project description JustCode's setup skill wrote, when there is one.
+export const projectSection = (root: string) => fs.existsSync(projectFile(root)) ? `## Project\nRead ${projectFile(root)} first.` : '';
+
+// UI-ish work (or an artifact page) follows the project's DESIGN.md when one exists.
+const UI_WORDS = /\b(ui|ux|frontend|front-end|css|html|page|screen|layout|landing|dashboard|button|modal|dialog|form|component|style|styling|theme|navbar|sidebar|webview|responsive|visual)s?\b/i;
+export const isUiTask = (t: Task) => t.output === 'artifact' || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`);
+const designSection = (root: string, t: Task) => isUiTask(t) && fs.existsSync(designMdFile(root))
+  ? `## Design system\nFollow ${designMdFile(root)} as the style spec (colors, type, spacing, components) for any UI you build or change.` : '';
 
 export interface Prompt { time: number; kind: 'task' | 'message' | 'plan'; text: string; taskId?: string; title?: string; sessionId?: string }
 export const promptsFile = (root: string) => jc(root, 'prompts.jsonl');
@@ -103,7 +133,19 @@ export const outsideDirs = (root: string, sources: Source[]) => [...new Set(sour
 
 // The brief: everything the builder needs to start, as references rather than pasted content, so it reads only
 // what the task needs. Rewritten on each fresh session (the task may have been edited).
-export function writeBrief(root: string, t: Task, sources: Source[]) {
+// Artifacts the project already used or published (from the registry), beyond the ones listed as sources: a later task
+// can build on or update one instead of recreating it. Newest first, at most 20.
+export function artifactsSection(root: string, sources: Source[], taskTitle: (id: string) => string | undefined = () => undefined) {
+  let lines: string[] = [];
+  try {
+    const listed = sources.filter(s => s.kind === 'url').map(s => s.ref);
+    const copyOf = (url: string) => { const s = sources.find(x => x.kind === 'url' && artifactKey(x.ref) === url && hasCopy(root, x)); return s ? sourceCopy(root, s.id) : undefined; };
+    lines = R.forBrief(root, taskTitle, listed, 20, copyOf);
+  } catch { /* no registry */ }
+  return lines.length ? `## Project artifacts (published or used before; update one rather than recreate it)\n${lines.join('\n')}` : '';
+}
+
+export function writeBrief(root: string, t: Task, sources: Source[], taskTitle?: (id: string) => string | undefined) {
   const picked = t.sources ? sources.filter(s => t.sources!.includes(s.id)) : sources;
   const files = t.files ?? [];
   const text = [
@@ -113,6 +155,10 @@ export function writeBrief(root: string, t: Task, sources: Source[]) {
     ...picked.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`),
     ...files.map(f => `- ${f}`),
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
+    `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo).${isUiTask(t) ? ` Take screenshots only with the Playwright MCP browser_take_screenshot tool (headless), filename always an absolute path in that folder.` : ''}`,
+    projectSection(root),
+    designSection(root, t),
+    artifactsSection(root, picked, taskTitle),
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
     fs.existsSync(progressFile(root)) ? `## Project history\nWhat earlier tasks changed: ${progressFile(root)} (read it if you need context on recent work).` : '',
     `## When you finish\nUpdate ${handoffFile(root, t.id)} (create it if missing), at most 30 lines:\n` +

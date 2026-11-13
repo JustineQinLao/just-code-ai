@@ -1,3 +1,4 @@
+import type { Actor } from './audit';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { sdk, Sdk } from './sdk';
@@ -50,6 +51,7 @@ export interface SessionOptions {
   readOnly?: boolean;         // block all edits (the planner never changes code)
   agent?: string;
   agents?: Record<string, { description: string; prompt: string; tools?: string[]; model?: string }>;
+  mcpServers?: Record<string, { type?: 'stdio'; command: string; args?: string[] }>;
   allowed: string[];          // rules approved without asking (project + settings + task)
   rules: () => string[];      // current rules, re-read on each request: "Always" on another card applies here at once
   addDirs?: string[];
@@ -59,6 +61,18 @@ export interface SessionOptions {
   personal?: boolean;         // also load the user's own Claude setup (plugins, skills, MCP, memory)
   plugins?: string[];         // plugin folders to load even in a lean session (e.g. frontend-design for artifact pages)
   label: string;              // name of the root node in the agent map
+  guard?: (tool: string, input: Record<string, unknown>) => string | undefined;   // the project policy: a reason denies the call, in every mode
+  audit?: (event: 'permission.allow' | 'permission.always' | 'permission.deny', detail: string, actor: Actor) => void;
+}
+
+// The tool-related SDK options: MCP servers, allow rules, extra folders and plugins, passed through unchanged.
+export function toolOptions(o: Pick<SessionOptions, 'mcpServers' | 'allowed' | 'addDirs' | 'plugins'>): Partial<Sdk.Options> {
+  return {
+    ...(o.mcpServers ? { mcpServers: o.mcpServers } : {}),
+    ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
+    ...(o.addDirs?.length ? { additionalDirectories: o.addDirs } : {}),
+    ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),
+  };
 }
 
 const MAX_STEPS = 400;
@@ -140,15 +154,18 @@ export class Session {
       ...(o.readOnly ? { disallowedTools: ['Agent', 'Task', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'EnterPlanMode', 'ExitPlanMode'] } : o.subagents ? {} : { disallowedTools: ['Agent', 'Task'] }),
       ...(o.agent ? { agent: o.agent } : {}),
       ...(o.agents && Object.keys(o.agents).length ? { agents: o.agents as any } : {}),
-      ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
-      ...(o.addDirs?.length ? { additionalDirectories: o.addDirs } : {}),
-      ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),
+      ...toolOptions(o),
       ...(o.resume ? { resume: o.sessionId } : { sessionId: o.sessionId }),
       abortController: this.ac,
       agentProgressSummaries: true,
       // Question options may carry a Markdown preview (a file list, a layout sketch); the card shows it.
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       canUseTool: (tool, input, opt) => this.permission(tool, input, opt as any),
+      ...(o.guard ? { hooks: { PreToolUse: [{ hooks: [async (i: any) => {
+        const why = o.guard!(String(i.tool_name), (i.tool_input ?? {}) as Record<string, unknown>);
+        if (why) this.step({ kind: 'error', text: `Denied by policy: ${why}` });
+        return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: why } } : { continue: true };
+      }] }] } } : {}),
       stderr: (s: string) => { if (/error/i.test(s)) this.step({ kind: 'error', text: s.trim().slice(0, 400) }); },
     };
     this.q = query({ prompt: this.inbox, options });
@@ -291,7 +308,8 @@ export class Session {
 
   private async permission(tool: string, input: Record<string, unknown>, opt: { signal: AbortSignal; suggestions?: Suggestion[]; decisionReason?: string; blockedPath?: string; toolUseID?: string; suppressAlwaysAllowRule?: boolean }): Promise<Sdk.PermissionResult> {
     // A rule approved on another card while this session runs.
-    if (tool !== 'AskUserQuestion' && allowedBy(this.o.rules(), tool, input)) return { behavior: 'allow', updatedInput: input };
+    const rule = tool !== 'AskUserQuestion' ? allowedBy(this.o.rules(), tool, input) : undefined;
+    if (rule) { this.o.audit?.('permission.allow', `${tool} ${toolArg(input)} (rule ${rule})`, 'justcode'); return { behavior: 'allow', updatedInput: input }; }
     // The task's mode as the user set it. Claude Code may still ask in some cases (a protected path, a mode switch it
     // refused); the user's choice wins.
     if (tool !== 'AskUserQuestion' && autoApproves(this.mode, tool)) return { behavior: 'allow', updatedInput: input };
@@ -319,7 +337,12 @@ export class Session {
       if (answer.choice === 'deny' || !answer.answers) return { behavior: 'deny', message: answer.message || 'The user did not answer.' };
       return { behavior: 'allow', updatedInput: { ...input, questions: input.questions, answers: answer.answers } };
     }
-    if (answer.choice === 'deny') return { behavior: 'deny', message: answer.message?.trim() || 'The user denied this.', interrupt: false };
+    const what = `${tool} ${toolArg(input)}`.trim();
+    if (answer.choice === 'deny') {
+      this.o.audit?.('permission.deny', `${what}${answer.message ? `: ${answer.message}` : ''}`, answer.by ?? 'user');
+      return { behavior: 'deny', message: answer.message?.trim() || 'The user denied this.', interrupt: false };
+    }
+    this.o.audit?.(answer.choice === 'always' && always ? 'permission.always' : 'permission.allow', answer.choice === 'always' && always ? `${what} (always: ${always.rules.join(', ') || always.mode})` : what, answer.by ?? 'user');
     if (answer.choice === 'always' && always) {
       if (always.rules.length) this.emit('rules', always.rules);
       const updatedPermissions = always.mode
@@ -399,7 +422,7 @@ export class Session {
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const autoApproves = (mode: string, tool: string) => mode === 'bypassPermissions' || (mode === 'acceptEdits' && EDIT_TOOLS.has(tool));
 
-export interface Answer { id: string; choice: 'allow' | 'always' | 'deny'; message?: string; answers?: Record<string, string> }
+export interface Answer { id: string; choice: 'allow' | 'always' | 'deny'; message?: string; answers?: Record<string, string>; by?: Actor }
 
 function normalizeQuestions(q: unknown): Question[] {
   if (!Array.isArray(q)) return [];

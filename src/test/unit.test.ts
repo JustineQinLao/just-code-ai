@@ -1,3 +1,5 @@
+import { discoverAgents } from '../claude';
+import { ensurePlugin, pluginDir } from '../plugin';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
@@ -5,12 +7,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
+import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
-import { Store } from '../store';
-import { parseTasks, syncTasks } from '../tasksmd';
-import { Session } from '../session';
-import { cliCommand, syncSkill, DESIGN_SKILL_PATH } from '../skill';
+import { Store, resolveWhere } from '../store';
+import { projectSetup } from '../setup';
+import { Session, toolOptions } from '../session';
+import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
+import { writePlugin } from '../plugin';
 import * as g from '../git';
 import * as A from '../artifacts';
 
@@ -75,6 +78,8 @@ test('carry-over: uncommitted agents and local settings, as a path', () => {
   assert.equal(c.agents?.builder.prompt, 'Build it.');
   assert.equal(c.settingsFile, path.join(root, '.claude', 'settings.local.json'));
   assert.deepEqual(carryOver(root, root), { addDirs: [] });
+  fs.mkdirSync(path.join(root, '.claude', 'skills', 's'), { recursive: true });
+  assert.deepEqual(carryOver(root, wt).addDirs, []); // skills come from the plugin, not the project folder
 });
 
 test('limits: plan windows, reached, reset', () => {
@@ -106,33 +111,6 @@ test('store: rules and queue persist, deleted tasks leave the queue', () => {
   assert.deepEqual(again.rules, ['Bash(npm test:*)']);
   assert.deepEqual(again.queue, [b.id]);
   s.dispose(); again.dispose();
-});
-
-test('TASKS.md parsing', () => {
-  const t = parseTasks('## Sprint 1\n- [ ] Login\n  with email\n- [x] Setup\n## Backlog\n- [~] Search');
-  assert.deepEqual(t.map(x => [x.title, x.status, x.sprint]), [['Login', 'todo', 'Sprint 1'], ['Setup', 'done', 'Sprint 1'], ['Search', 'doing', undefined]]);
-  assert.equal(t[0].description, 'with email');
-});
-
-test('TASKS.md: sprint goals, Done when checklists, sprints created on sync', () => {
-  const md = '## Sprint 1: Auth basics\n- [ ] Login\n  Goal: sign in with email\n  Done when:\n  - wrong password shows an error\n  - npm test passes\n## Sprint 2 — Search\n- [ ] Search\n## Backlog\n- [ ] Later';
-  const t = parseTasks(md);
-  assert.deepEqual(t.map(x => [x.title, x.sprint, x.sprintGoal]), [['Login', 'Sprint 1', 'Auth basics'], ['Search', 'Sprint 2', 'Search'], ['Later', undefined, undefined]]);
-  assert.equal(t[0].description, 'Goal: sign in with email\nDone when:\n- wrong password shows an error\n- npm test passes');
-  const root = tmp(), file = path.join(root, 'TASKS.md');
-  fs.writeFileSync(file, md);
-  const s = new Store(root);
-  const dry = syncTasks(s, file, true);
-  assert.deepEqual(dry.sprints, ['Sprint 1: Auth basics', 'Sprint 2: Search']);
-  assert.equal(s.data.sprints.length, 0);
-  syncTasks(s, file, false);
-  assert.deepEqual(s.data.sprints.map(x => [x.name, x.goal]), [['Sprint 1', 'Auth basics'], ['Sprint 2', 'Search']]);
-  const login = s.data.tasks.find(x => x.title === 'Login')!;
-  assert.equal(login.sprintId, s.data.sprints[0].id);
-  assert.equal(login.mode, 'auto');
-  assert.equal(s.data.tasks.find(x => x.title === 'Later')!.sprintId, undefined);
-  assert.deepEqual(syncTasks(s, file, false).sprints, []);  // existing sprints are reused
-  s.dispose();
 });
 
 test('planner proposals: goal, files, done-when and sprint', () => {
@@ -352,35 +330,78 @@ test('requestRun: honors the one-at-a-time limit, queues the rest', async () => 
   r.dispose();
 });
 
-test('setup skill: its commands match the setup task\'s allow rules', () => {
-  const cli = '/Users/me/.vscode/extensions/just code/out/cli.js';
-  const rule = `Bash(${cliCommand(cli)} sync:*)`;
-  const skill = syncSkill(cli);
-  assert.ok(skill.includes(`${cliCommand(cli)} sync --dry-run`));
-  assert.ok(skill.includes('disable-model-invocation: true'));
-  assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync --dry-run` }), true);
-  assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync && rm -rf x` }), false);
+test('direct tasks: merge refused while one holds files; pump starts only one', async () => {
+  const root = tmp();
+  const store = new Store(root);
+  const settings: any = { maxParallel: 3, review: { auto: false } };
+  const msgs: string[] = [];
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: (_k: string, m: string) => { msgs.push(m); }, choose: async () => 'x', cli: '' });
+  const calls: string[] = [];
+  r.run = async (id: string) => { calls.push(id); };
+  const d1 = store.addTask({ title: 'D1', mode: 'auto', where: 'direct' } as any), d2 = store.addTask({ title: 'D2', mode: 'auto', where: 'direct' } as any);
+  store.updateTask(d1.id, { status: 'review', directFiles: ['a.txt'] });
+  const b = store.addTask({ title: 'B', mode: 'auto', where: 'branch' } as any);
+  store.updateTask(b.id, { status: 'review', branch: 'jc/b', base: 'main', worktree: path.join(root, 'wt') });
+  await r.merge(b.id);
+  assert.ok(msgs.some(m => /"D1" has uncommitted files.*Finish or Discard/.test(m)), msgs.join('|'));
+  store.setQueue([d2.id]);
+  r.pump();
+  assert.deepEqual(calls, []);
+  assert.deepEqual(store.queue, [d2.id]);
+  store.updateTask(d1.id, { status: 'done' });
+  r.pump();
+  assert.deepEqual(calls, [d2.id]);
+  r.dispose();
 });
 
-test('setup installs the design skill by default and keeps a project\'s own copy', () => {
-  const root = tmp(), cli = path.join(__dirname, '..', 'cli.js'), file = path.join(root, '.claude', DESIGN_SKILL_PATH);
-  execFileSync(process.execPath, [cli, 'setup', root]);
-  assert.match(fs.readFileSync(file, 'utf8'), /^---\nname: design-from-artifact\n[\s\S]*project\/canvas\.json/);
-  fs.writeFileSync(file, 'mine');
-  execFileSync(process.execPath, [cli, 'setup', root]);
-  assert.equal(fs.readFileSync(file, 'utf8'), 'mine');
-  assert.match(syncSkill('/x/cli.js'), /no description[\s\S]*docs\/project\.md/);
-  const plan = path.join(root, '.claude', 'skills', 'plan-tasks', 'SKILL.md');
-  assert.match(fs.readFileSync(plan, 'utf8'), /^---\nname: plan-tasks\n[\s\S]*LAST/);
-  // --update: an approved agent draft replaces the old one, and the default skills come back current.
-  fs.mkdirSync(path.join(root, '.claude', 'agents'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.claude', 'agents', 'planner.md'), 'old');
-  fs.mkdirSync(path.join(root, '.justcode', 'setup', 'agents'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.justcode', 'setup', 'agents', 'planner.md'), 'new');
-  execFileSync(process.execPath, [cli, 'setup', root, '--update']);
-  assert.equal(fs.readFileSync(path.join(root, '.claude', 'agents', 'planner.md'), 'utf8'), 'new');
-  assert.match(fs.readFileSync(file, 'utf8'), /^---\nname: design-from-artifact/);
-  assert.match(syncSkill('/x/cli.js'), /3b\. Update what exists[\s\S]*setup --update/);
+test('setup skill: only writes under .justcode and runs no CLI command', () => {
+  const skill = setupSkill();
+  assert.ok(skill.includes('name: just-code-setup') && skill.includes('disable-model-invocation: true'));
+  assert.ok(skill.includes('.justcode/project.md') && skill.includes('.justcode/design/DESIGN.md'));
+  assert.doesNotMatch(skill, /node "/);
+});
+
+test('project.md: the brief and plan chats point at it when it exists; projectSetup reports it', () => {
+  const root = tmp();
+  const t = { id: 't1', title: 'x', mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.doesNotMatch(A.writeBrief(root, t, []), /## Project\n/);
+  assert.deepEqual(projectSetup(root), { projectMd: false, designMd: false });
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(A.projectFile(root), 'About');
+  assert.match(A.writeBrief(root, t, []), new RegExp(`## Project\\nRead ${A.projectFile(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} first\\.`));
+  assert.match(A.projectSection(root), /^## Project/);
+  assert.deepEqual(projectSetup(root), { projectMd: true, designMd: false });
+});
+
+test('plugin: written once, rewritten when the version changes; agents are discovered from it', () => {
+  const root = tmp();
+  ensurePlugin(root, '1.2.3');
+  const pj = path.join(pluginDir(root), '.claude-plugin', 'plugin.json');
+  assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '1.2.3');
+  fs.writeFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'edited');
+  ensurePlugin(root, '1.2.3');
+  assert.equal(fs.readFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'utf8'), 'edited');
+  ensurePlugin(root, '1.2.4');
+  assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '1.2.4');
+  assert.notEqual(fs.readFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'utf8'), 'edited');
+  assert.ok(discoverAgents(root).some(a => a.name === 'reviewer'));
+});
+
+test('runner: writes the plugin on creation and hands it to every session', () => {
+  const root = tmp(), settings: any = { personalSetup: false, review: {} };
+  const r: any = new Runner(new Store(root), { version: '9.9.9', bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  const pj = path.join(pluginDir(root), '.claude-plugin', 'plugin.json');
+  assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '9.9.9');
+  assert.deepEqual(r.plugins(), [pluginDir(root)]);
+  assert.deepEqual(r.plugins(['/x/fd', undefined]), [pluginDir(root), '/x/fd']);
+  fs.rmSync(pluginDir(root), { recursive: true });
+  r.plugins();
+  assert.ok(fs.existsSync(pj));
+  // The Runner and its method files (queue, checks, review, merge, planner, sessions, guards).
+  const src = ['runner', 'planner', 'reviewflow'].map(f => fs.readFileSync(path.join(__dirname, '..', '..', 'src', `${f}.ts`), 'utf8')).join('\n');
+  assert.equal((src.match(/new Session\(\{[\s\S]*?\n    \}\);|new Session\(\{/g) ?? []).length, 2);
+  assert.equal((src.match(/plugins: this\.plugins\(/g) ?? []).length, 3); // task, planner, review
+  r.dispose();
 });
 
 test('deleting a sprint keeps its tasks, in the backlog', () => {
@@ -493,8 +514,10 @@ test('artifact tasks: frontend-design is found by path, the brief sets the rules
   const file = path.join(dir, 'installed_plugins.json');
   fs.writeFileSync(file, JSON.stringify({ version: 2, plugins: { 'frontend-design@claude-plugins-official': [
     { scope: 'project', installPath: path.join(dir, 'missing') }, { scope: 'user', installPath: install }] } }));
-  assert.equal(frontendDesignPlugin(file), install);
-  assert.equal(frontendDesignPlugin(path.join(dir, 'none.json')), undefined);
+  assert.equal(installedPlugin('frontend-design', file), install);
+  assert.equal(installedPlugin('superpowers', file), undefined);
+  assert.deepEqual(installedPlugins(file), { 'frontend-design': install });
+  assert.equal(installedPlugin('frontend-design', path.join(dir, 'none.json')), undefined);
   const brief = artifactBrief('/p/.justcode/tasks/t1/artifact.html', true);
   assert.match(brief, /\/p\/\.justcode\/tasks\/t1\/artifact\.html/);
   assert.match(brief, /frontend-design/);
@@ -779,7 +802,7 @@ test('the @ menu lists tracked and new files with their folders, not ignored one
 });
 
 test('the / menu hides internal commands and JustCode\'s own setup skill', () => {
-  assert.deepEqual(usableCommands([{ name: 'compact', description: 'Compact' }, { name: '__remote' }, { name: 'just-code-ai-sync' }, { name: 'lexcode-sync' }, { name: 'caveman:caveman' }]),
+  assert.deepEqual(usableCommands([{ name: 'compact', description: 'Compact' }, { name: '__remote' }, { name: 'just-code-setup' }, { name: 'lexcode-sync' }, { name: 'caveman:caveman' }]),
     [{ name: 'compact', description: 'Compact' }, { name: 'caveman:caveman', description: '' }]);
 });
 
@@ -892,4 +915,282 @@ test('a subagent\'s saved transcript: steps, model, final answer, tokens and tim
     assert.deepEqual(log.steps.map(s => s.kind), ['user', 'info', 'say']);
     assert.equal(agentLog(cwd, sid, '../x'), undefined);
   } finally { if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = old; }
+});
+
+test('writePlugin writes the plugin folder once and keeps unchanged files', () => {
+  const root = tmp(), dir = path.join(root, '.justcode', 'plugin');
+  const a = writePlugin(root);
+  for (const f of ['.claude-plugin/plugin.json', 'skills/plan-tasks/SKILL.md', 'skills/design-from-artifact/SKILL.md', 'agents/reviewer.md', 'agents/planner.md', 'agents/implementer.md'])
+    assert.ok(fs.existsSync(path.join(dir, f)), f);
+  assert.match(fs.readFileSync(path.join(dir, 'agents', 'reviewer.md'), 'utf8'), /<root>\/\.justcode\/tasks\/<id>\/shots\//);
+  assert.deepEqual(fs.readdirSync(root), ['.justcode']);
+  const b = writePlugin(root);
+  assert.equal(b.written.length, 0);
+  assert.equal(b.kept.length, a.written.length);
+});
+
+test('artifact path helpers stay under <root>/.justcode/', () => {
+  const root = path.join(os.tmpdir(), 'jc-root');
+  const base = path.join(root, '.justcode') + path.sep;
+  const paths = [A.sourceCopy(root, 'x'), A.taskDir(root, 'x'), A.briefFile(root, 'x'), A.handoffFile(root, 'x'), A.artifactFile(root, 'x'), A.shotsDir(root, 'x'),
+    A.reviewFile(root, 'x'), A.checksLog(root, 'x'), A.planFile(root, 'x'), A.progressFile(root), A.projectFile(root), A.designMdFile(root), A.promptsFile(root)];
+  for (const p of paths) assert.ok(p.startsWith(base), p);
+  assert.equal(A.shotsDir(root, 'x'), path.join(root, '.justcode', 'tasks', 'x', 'shots'));
+});
+
+test('src never writes CLAUDE.md, TASKS.md, .claude agents/skills or docs/', () => {
+  const dir = path.join(__dirname, '..', '..', 'src');
+  const bad = /CLAUDE\.md|TASKS\.md|\.claude[\\/'"`]?.*(agents|skills)|\bdocs[\\/]/;
+  const hits: string[] = [];
+  for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.ts')))
+    fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((l, i) => { if (/(writeFileSync|copyFileSync|mkdirSync)/.test(l) && bad.test(l)) hits.push(`${f}:${i + 1}`); });
+  assert.deepEqual(hits, []);
+});
+
+test('Store migrates where: root to direct', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-mig-'));
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'board.json'), JSON.stringify({ sprints: [], tasks: [{ id: 'a', title: 'x', status: 'todo', mode: 'auto', where: 'root' }] }));
+  assert.equal(new Store(root).data.tasks[0].where, 'direct');
+});
+
+test('resolveWhere: explicit wins, setting decides otherwise, remote is always a branch', () => {
+  assert.equal(resolveWhere({}), 'direct');
+  assert.equal(resolveWhere({ sprintId: 's' }), 'branch');
+  assert.equal(resolveWhere({ setting: 'branch' }), 'branch');
+  assert.equal(resolveWhere({ setting: 'direct', sprintId: 's' }), 'direct');
+  assert.equal(resolveWhere({ where: 'direct', sprintId: 's' }), 'direct');
+  assert.equal(resolveWhere({ where: 'direct', remote: true, setting: 'direct' }), 'branch');
+  assert.equal(resolveWhere({ remote: true }), 'branch');
+});
+
+test('direct tasks: one at a time, not during a merge; directFiles = status minus dirty-before, no commit', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-direct-'));
+  const sh = (...a: string[]) => execFileSync('git', a, { cwd: root, stdio: 'pipe' });
+  sh('init', '-q', '-b', 'main'); sh('config', 'user.email', 'a@b.c'); sh('config', 'user.name', 'a');
+  fs.writeFileSync(path.join(root, 'a.txt'), '1'); sh('add', '-A'); sh('commit', '-qm', 'init');
+  const store = new Store(root);
+  const settings: any = { maxParallel: 2, taskModel: '', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, freshAfterTokens: 0, checks: 'none', setup: '', maxCheckRounds: 2, checkTimeoutMinutes: 1,
+    review: { auto: false, model: '', lightModel: '', triage: true, maxAttempts: 3, autoMerge: false, mergeIfCannotRun: false, commands: [], timeoutMinutes: 1 } };
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  const t1 = store.addTask({ title: 'One', mode: 'auto', where: 'direct' });
+  const t2 = store.addTask({ title: 'Two', mode: 'auto', where: 'direct' });
+  // A second direct task is refused while the first is starting; the first is not affected.
+  r.starting.add(t1.id);
+  await assert.rejects(() => r.run(t2.id), /already working in the project folder/);
+  r.starting.delete(t1.id);
+  // Not while a merge (busy op) runs.
+  r.busy.add('other');
+  await assert.rejects(() => r.run(t2.id), /merge is running/);
+  r.busy.delete('other');
+  // turnEnded: only files that changed during the task, nothing committed.
+  fs.writeFileSync(path.join(root, 'old.txt'), 'dirty before'); // already dirty at start
+  fs.mkdirSync(A.taskDir(root, t1.id), { recursive: true });
+  fs.writeFileSync(path.join(A.taskDir(root, t1.id), 'dirty-before.txt'), 'old.txt');
+  fs.writeFileSync(path.join(root, 'new.txt'), 'x');
+  const head = sh('rev-parse', 'HEAD').toString();
+  store.updateTask(t1.id, { status: 'doing' });
+  await r.turnEnded(t1.id, { ok: true, text: 'done' });
+  assert.deepEqual(store.task(t1.id)!.directFiles, ['new.txt']);
+  assert.equal(sh('rev-parse', 'HEAD').toString(), head);
+});
+
+test('git: workingDiff and workingChanges cover tracked edits and untracked files in the list only', async () => {
+  const root = tmp();
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 't@t'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+  fs.writeFileSync(path.join(root, 'a.txt'), 'one\n');
+  fs.writeFileSync(path.join(root, 'other.txt'), 'x\n');
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['commit', '-qm', 'init'], { cwd: root });
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(root, 'a.txt'), 'two\n');
+  fs.writeFileSync(path.join(root, 'new.txt'), 'hello\n');
+  fs.writeFileSync(path.join(root, 'other.txt'), 'changed\n');
+  const files = ['a.txt', 'new.txt'];
+  const list = await g.workingChanges(root, head, files);
+  assert.deepEqual(list.map(c => `${c.status} ${c.file}`).sort(), ['A new.txt', 'M a.txt']);
+  const diff = await g.workingDiff(root, head, files);
+  assert.match(diff, /\+two/);
+  assert.match(diff, /\+\+\+ b\/new\.txt[\s\S]*\+hello/);
+  assert.doesNotMatch(diff, /other\.txt/);
+  assert.equal(await g.workingDiff(root, head, []), '');
+});
+
+// ---- direct tasks: Finish and Discard against a real temp repo ----
+const gitSync = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+const directRepo = () => {
+  const d = tmp();
+  gitSync(d, 'init', '-q'); gitSync(d, 'config', 'user.email', 't@t'); gitSync(d, 'config', 'user.name', 't');
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a1\n'); fs.writeFileSync(path.join(d, 'other.txt'), 'o1\n');
+  gitSync(d, 'add', '-A'); gitSync(d, 'commit', '-q', '-m', 'init');
+  return d;
+};
+const mkRunner = async (d: string, files: string[]) => {
+  const { Runner } = await import('../runner');
+  const store = new Store(d);
+  const t = store.addTask({ title: 'My task', mode: 'auto' });
+  store.updateTask(t.id, { where: 'direct', status: 'review', directFiles: files, startHead: gitSync(d, 'rev-parse', 'HEAD').trim() });
+  const deps: any = { bin: () => undefined, env: () => ({}), settings: () => ({}), limits: new Limits(), notify() {}, choose: async () => undefined, cli: '' };
+  return { r: new Runner(store, deps), store, id: t.id };
+};
+
+test('commitFiles commits only the listed files, skipping stale entries', async () => {
+  const d = directRepo();
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a2\n'); fs.writeFileSync(path.join(d, 'new.txt'), 'n\n'); fs.writeFileSync(path.join(d, 'other.txt'), 'o2\n');
+  fs.writeFileSync(path.join(d, 'staged.txt'), 's\n'); gitSync(d, 'add', 'staged.txt');
+  const made = await g.commitFiles(d, 'My task', ['a.txt', 'new.txt', 'ghost.txt']);
+  assert.equal(made, true);
+  assert.equal(gitSync(d, 'rev-list', '--count', 'HEAD').trim(), '2');
+  assert.equal(gitSync(d, 'log', '-1', '--format=%s').trim(), 'My task');
+  assert.deepEqual(gitSync(d, 'show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort(), ['a.txt', 'new.txt']);
+  assert.match(gitSync(d, 'status', '--porcelain'), /other\.txt/);
+  assert.match(gitSync(d, 'status', '--porcelain'), /A  staged\.txt/);
+  assert.equal(await g.commitFiles(d, 'again', ['a.txt']), false);
+});
+
+test('Runner.merge finishes a direct task: one commit, progress, done', async () => {
+  const d = directRepo();
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a2\n'); fs.writeFileSync(path.join(d, 'other.txt'), 'o2\n');
+  const { r, store, id } = await mkRunner(d, ['a.txt']);
+  await r.merge(id);
+  assert.equal(store.task(id)!.status, 'done'); assert.ok(store.task(id)!.doneAt);
+  assert.equal(gitSync(d, 'log', '-1', '--format=%s').trim(), 'My task');
+  assert.ok(fs.readFileSync(path.join(d, '.justcode', 'progress.md'), 'utf8').includes('My task'));
+  assert.match(gitSync(d, 'status', '--porcelain'), /other\.txt/);
+  r.dispose?.();
+});
+
+test('Runner.merge with nothing to commit still marks done; refuses a task still working', async () => {
+  const d = directRepo();
+  const { r, store, id } = await mkRunner(d, ['a.txt']);
+  await r.merge(id);
+  assert.equal(store.task(id)!.status, 'done');
+  assert.equal(gitSync(d, 'rev-list', '--count', 'HEAD').trim(), '1');
+  assert.ok(fs.existsSync(path.join(d, '.justcode', 'progress.md')));
+  const w = await mkRunner(directRepo(), ['a.txt']);
+  w.store.updateTask(w.id, { status: 'doing' });
+  await w.r.merge(w.id);
+  assert.equal(w.store.task(w.id)!.status, 'doing');
+  r.dispose?.(); w.r.dispose?.();
+});
+
+test('Runner.discard reverts only the listed files and refuses done tasks', async () => {
+  const d = directRepo();
+  fs.mkdirSync(path.join(d, 'dir')); fs.writeFileSync(path.join(d, 'dir', 'x.txt'), 'x\n');
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a2\n'); fs.writeFileSync(path.join(d, 'new.txt'), 'n\n'); fs.writeFileSync(path.join(d, 'st.txt'), 's\n');
+  gitSync(d, 'add', 'st.txt'); fs.writeFileSync(path.join(d, 'other.txt'), 'o2\n'); fs.writeFileSync(path.join(d, 'keep.txt'), 'k\n');
+  const { r, store, id } = await mkRunner(d, ['a.txt', 'new.txt', 'st.txt', 'dir']);
+  await r.discard(id);
+  assert.equal(fs.readFileSync(path.join(d, 'a.txt'), 'utf8'), 'a1\n');
+  for (const f of ['new.txt', 'st.txt', 'dir']) assert.equal(fs.existsSync(path.join(d, f)), false);
+  assert.equal(fs.readFileSync(path.join(d, 'other.txt'), 'utf8'), 'o2\n');
+  assert.ok(fs.existsSync(path.join(d, 'keep.txt')));
+  assert.equal(store.task(id)!.status, 'todo');
+  store.updateTask(id, { status: 'done', directFiles: ['a.txt'] });
+  await r.discard(id);
+  assert.equal(store.task(id)!.status, 'done');
+  r.dispose?.();
+});
+
+test('setup: Recommended rows are optional and follow the lookups', async () => {
+  const { checkSetup, pluginInstallCommands } = await import('../setup');
+  const run = (have: string[], md: boolean) => checkSetup(undefined, {}, '/p', false, { plugin: n => have.includes(n) ? '/x' : undefined, designMd: () => md });
+  const s = await run(['superpowers'], false);
+  const row = (id: string) => s.checks.find(c => c.id === id)!;
+  for (const id of ['frontendDesign', 'superpowers', 'playwright', 'designMd']) assert.ok(row(id).optional);
+  assert.ok(row('superpowers').ok && !row('frontendDesign').ok);
+  assert.equal(row('playwright').fix?.action, 'installPlaywright');
+  assert.equal(row('frontendDesign').fix?.action, 'installPlugin:frontend-design');
+  assert.ok((await run([], true)).checks.find(c => c.id === 'designMd')!.ok);
+  assert.equal(pluginInstallCommands('claude', 'superpowers').length, 2);
+  // the install route registers a plugin named playwright, which is what the row looks up
+  const { playwrightCommand } = await import('../setup');
+  assert.equal(playwrightCommand('claude'), 'claude plugin install playwright@claude-plugins-official');
+  assert.equal(row('playwright').fix?.action, 'installPlaywright');
+});
+
+test('installedPlugins: scopes, fallbacks, bare keys, two marketplaces, no skills/', () => {
+  const dir = tmp(), mk = (n: string, skills = true) => { const d = path.join(dir, n); fs.mkdirSync(skills ? path.join(d, 'skills') : d, { recursive: true }); return d; };
+  const file = path.join(dir, 'p.json');
+  const [u, pr, only, bare, m1, m2, mcp] = [mk('u'), mk('pr'), mk('only'), mk('bare'), mk('m1'), mk('m2'), mk('mcp', false)];
+  fs.writeFileSync(file, JSON.stringify({ plugins: {
+    'both@x': [{ scope: 'project', installPath: pr }, { scope: 'user', installPath: u }],
+    'proj@x': [{ scope: 'project', installPath: only }],
+    'bare': [{ scope: 'user', installPath: bare }],
+    'dup@a': [{ scope: 'user', installPath: m1 }], 'dup@b': [{ scope: 'user', installPath: m2 }],
+    'playwright@claude-plugins-official': [{ scope: 'user', installPath: mcp }] } }));
+  const all = installedPlugins(file);
+  assert.equal(all.both, u);
+  assert.equal(all.proj, only);
+  assert.equal(all.bare, bare);
+  assert.equal(all.dup, m1); // first marketplace wins
+  assert.equal(all.playwright, mcp); // MCP-only plugin: no skills/ needed
+  assert.equal(installedPlugin('playwright', file, 'skills'), undefined);
+  assert.equal(installedPlugin('both', file, 'skills'), u);
+});
+
+test('design: listDesigns parses a tree and caches 24h; install writes sha256; brief section only for UI tasks', async () => {
+  const D = await import('../design');
+  const dir = tmp(), file = path.join(dir, 'c', 'designs.json');
+  let calls = 0;
+  const tree = { tree: [{ type: 'blob', path: 'design-md/stripe/DESIGN.md' }, { type: 'blob', path: 'design-md/apple/DESIGN.md' }, { type: 'blob', path: 'README.md' }, { type: 'tree', path: 'design-md/x' }] };
+  const get = async () => { calls++; return tree; };
+  assert.deepEqual((await D.listDesigns(get, 1000, file)).map(d => d.name), ['apple', 'stripe']);
+  await D.listDesigns(get, 1000 + 3600e3, file);
+  assert.equal(calls, 1);
+  await D.listDesigns(get, 1000 + 25 * 3600e3, file);
+  assert.equal(calls, 2);
+  const root = tmp();
+  const info = D.installDesign(root, '# Stripe\n', { source: 'awesome-design-md', name: 'stripe' });
+  assert.equal(JSON.parse(fs.readFileSync(D.originFile(root), 'utf8')).sha256, info.sha256);
+  assert.equal(info.sha256.length, 64);
+  const ui = { id: 'u', title: 'Restyle the settings page', mode: 'auto', status: 'todo', created: 0 } as any;
+  const be = { id: 'b', title: 'Fix retry logic in queue', mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.match(A.writeBrief(root, ui, []), /## Design system/);
+  assert.match(A.writeBrief(root, { ...be, output: 'artifact' }, []), /## Design system/);
+  assert.doesNotMatch(A.writeBrief(root, be, []), /## Design system/);
+  D.removeDesign(root);
+  assert.doesNotMatch(A.writeBrief(root, ui, []), /## Design system/);
+});
+
+test('playwright MCP: pinned, headless, saves into shots; review prompt UI section', () => {
+  const m = playwrightMcp('/s').playwright;
+  assert.equal(PLAYWRIGHT_TOOLS, 'mcp__playwright');
+  assert.ok(m.args.some(a => /^@playwright\/mcp@\d+\.\d+\.\d+$/.test(a)));
+  assert.deepEqual(m.args.slice(-4), ['--headless', '--isolated', '--output-dir', '/s']);
+  const task = { id: 'x', title: 't' } as any;
+  const web = reviewPrompt(task, 'main', 'd', { shots: '/s', web: true });
+  assert.match(web, /browser_take_screenshot/); assert.doesNotMatch(web, new RegExp(['npx', 'playwright', 'screenshot'].join(' ')));
+  const none = reviewPrompt(task, 'main', 'd', { shots: '/s' });
+  assert.doesNotMatch(none, /# UI checks/);
+  assert.doesNotMatch(reviewPrompt(task, 'main', 'd', { shots: '/s', adb: { bin: 'adb', devices: ['a'] }, cli: 'c.js' }), /browser_take_screenshot/);
+});
+
+test('webOptions: MCP server and allow rule come together', () => {
+  const on = webOptions(true, '/s', ['Read']);
+  assert.deepEqual(on.allowed, [PLAYWRIGHT_TOOLS, 'Read']); assert.ok(on.mcpServers?.playwright);
+  const off = webOptions(false, '/s', ['Read']);
+  assert.deepEqual(off.allowed, ['Read']); assert.equal(off.mcpServers, undefined);
+  assert.match(reviewPrompt({ id: 'x', title: 't' } as any, 'm', 'd', { shots: '/s', web: true }), /browser_install/);
+  // A bare filename is saved relative to the server's cwd (the project), not --output-dir: checked live with 0.0.85.
+  assert.match(reviewPrompt({ id: 'x', title: 't' } as any, 'm', 'd', { shots: '/s', web: true }), /absolute path "\/s\/<name>\.png"/);
+});
+
+test('UI wiring: webOptions reach the SDK options, the rule approves the server tools, the brief follows the same flag', () => {
+  const w = webOptions(true, '/s', ['Read']);
+  const o = toolOptions({ mcpServers: w.mcpServers, allowed: w.allowed });
+  assert.deepEqual((o.mcpServers as any).playwright.args.slice(-2), ['--output-dir', '/s']);
+  assert.ok(o.allowedTools?.includes('mcp__playwright'));
+  assert.equal(toolOptions({ mcpServers: undefined, allowed: [] }).mcpServers, undefined);
+  assert.ok(matches('mcp__playwright', 'mcp__playwright__browser_take_screenshot', {}));
+  assert.ok(!matches('mcp__playwright', 'mcp__playwrightx__a', {}));
+  assert.ok(!matches('mcp__play', 'mcp__playwright__a', {}));
+  const root = tmp();
+  const ui = { id: 'u', title: 'Restyle the settings page', mode: 'auto', status: 'todo', created: 0 } as any;
+  const be = { id: 'b', title: 'Fix retry logic in queue', mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.equal(A.isUiTask(ui), true); assert.equal(A.isUiTask(be), false);
+  assert.match(A.writeBrief(root, ui, []), /browser_take_screenshot/);
+  assert.doesNotMatch(A.writeBrief(root, be, []), /browser_take_screenshot/);
 });

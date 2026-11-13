@@ -27,70 +27,53 @@ what tasks need:
 After a fix, close its terminal or press **Check again**. You can reopen the checklist at any time with
 **JustCode: Check Setup**, or from ⚙ → *Setup checklist*.
 
+### Recommended tools
+
+Below the required checks, four rows marked **Recommended** are optional. The board works without them, and each
+row keeps its button until it is done.
+
+| Row | What it adds | Install (the button runs it in a terminal) |
+|---|---|---|
+| frontend-design plugin | A design skill for UI and artifact tasks: a deliberate palette, type and layout | `claude plugin install frontend-design@claude-plugins-official` |
+| superpowers plugin | Brainstorming and planning skills for the planner; test-first and verify-before-done skills for tasks. Turn it off in ⚙ (*superpowers plugin in sessions*) to save the tokens its skills add to every request | `claude plugin marketplace add obra/superpowers-marketplace` then `claude plugin install superpowers@superpowers-marketplace` |
+| Playwright | Headless screenshots for UI tasks and reviews. JustCode starts the Playwright MCP server in those sessions by itself; screenshots land in `.justcode/tasks/<id>/shots/` | `claude plugin install playwright@claude-plugins-official`. To use it in your own Claude Code sessions as well: `claude mcp add --scope user playwright -- npx @playwright/mcp@latest` |
+| DESIGN.md | A design system that UI tasks follow (colors, type, spacing, components) | **Pick a design**: choose one from awesome-design-md or use your own file. It is saved to `.justcode/design/DESIGN.md` |
+
+If an install fails in the terminal, type the same steps inside Claude Code (`/plugin marketplace add …`,
+`/plugin install …`).
+
 **Projects.** The folders open in VS Code become projects automatically. **+** adds any other folder; it is
 remembered across windows. **×** removes a project from the board, and its files are kept. The phone page only lists these known projects: add a folder in VS Code (**JustCode: Add Project**) for it to appear on the phone.
 
-## 2. Set up the project for Claude
+## 2. Describe the project for Claude
 
-A label next to the project name says whether the project is set up for Claude:
+A label next to the project name says whether the project has a description:
 
 | Label | Meaning | Click it to… |
 |---|---|---|
-| **✓ Set up** | The project has `CLAUDE.md`, an agent in `.claude/agents` and `TASKS.md`. Hover to see each. | — |
-| **● Not set up** | One or more of them is missing. A banner above the board says which. | start the setup |
+| **✓ Set up** | `.justcode/project.md` exists. Hover to see whether `.justcode/design/DESIGN.md` does too. | — |
+| **● Not set up** | There is no project description yet. A banner above the board says so. | start the setup |
 | **◌ Setting up…** | The setup task is running. | open it and answer its questions |
 
-Setup is optional: tasks work without it. With it, tasks follow your conventions and come with a checklist the
-reviewer can verify. Start it with **Set up project** on the banner, the label, the ✦ Plan dialog or **⋯**. **Not now**
-hides the banner for that project; the label stays.
+Setup is optional: tasks work without it. With it, every task brief and plan chat starts with a `## Project` line
+pointing at `.justcode/project.md`, so Claude learns the product, stack and commands first. Start it with **Set up
+project** on the banner, the label, the ✦ Plan dialog or **⋯**. **Not now** hides the banner for that project; the
+label stays.
 
-The setup runs as a task in the project folder:
+The setup runs as a task in the project folder (the `just-code-setup` skill):
 
 1. **Claude reads the project:** README, `CLAUDE.md`, package and build files, and enough code to know the stack, the
    commands and what is already built.
-2. **It asks you 2-4 questions on the card:** the goal of the next stretch of work, what "done" means (tests, type
-   check, screenshots), conventions it cannot see in the code, and which agents you want. Each question has a
-   recommended answer; you can also type your own. A yellow banner says when it is waiting for you.
+2. **It asks you 2-4 questions on the card:** what the product does and for whom, the stack and commands, what "done"
+   means, and whether you have designs. Each question has a recommended answer; you can also type your own.
 3. **It shows the files it will write** and waits for **Write them** or **Change something**. Nothing is written
    before you approve.
-4. **It writes:**
-   - `CLAUDE.md` (under 100 lines): stack, exact commands, layout, conventions and the definition of done.
-   - `.claude/agents/reviewer.md`: a read-only reviewer that checks each task's *Done when* list and runs your tests.
-     A planner or implementer agent only if you asked for one.
-   - `.claude/skills/…` only for multi-step workflows the project clearly has, such as a release.
-   - `TASKS.md`: the work in build order, grouped into sprints (see below).
-5. **It syncs `TASKS.md` into the board** and ends with a short summary of what it wrote, added and created.
+4. **It writes only inside `.justcode/`:**
+   - `.justcode/project.md` (under 100 lines): the product, users, stack, exact commands, layout, conventions and the
+     definition of done.
+   - `.justcode/design/DESIGN.md`, only if you named a design.
 
-Existing files are never overwritten. Files for `.claude/` are drafted under `.justcode/setup/` and installed by
-JustCode, because Claude Code asks before every write into `.claude/`.
-
-### TASKS.md
-
-```markdown
-## Sprint 1: Users can sign in
-- [ ] Add email login form
-  Goal: a user signs in with email and password
-  Files: src/auth/login.tsx, src/api/session.ts
-  Done when:
-  - a wrong password shows an error message
-  - npm test passes
-
-## Backlog
-- [ ] Password reset by email
-```
-
-| In TASKS.md | On the board |
-|---|---|
-| `## Sprint N: goal` | That sprint, created with its goal if the board has no open sprint of that name |
-| `## Backlog`, or no heading | The backlog |
-| `- [ ]` / `- [~]` / `- [x]` | To do / in progress / done |
-| Indented lines | The task's details. Sub-bullets keep their dashes. |
-| An item you delete | The task is archived |
-
-Tasks made on the board are never touched by a sync. A task with an unmerged branch is never marked done from
-`TASKS.md`: merge it on the board. To sync again after editing `TASKS.md`, run `/just-code-ai-sync sync` in Claude
-Code (after **JustCode: Install the TASKS.md Sync Skill**), or `node <extension>/out/cli.js sync` in a terminal.
-Add `--dry-run` to preview.
+It never touches `CLAUDE.md`, `.claude/`, `docs/` or your own task files. Existing files are not overwritten without asking.
 
 ## 3. Adding tasks
 
@@ -118,8 +101,9 @@ Type what you want in the box at the top:
   - **Advanced**:
     - **Agent**: an agent from `.claude/agents`. *Default* is plain Claude.
     - **Permissions**: see section 7.
-    - **Runs in**: *Own branch* (default, reviewed and merged) or *Project folder* (for deploys, syncs and
-      releases; finish it with **✓ Done**).
+    - **Runs in**: *Direct* or *Own branch*. A **direct** task works in your checkout and is the default for tasks
+      outside a sprint (deploys, syncs, small edits). A **branch** task gets its own branch and folder, and is the
+      default inside a sprint. Only one direct task runs at a time.
 
 A good task is one change that can be built, reviewed and merged on its own, with a *Done when* a reviewer can check.
 
@@ -186,7 +170,6 @@ Sprints are optional groups of tasks with a goal. They come from three places:
 
 - **+ Sprint** in the toolbar: a name and an optional goal.
 - **✦ Plan**: Claude names sprints in its proposal, and applying creates them.
-- **TASKS.md**: each `## Sprint N: goal` heading (section 2).
 
 **The view menu** (left of the toolbar) shows *All tasks*, the *Backlog* or one sprint. ★ marks the active sprint.
 
@@ -268,9 +251,14 @@ When Claude finishes a turn:
    *Done when* item, runs the tests that cover the change, and, for UI changes, takes screenshots with an Android
    device (`adb`) or Playwright and looks at them. Docs-only changes need no AI review.
 4. If it finds issues, they go back to Claude, and the new commit is reviewed again (up to 3 rounds, set in ⚙). If
-   issues remain after that, the card waits under **Needs you**.
+   issues remain after that, the card waits under **Needs you** (see "When a card needs you" below).
 5. If the review passes, press **✓ Merge**, or turn on *Merge automatically* in ⚙. A change the reviewer flags as
    critical is never merged automatically. A task is never merged while its checks are still running.
+
+**Direct tasks** have no branch: their changed files stay uncommitted in your checkout. They get the same checks and
+AI review, then **Finish** commits just those files, or **Discard** reverts them. While a direct task holds
+uncommitted files, a branch task's **Merge** is refused (Finish or Discard it first), a branch task started meanwhile
+shows a one-time warning on its card, and Run all starts only one direct task at a time.
 
 Merging brings the latest base into the task branch first, inside the task's folder. If that conflicts, the card lists
 the files; press **Resolve with Claude**, or fix them yourself and press **Mark resolved**. Your own checkout is never
@@ -278,6 +266,23 @@ left with conflict markers. With a GitHub remote and `gh` installed, **Push PR**
 
 If Claude only replies (asks something in text instead of changing files), the card shows its reply under **Needs
 you**. Answer it in the task panel.
+
+### When a card needs you
+
+When an automatic loop gives up, the card says what happened and offers every way out. **Run all goes on without
+it**: the toolbar shows "N need you", and clicking that opens the first such card.
+
+| The card says | What you can do |
+|---|---|
+| Review: N issues left after 3 fix rounds | **See issues** opens the Review tab. Each issue shows how many rounds it came back and Claude's reply to the last round (often "I left X because Y"). **Accept** one issue (it no longer blocks; the reviewer stops reporting it), or **Ask Claude to fix this one**. On the card: **Try 1 more round** (this task gets one extra round), **Accept issues and merge** (or **finish** for a direct task; asks first and lists the issues), or **Discard**. A task merged this way says "Merged with N accepted review issues" |
+| `npm test` still fails after N fix rounds | **See log**, **Try 1 more round**, **Merge anyway** (or **Finish anyway**), **Discard** |
+| Review could not run | **Retry review**, **Merge without review** (or **Finish without review**), **Discard**. A short hint names the usual cause (sign in again, rate limit, timeout) |
+| Stopped: an error | **Resume**, **Open task**, **Discard** |
+| Conflicts with the base | **Resolve with Claude**, **Open task folder**, **Discard** |
+| Claude replied without changing files | **Reply**, **Finish (no changes)**, **Discard** |
+
+The reviewer reports only problems in the change itself. It does not count a *Done when* item that only a person
+can check (a manual run, a device it does not have) as an issue; it leaves that item for you.
 
 ## 9. Run a whole list
 
@@ -312,8 +317,10 @@ JustCode can serve the board to your phone over your own network. This is separa
 - **Same network:** the phone and the computer must be on the same Wi-Fi or LAN.
 - **Keep the computer awake:** the server runs inside VS Code on your computer. If it sleeps or VS Code closes, the
   phone loses the board and tasks stop.
-- **Open it on the phone:** run *JustCode: Show Phone Pairing* in VS Code. It shows an address (`http://<computer-ip>:7878/`)
-  and the token. Open the address in the phone's browser and paste the token. The page lists the open project's tasks and
+- **Pair the phone:** run *JustCode: Show Phone Pairing* in VS Code. It shows a 6-digit pairing code (one use, valid 10
+  minutes) and a link with that code. Open the link on the phone, or open `http://<computer-ip>:7878/` and type the code.
+  Ten wrong codes cancel every open code. A paired phone stays signed in for `justCode.phoneTokenDays` days (default 7),
+  then pairs again. ⚙ → **Phone** lists paired phones (when paired, last used, expiry) with **Revoke**. The page lists the open project's tasks and
   lets you switch project, move cards between columns, add and run a task, approve or deny a permission, stop a task and merge a task that passed review. Nothing else
   (no settings, files or bypass mode) is allowed from the phone. A native Android app is not built yet (docs/FOLLOWUPS.md).
 - **Selecting a project:** the top of the phone page shows one button per project open in VS Code; tap one to switch the
@@ -324,6 +331,10 @@ JustCode can serve the board to your phone over your own network. This is separa
   (discard it on the desktop first).
 - **Tablet view:** at 900px wide or more (a tablet or landscape), the four columns show side by side with a detail pane on the right instead of tabs. Tap a card to see it in the pane; drag-to-move (drop on a column heading), the project switcher and approval notifications work as on the phone. Below 900px the tabs layout is unchanged.
 - **Port:** `justCode.phoneServerPort` (default 7878).
+- **HTTPS (optional):** turn on `justCode.phoneTls` to serve the phone page over HTTPS with a self-signed certificate.
+  JustCode makes it once with `openssl` and keeps it in `~/.justcode-cache/phone-cert/` (never in the project). The
+  pairing link becomes `https://…&fp=<fingerprint>`, and the Android app trusts only that certificate. A browser shows a
+  certificate warning instead: compare the fingerprint in the pairing dialog before you accept it.
 - **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
   on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks
   run with no approvals, so a phone with the token can start commands and change files unchecked. Leave the server
@@ -400,7 +411,57 @@ saves a local copy instead, every time it is needed, not once:
   day, is saved through a ⧉ terminal running `claude` (signed in with a Claude account). The card says *Saving
   claude.ai sources locally…* meanwhile. A failed refresh keeps the old copy.
 - Plans and task briefs then point Claude at the copy in `.justcode/sources/`. **Refresh copy** under 📎 Sources
-  picks up a newer version right away.
+  picks up a newer version right away. `justCode.artifactRefreshHours` (default 24) sets how old a copy may be.
+
+### ⧉ Artifacts
+
+**⧉ Artifacts** (toolbar) lists every claude.ai artifact the project used as input or published as a result
+(`.justcode/artifacts.json`): its title, which tasks used or produced it, and the age of its saved copy. Each row has
+**Copy link**, **Refresh copy** (inputs), **Use as source** (adds it to 📎 Sources and ticks it for the next task) and a
+note Claude reads. A task's Details show the artifacts it used and published.
+
+Briefs and planning chats list the project's artifacts under *Project artifacts*, so a later task can build on one.
+An artifact task whose title names a page an earlier task published (for example "Add a region filter to the Sales
+dashboard") updates that page at the same link instead of creating a new one. When a refresh finds that an input
+artifact changed, the button shows a dot and To do tasks built on it get the tag *design changed since this task was
+written*.
+
+Each task's transcript is also copied to `.justcode/tasks/<id>/transcript.jsonl` after every turn (**Transcript**
+under Details), so the activity log survives after the task's folder is gone.
+
+## Project controls (policy, budgets, audit)
+
+`.justcode/policy.json` is created with defaults the first time it is needed. Edit it (⚙ → **Policy** → **Open
+policy.json**); changes apply at once. ⚙ → **Policy** also lists what the policy denied today.
+
+| Field | Default | What it does |
+|---|---|---|
+| `protectedPaths` | `.github/workflows/**`, `infra/**`, `**/*.pem`, `**/.env*` | A task may not edit these files, in any permission mode. Claude is told why and works around it. |
+| `denyTools` | `Bash(curl *)`, `Bash(wget *)`, `WebFetch` | Always denied, also inside a longer command (`npm test && curl …`). |
+| `forbidModes` | `bypassPermissions` | A task in this mode does not start; *Bypass all* is ignored for this project. |
+| `requireHumanReviewFor` | `auth`, `payment`, `migration`, `security` | A change whose paths contain one of these words is never merged automatically: the card says *Needs your approval (policy)*. |
+| `maxCostUsd` | task 5, sprint 50, project 500 | A task that reaches a budget stops with *Budget reached: $X of $Y*. Raise the number, then press **Resume**. 0 = no budget. Reviews and planning count too. |
+| `allowedModels` | any | Tasks run only with these models. |
+| `requireChecksPass` | true | **Merge** / **Finish** is refused while the project's checks fail (the card then offers no "anyway"). |
+| `secretScan` | true | Before JustCode commits, it scans the added lines for keys and tokens (AWS, GitHub, Slack, private keys, JWTs, `password = "…"`). On a hit nothing is committed, the card names `file:line`, and Claude is asked once to remove them. |
+
+**Audit log.** `.justcode/audit.jsonl` records who did what: task created, run, stopped, messaged; every permission
+answer (with *phone* when you answered on the phone); mode switches; reviews; merges, finishes and discards; policy
+denials, budget stops, blocked commits, accepted review issues; phone pairing and phone actions. *JustCode: Export
+Audit Log* writes it as CSV to `.justcode/reports/`.
+
+**Dependencies.** Under Details → **After**, tick the tasks this one waits for. Run all never starts it before they are
+done; its card says *⟂ waits for "…"* (**Run anyway** starts it now). ✦ Plan sets this for you when one task needs
+another.
+
+**Sprint report.** **Report** on the sprint bar (or *JustCode: Export Sprint Report*) writes
+`.justcode/reports/sprint-<name>-<date>.md`: the goal, every task with its merge commit, files changed, review rounds
+and cost, audit highlights (denials, budget stops, blocked commits, overrides) and the artifacts it published.
+
+**Health.** *JustCode: Check Setup and Health* also checks the project's JustCode files: a broken `board.json`,
+`policy.json` errors, a corrupt `artifacts.json` or links to deleted tasks, leftover task folders, artifact sources
+without a recent copy, and transcripts not yet archived. Each problem is a row with one fix; a banner on the board
+points at the first one.
 
 ## 15. Checks and ready folders
 
@@ -455,7 +516,7 @@ where they stopped. **Try now** skips the wait.
 | "Claude Code is not installed or not found" | Run **JustCode: Check Setup** → *Install Claude Code*. If Claude is installed somewhere unusual, set `justCode.claudePath`. |
 | A task stops with "authentication" errors | Run **JustCode: Check Setup** → *Sign in*. |
 | "git needs your name and email" | Run **JustCode: Check Setup** → *Set name and email*. |
-| The label says **● Not set up** after setup | Setup counts `CLAUDE.md`, an agent in `.claude/agents` and `TASKS.md`. Hover the label to see which is missing, then run setup again: existing files are kept. |
+| The label says **● Not set up** after setup | Setup looks for `.justcode/project.md`. Run setup again, or write that file yourself. |
 | Setup seems stuck | It is probably waiting for your answer: open it from the **◌ Setting up…** label or the yellow banner. |
 | The planning chat stopped moving | Its progress bar says *Waiting for your answer* when Claude asked something. Otherwise press **Stop step** and send your message again. |
 | A task keeps asking for the same command | Press **Always allow …**, or add a rule in ⚙, e.g. `Bash(docker compose:*)`. A compound command like `cd x && make` needs a rule for each part. |

@@ -19,7 +19,7 @@ window.acquireVsCodeApi=function(){return{postMessage:function(m){fetch('/msg',{
 export const page = () => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="/board.css"></head>
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
-<script src="/shim.js"></script><script src="/board.js"></script></body></html>`;
+<script src="/shim.js"></script><script src="/status.js"></script><script src="/board.js"></script><script src="/drawer.js"></script><script src="/dialogs.js"></script></body></html>`;
 
 export interface MobileServer { port: number; stop(): Promise<void> }
 
@@ -46,7 +46,7 @@ export function startMobileServer(port: number, o: MobileOpts, bindHost = '0.0.0
     }
   }, 500);
   const files: Record<string, [string, string]> = {
-    '/board.css': ['board.css', 'text/css'], '/board.js': ['board.js', 'text/javascript'], '/icon.svg': ['icon.svg', 'image/svg+xml'],
+    '/board.css': ['board.css', 'text/css'], '/board.js': ['board.js', 'text/javascript'], '/status.js': ['status.js', 'text/javascript'], '/drawer.js': ['drawer.js', 'text/javascript'], '/dialogs.js': ['dialogs.js', 'text/javascript'], '/icon.svg': ['icon.svg', 'image/svg+xml'],
   };
   const server = http.createServer((req, res) => {
     if (!hostAllowed(req.headers.host, req.headers.origin)) { res.statusCode = 403; res.end(); return; }

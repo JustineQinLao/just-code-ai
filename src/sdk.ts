@@ -15,4 +15,7 @@ export function sdk(): Promise<typeof Sdk> {
   return loaded;
 }
 
+// Tests replace the SDK with a scripted fake (see src/test/runner.test.ts).
+export function useSdk(fake: Partial<typeof Sdk>) { loaded = Promise.resolve(fake as typeof Sdk); }
+
 declare const __JUSTCODE_BUNDLE__: boolean | undefined;

@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as nodePath from 'path';
+
 // Permission rules in Claude Code's own syntax: "Edit", "Bash(npm run:*)" (prefix), "Bash(git status)" (exact),
 // "WebFetch(domain:example.com)". JustCode keeps the rules you approve with "Always" per project, so every later task
 // in that project gets them (Claude Code itself would save them in the task's own copy, which is deleted at merge).
@@ -24,7 +27,8 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 export function matches(rule: string, tool: string, input: Record<string, unknown>): boolean {
   const r = parseRule(rule);
   if (!r) return false;
-  const sameTool = r.tool === tool || (r.tool === 'Edit' && EDIT_TOOLS.has(tool));
+  // "mcp__server" approves every tool of that MCP server (mcp__server__tool), as in Claude Code.
+  const sameTool = r.tool === tool || (r.tool === 'Edit' && EDIT_TOOLS.has(tool)) || (!r.content && r.tool.startsWith('mcp__') && tool.startsWith(r.tool + '__'));
   if (!sameTool) return false;
   if (!r.content) return true;
   if (tool === 'Bash') {
@@ -80,4 +84,94 @@ export function toolArg(input: unknown): string {
   const v = o.command ?? o.file_path ?? o.notebook_path ?? o.pattern ?? o.url ?? o.description ?? o.prompt
     ?? Object.values(o).find(x => typeof x === 'string');
   return typeof v === 'string' ? v.split('\n')[0].slice(0, 300) : '';
+}
+
+/* ---------- the project's policy file: .justcode/policy.json ---------- */
+
+// Rules a project sets for every JustCode session, enforced on every tool call (a PreToolUse hook), whatever the
+// task's permission mode. Created with these defaults on first run; edit the file to change them.
+export interface Policy {
+  protectedPaths: string[];          // globs relative to the project: Edit/Write there is denied
+  denyTools: string[];               // permission rules (Claude Code syntax) that are always denied
+  forbidModes: string[];             // permission modes a task may not run in
+  requireHumanReviewFor: string[];   // words: a change touching matching paths is never merged automatically
+  maxCostUsd: { task: number; sprint: number; project: number };   // 0 = no budget
+  allowedModels: string[];           // empty = any
+  requireChecksPass: boolean;        // Merge/Finish refused while the project's checks fail
+  secretScan: boolean;               // JustCode scans what it commits for keys and tokens
+}
+
+export const DEFAULT_POLICY: Policy = {
+  protectedPaths: ['.github/workflows/**', 'infra/**', '**/*.pem', '**/.env*'],
+  denyTools: ['Bash(curl *)', 'Bash(wget *)', 'WebFetch'],
+  forbidModes: ['bypassPermissions'],
+  requireHumanReviewFor: ['auth', 'payment', 'migration', 'security'],
+  maxCostUsd: { task: 5, sprint: 50, project: 500 },
+  allowedModels: [],
+  requireChecksPass: true,
+  secretScan: true,
+};
+
+export const policyFile = (root: string) => nodePath.join(root, '.justcode', 'policy.json');
+
+const strings = (v: unknown) => Array.isArray(v) && v.every(x => typeof x === 'string') ? v as string[] : undefined;
+
+// Reads the policy, writing the defaults when there is none. A field with the wrong type falls back to its default
+// and is named in `errors` (the setup checklist shows them).
+export function loadPolicy(root: string): { policy: Policy; errors: string[] } {
+  const file = policyFile(root);
+  let raw: any;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e: any) {
+    if (e?.code === 'ENOENT') {
+      try { fs.mkdirSync(nodePath.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(DEFAULT_POLICY, null, 2) + '\n'); } catch { /* read-only */ }
+      return { policy: DEFAULT_POLICY, errors: [] };
+    }
+    return { policy: DEFAULT_POLICY, errors: [`policy.json is not valid JSON (${String(e?.message ?? e).slice(0, 120)}): the defaults apply`] };
+  }
+  const errors: string[] = [], d = DEFAULT_POLICY;
+  const list = (k: 'protectedPaths' | 'denyTools' | 'forbidModes' | 'requireHumanReviewFor' | 'allowedModels') => {
+    if (raw?.[k] === undefined) return d[k];
+    const v = strings(raw[k]); if (!v) errors.push(`${k} must be a list of strings`); return v ?? d[k];
+  };
+  const bool = (k: 'requireChecksPass' | 'secretScan') => {
+    if (raw?.[k] === undefined) return d[k];
+    if (typeof raw[k] !== 'boolean') { errors.push(`${k} must be true or false`); return d[k]; }
+    return raw[k] as boolean;
+  };
+  const cost = { ...d.maxCostUsd };
+  if (raw?.maxCostUsd !== undefined) for (const k of ['task', 'sprint', 'project'] as const) {
+    const v = raw.maxCostUsd?.[k];
+    if (v === undefined) continue;
+    if (typeof v !== 'number' || v < 0) errors.push(`maxCostUsd.${k} must be a number ≥ 0`); else cost[k] = v;
+  }
+  return { policy: { protectedPaths: list('protectedPaths'), denyTools: list('denyTools'), forbidModes: list('forbidModes'),
+    requireHumanReviewFor: list('requireHumanReviewFor'), maxCostUsd: cost, allowedModels: list('allowedModels'),
+    requireChecksPass: bool('requireChecksPass'), secretScan: bool('secretScan') }, errors };
+}
+
+// A path glob against a project-relative path: ** spans folders, * stays within one.
+export const pathMatches = (pattern: string, rel: string) => glob(pattern.replace(/^\.?\/+/, ''), true).test(rel);
+
+// Why the policy forbids this tool call, or undefined. Shell commands are split at && || ; | so a denied command
+// cannot hide behind another one.
+export function violations(p: Policy, tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
+  for (const rule of p.denyTools) {
+    const r = parseRule(rule);
+    if (!r || r.tool !== tool) continue;
+    if (tool === 'Bash' && r.content) {
+      const cmd = typeof input.command === 'string' ? input.command : '';
+      const parts = cmd.split(/&&|\|\||;|\||\n|\$\(|`/).map(s => s.trim().replace(/^\(+/, '')).filter(Boolean);
+      if (parts.some(part => matches(rule, 'Bash', { command: part }))) return `The project policy denies ${rule} (.justcode/policy.json, denyTools).`;
+    } else if (matches(rule, tool, input)) return `The project policy denies ${rule} (.justcode/policy.json, denyTools).`;
+  }
+  if (EDIT_TOOLS.has(tool)) {
+    const file = String(input.file_path ?? input.notebook_path ?? input.path ?? '');
+    if (file) {
+      const rel = nodePath.isAbsolute(file) ? nodePath.relative(cwd, file) : file;
+      const norm = rel.split(nodePath.sep).join('/');
+      const hit = !norm.startsWith('..') && p.protectedPaths.find(g => pathMatches(g, norm));
+      if (hit) return `The project policy protects ${hit}: ${norm} may not be changed by a task (.justcode/policy.json, protectedPaths). Leave it as it is, or tell the user what should change there.`;
+    }
+  }
+  return undefined;
 }

@@ -82,6 +82,13 @@ class MainActivity : AppCompatActivity() {
             web = this
             settings.javaScriptEnabled = true; settings.domStorageEnabled = true
             webViewClient = object : android.webkit.WebViewClient() {
+                // Self-signed HTTPS (justCode.phoneTls): proceed only for the certificate the pairing link pinned.
+                override fun onReceivedSslError(v: WebView, h: android.webkit.SslErrorHandler, e: android.net.http.SslError) {
+                    val fp = Pairing.fingerprint(link)
+                    val der = android.net.http.SslCertificate.saveState(e.certificate).getByteArray("x509-certificate")
+                    if (fp != null && der != null && Pairing.sha256(der) == fp) h.proceed()
+                    else { h.cancel(); runOnUiThread { showMessage("The server's certificate does not match the one you paired with. Pair again with a new QR.", "Pair again") { Pairing.forget(this@MainActivity); showPairing(null) } } }
+                }
                 override fun onReceivedHttpError(v: WebView, r: android.webkit.WebResourceRequest, e: android.webkit.WebResourceResponse) {
                     if (e.statusCode == 401 && (r.isForMainFrame || r.url.path?.startsWith("/api/") == true)) runOnUiThread { Pairing.forget(this@MainActivity); showPairing("The pairing token is no longer valid (it was regenerated). Pair again.") }
                 }
@@ -95,7 +102,7 @@ class MainActivity : AppCompatActivity() {
         root.removeAllViews()
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 48, 32, 32) }
         val msg = TextView(this).apply { text = error ?: "Scan the QR from “JustCode: Show Phone Pairing”, or paste the link."; textSize = 15f }
-        val input = EditText(this).apply { hint = "http://host:7878/?pair=…"; setSingleLine() }
+        val input = EditText(this).apply { hint = "http(s)://host:7878/?pair=123456"; setSingleLine() }
         val go = Button(this).apply { text = "Pair" }
         val scan = Button(this).apply { text = "Scan QR" }
         val preview = PreviewView(this).apply { layoutParams = LinearLayout.LayoutParams(-1, 0, 1f); visibility = View.GONE }

@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import { trackIssues } from './issues';
 
 export type Status = 'todo' | 'doing' | 'review' | 'done';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
@@ -19,7 +20,10 @@ export interface Task {
   status: Status;
   agent?: string;             // .claude/agents name, run as `claude --agent <name>`
   mode: Mode;
-  where?: 'branch' | 'root';  // branch (default): own worktree + PR; root: runs in the project folder, no merge
+  where?: 'branch' | 'direct';  // branch (default): own worktree + PR; direct: runs in the project checkout, no merge
+  startHead?: string;         // direct: HEAD when the task started
+  directFiles?: string[];     // direct: files changed in the checkout during the task (git status minus what was dirty before)
+  warning?: string;           // a note on the card (e.g. a direct task has uncommitted files while this branch task runs)
   pastSessions?: string[];    // earlier sessions of this task (replaced by a fresh one when they grew big)
   sessionId?: string;         // Claude session, fixed up front with --session-id
   base?: string;              // branch the task forks from and merges back into
@@ -27,7 +31,6 @@ export interface Task {
   worktree?: string;          // <project>/.justcode/worktrees/<id>
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
-  src?: 'TASKS.md';           // created by TASKS.md sync; only these are updated or archived by it
   review?: Review;            // AI review of the task's branch
   limited?: boolean;          // a usage limit stopped this task; it continues by itself after the reset
   init?: boolean;             // the project's initialization run
@@ -44,11 +47,12 @@ export interface Task {
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
   error?: string;             // the last run failed to start or ended on an error
   noWait?: boolean;           // Run all goes on without it (it waits for you to merge or fix it); cleared when it runs again
-  costUsd?: number;           // estimated cost of the task's sessions so far (API pricing; plans are not billed per task)
+  costUsd?: number;           // estimated cost of the task's sessions and reviews so far (API pricing; plans are not billed per task)
   output?: 'artifact';        // the result is a page published as a claude.ai artifact (not a code change)
   artifactUrl?: string;       // its link, once published
   publishing?: boolean;       // JustCode is publishing the page now (interactive claude in a terminal)
   archived?: boolean;
+  dependsOn?: string[];      // task ids that must be done before Run all starts this one
   created: number;
 }
 
@@ -58,11 +62,15 @@ export interface Checks { state: 'pass' | 'fail' | 'none'; rounds: number; head?
 
 export interface StageUsage { input: number; output: number; cacheRead: number; cacheWrite: number }
 
-export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
+// One review issue, tracked across rounds by key (see issues.ts). accepted: you decided it does not block the merge.
+export interface Issue { text: string; key: string; rounds: number; accepted?: boolean }
+// extraRounds: "1 more round" presses on this task, on top of the setting. fixNote: Claude's reply after the last fix round.
+export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: Issue[]; attempts: number; extraRounds?: number; fixNote?: string; hold?: string; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.
-export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[] }
+// plannerCostUsd: planning chats' estimated cost, which counts toward the project budget.
+export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[]; plannerCostUsd?: number }
 
 // One board per project folder, kept in the project at .justcode/board.json.
 export class Store {
@@ -81,7 +89,11 @@ export class Store {
     try { text = fs.readFileSync(this.file, 'utf8'); } catch { return { sprints: [], tasks: [] }; } // no board yet
     try {
       const b = JSON.parse(text);
-      return { sprints: b.sprints ?? [], tasks: b.tasks ?? [], rules: Array.isArray(b.rules) ? b.rules : [], queue: Array.isArray(b.queue) ? b.queue : [] };
+      const tasks = (b.tasks ?? []) as any[];
+      for (const t of tasks) if (t && (t.where as string) === 'root') t.where = 'direct'; // renamed once
+      for (const t of tasks) if ((t?.review?.issues as unknown[] | undefined)?.some(i => typeof i === 'string')) // plain strings before issue tracking
+        t.review.issues = trackIssues(undefined, (t.review.issues as unknown[]).map(String));
+      return { sprints: b.sprints ?? [], tasks, rules: Array.isArray(b.rules) ? b.rules : [], queue: Array.isArray(b.queue) ? b.queue : [] };
     } catch {
       // Hand-edited or merge-conflicted: keep a copy before the next save replaces it, so nothing is lost.
       const copy = `${this.file}.corrupt-${Date.now()}`;
@@ -181,6 +193,13 @@ export class Store {
   }
 
   get queue() { return this.board.queue ?? []; }
+  addPlannerCost(usd: number) {
+    if (!(usd > 0)) return;
+    this.fresh();
+    this.board.plannerCostUsd = (this.board.plannerCostUsd ?? 0) + usd;
+    this.save();
+  }
+
   setQueue(ids: string[]) {
     this.fresh();
     if (JSON.stringify(ids) === JSON.stringify(this.board.queue ?? [])) return;
@@ -221,4 +240,14 @@ export class Store {
     if (s) { s.closed = true; s.active = false; }
     this.save();
   }
+}
+
+// Where a new task runs: an explicit choice wins; otherwise justCode.defaultWhere (auto: backlog direct, sprint branch).
+// A remote client (phone) always gets its own branch.
+export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean }): 'direct' | 'branch' {
+  if (o.remote) return 'branch';
+  if (o.where === 'direct' || o.artifact) return 'direct';
+  if (o.where === 'branch') return 'branch';
+  if (o.setting === 'direct' || o.setting === 'branch') return o.setting;
+  return o.sprintId ? 'branch' : 'direct';
 }

@@ -31,15 +31,11 @@
       },
       {
         "command": "justCode.setup",
-        "title": "JustCode: Check Setup"
+        "title": "JustCode: Check Setup and Health"
       },
       {
         "command": "justCode.setApiKey",
         "title": "JustCode: Use an Anthropic API Key (optional)"
-      },
-      {
-        "command": "justCode.installSyncSkill",
-        "title": "JustCode: Install the TASKS.md Sync Skill"
       },
       {
         "command": "justCode.phoneLink",
@@ -48,6 +44,14 @@
       {
         "command": "justCode.showPhonePairing",
         "title": "JustCode: Show Phone Pairing"
+      },
+      {
+        "command": "justCode.exportAudit",
+        "title": "JustCode: Export Audit Log"
+      },
+      {
+        "command": "justCode.exportSprintReport",
+        "title": "JustCode: Export Sprint Report"
       }
     ],
     "configuration": {
@@ -57,6 +61,17 @@
           "type": "string",
           "default": "",
           "description": "Path to the claude CLI. Empty: found automatically (PATH, ~/.local/bin, Homebrew, npm global)."
+        },
+        "justCode.defaultWhere": {
+          "type": "string",
+          "enum": ["auto", "direct", "branch"],
+          "enumDescriptions": [
+            "Backlog tasks run in the workspace; sprint tasks get their own branch.",
+            "New tasks run in the workspace (direct, reviewed).",
+            "New tasks get their own branch (reviewed, merged)."
+          ],
+          "default": "auto",
+          "description": "Where a new task runs by default."
         },
         "justCode.defaultMode": {
           "type": "string",
@@ -281,6 +296,17 @@
           "minimum": 1,
           "description": "A task's Claude process that has been idle this long is closed to free memory. It resumes with its full history when needed."
         },
+        "justCode.artifactRefreshHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "description": "How old a saved copy of a claude.ai artifact source may be before a prompt that uses it saves it again. Lower: tasks see design changes sooner, at the cost of a save each time. 0: save again on every prompt."
+        },
+        "justCode.superpowers": {
+          "type": "boolean",
+          "default": true,
+          "description": "Load the superpowers plugin (when installed) into task, planner and review sessions: planning, test-driven development and verification skills. Off: sessions run without it, which saves the tokens its skills add to every request."
+        },
         "justCode.personalSetup": {
           "type": "boolean",
           "default": false,
@@ -302,6 +328,17 @@
           "type": "boolean",
           "default": false,
           "description": "Serve the board to your phone over your local network (token protected). Off by default. Anyone with the token can start tasks and approve permissions."
+        },
+        "justCode.phoneTls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Serve the phone server over HTTPS with a self-signed certificate (made once with openssl, kept in ~/.justcode-cache/phone-cert). The pairing link carries the certificate's fingerprint and the Android app pins it, so the token never crosses Wi-Fi in clear text. Off: plain HTTP on your local network."
+        },
+        "justCode.phoneTokenDays": {
+          "type": "number",
+          "default": 7,
+          "minimum": 1,
+          "description": "Days a paired phone stays signed in. After that it is refused and must pair again with a new code. Lower is safer; higher means pairing less often."
         },
         "justCode.phoneServerPort": {
           "type": "number",
