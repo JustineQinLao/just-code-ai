@@ -52,6 +52,7 @@ export interface Task {
   artifactUrl?: string;       // its link, once published
   publishing?: boolean;       // JustCode is publishing the page now (interactive claude in a terminal)
   archived?: boolean;
+  dependsOn?: string[];      // task ids that must be done before Run all starts this one
   created: number;
 }
 

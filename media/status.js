@@ -23,7 +23,7 @@
   }
 
   // { text, tone, actions: [[label, fn, style?], ...] }: the first action is the primary one.
-  // c: { settings, queue, policy?, post, open(id, tab), dur(ms), lastTool(t) }
+  // c: { settings, queue, policy?, tasks, post, open(id, tab), dur(ms), lastTool(t) }
   function nextStep(t, c) {
     const s = c.settings, max = roundLimit(t.review, s.review.maxAttempts), r = t.review, post = c.post, id = t.id;
     const fin = isDirect(t) ? 'Finish' : 'Merge';
@@ -40,6 +40,9 @@
     if (t.remote) return { text: 'In Remote Control: continue in the Claude app or claude.ai/code. Close its terminal to bring it back.', tone: 'run', actions: [] };
     if (t.limited) return { text: 'Paused by the usage limit. Continues by itself after the reset.', tone: 'muted', actions: [] };
     if (t.error) return { text: `Stopped: ${t.error}${hint(t.error)}`, tone: 'err', actions: [resume, ['Open task', () => c.open(id, 'activity')], discard] };
+    const waits = (t.dependsOn || []).map(d => (c.tasks || []).find(o => o.id === d)).filter(o => o && !o.archived && o.status !== 'done');
+    if (t.status === 'todo' && waits.length) return { text: `⟂ waits for “${waits[0].title.slice(0, 50)}”${waits.length > 1 ? ` and ${waits.length - 1} more` : ''}${t.queued ? ' (queued)' : ''}`, tone: 'muted',
+      actions: [['▶ Run anyway', () => post(t.queued ? 'runNow' : 'run', { id })]] };
     if (t.status === 'todo') return t.queued ? { text: `Queued #${c.queue.queued.indexOf(id) + 1}${c.queue.blocker ? ` · waits for “${c.queue.blocker.title.slice(0, 40)}”, which ${c.queue.blocker.why}` : ''}`, tone: 'muted', actions: [['▶ Run now', () => post('runNow', { id })]] }
       : { text: 'Ready', tone: 'muted', actions: [['▶ Run', () => post('run', { id })]] };
     if (t.conflicts?.length) return { text: `Conflicts with ${t.base} in ${t.conflicts.length} file(s): ${t.conflicts.slice(0, 3).join(', ')}${t.conflicts.length > 3 ? '…' : ''}`, tone: 'err',

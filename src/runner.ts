@@ -811,6 +811,11 @@ export class Runner {
     this.pumpTimer.unref?.();
   }
 
+  // The tasks this one waits for that are not done yet (deleted ones no longer count).
+  waitsFor(t: Task) {
+    return (t.dependsOn ?? []).map(d => this.store.task(d)).filter((d): d is Task => !!d && !d.archived && d.status !== 'done');
+  }
+
   // The direct task (other than `except`) still working or waiting to be finished in the project folder.
   private openDirect(except?: string) {
     return this.store.data.tasks.find(o => o.id !== except && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done'
@@ -828,6 +833,7 @@ export class Runner {
       if (this.store.task(id)?.status !== 'todo') continue; // started by hand, moved or deleted meanwhile
       const next = this.store.task(id)!;
       if (next.where === 'direct' && !next.init && this.openDirect(id)) { keep.push(id); continue; } // one direct task at a time
+      if (this.waitsFor(next).length) { keep.push(id); continue; } // its dependencies are not done yet
       slots--;
       this.run(id).catch(e => { this.d.notify('error', `${this.store.task(id)?.title ?? 'Task'}: ${e.message}`, id); });
     }
@@ -1372,6 +1378,7 @@ export class Runner {
       ?? (this.plannerTargets.length ? undefined : this.store.data.sprints.find(s => s.active && !s.closed)?.id);
     const orderIds: string[] = [];
     let added = 0, edited = 0, removed = 0, reopened = 0, sent = 0;
+    const made = new Map<RefineResult, string>();   // proposal → the task it became
     for (const c of changes) {
       const started = c.ref && this.plannerOthers.includes(c.ref) ? this.store.task(c.ref) : undefined;
       if (started && started.status !== 'todo') {
@@ -1383,9 +1390,17 @@ export class Runner {
       if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; }
       const named = this.sprintFor(c.sprint);
       if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined, ...(named ? { sprintId: named } : {}) }); orderIds.push(c.ref); edited++; }
-      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: named ?? (sprintId || undefined), mode: this.defaultMode }); orderIds.push(t.id); added++; }
+      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: named ?? (sprintId || undefined), mode: this.defaultMode }); orderIds.push(t.id); made.set(c, t.id); added++; }
     }
     for (const rm of removes) if (rm.apply) { void this.remove(rm.id); removed++; }
+    // "after": titles of tasks this one waits for (from this list or the board), resolved once all exist.
+    const byTitle = (x: string) => this.store.data.tasks.find(o => !o.archived && o.title.trim().toLowerCase() === x.trim().toLowerCase())?.id;
+    changes.forEach(c => {
+      if (!c.apply || !c.after?.length) return;
+      const id = c.ref ?? made.get(c);
+      const deps = c.after.map(byTitle).filter((d): d is string => !!d && d !== id);
+      if (id && deps.length) this.store.updateTask(id, { dependsOn: [...new Set(deps)] });
+    });
     const after = this.store.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !this.plannerTargets.includes(t.id));
     // Each goes in front of the same task (or to the end), so in proposal order they keep the planner's build order.
     for (const id of orderIds) this.store.reorder(id, after?.id);

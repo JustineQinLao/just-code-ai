@@ -501,6 +501,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (!t) return;
         if (m.patch?.mode === 'bypassPermissions' && t.mode !== 'bypassPermissions' && !await confirmBypass()) return;
         s.updateTask(m.id, pick(m.patch, ['title', 'description', 'agent', 'mode', 'where', 'sprintId']));
+        if (Array.isArray(m.patch?.dependsOn)) { const ids = m.patch.dependsOn.map(String).filter((d: string) => d !== m.id && s.task(d)); s.updateTask(m.id, { dependsOn: ids.length ? ids : undefined }); }
         if (m.patch?.mode && r.isOpen(m.id)) await r.setMode(m.id, m.patch.mode);
         return;
       case 'move': {

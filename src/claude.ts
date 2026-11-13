@@ -495,7 +495,7 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
 // Refines existing To do tasks with an instruction: Claude reads the code read-only and returns the task list it
 // proposes. Each item keeps `ref` (an existing task's id) when it is that task reworded, or omits it for a new task.
 // An existing id in none of the items is proposed for removal. This covers edit, split, merge, reorder and add.
-export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string }
+export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string; after?: string[] }
 export async function refine(tasks: { id: string; title: string; description?: string }[], instruction: string, o: HeadlessOpts): Promise<RefineResult[]> {
   const prompt = `These are the To do tasks on a board (id, title, details). Rework them following the instruction, using the codebase to make them accurate.\n\n` +
     `## Current tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` +
@@ -533,6 +533,7 @@ After every turn, end your message with the FULL proposed To do list as one JSON
 \`\`\`tasks
 [{"ref": "<existing task id, or omit for a new task>", "title": "short imperative title", "goal": "the outcome in one sentence", "files": ["path/likely/changed.ts"], "done": ["a check the reviewer can verify", "the test or command that must pass"], "sprint": "Sprint 1: <goal>"}]
 \`\`\`
+Add "after": ["<title of an earlier task in this list or on the board>"] when a task cannot start before another is done (Run all waits for it); omit it otherwise.
 Every task needs a goal and 1-4 "done" items that are concrete and testable (not "works well"). "files" are your best guess. Omit "sprint" for backlog tasks.
 Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.
 Started and done tasks (listed separately, when there are any) are never removed. Check each against the request and the code: include one, with its id in "ref" and the updated text, only when it must change. A done one then goes back to To do and is built again on top of its merged work; a working or in-review one gets the change as a message. Leave out the ones that are fine.`;
@@ -572,6 +573,7 @@ export function parseProposals(text: string, taskIds: Set<string>): RefineResult
       title: t.title.trim(),
       description: taskText({ goal: typeof t.goal === 'string' ? t.goal : undefined, files: strs(t.files), done: strs(t.done), description: typeof t.description === 'string' ? t.description : undefined }),
       sprint: typeof t.sprint === 'string' && t.sprint.trim() ? t.sprint.trim() : undefined,
+      ...(strs(t.after).length ? { after: strs(t.after) } : {}),
     }));
   } catch { return; }
 }

@@ -85,7 +85,7 @@
   /* ---------- lanes and what each card says ---------- */
   // Column and next step live in status.js (shared with the tests).
   const lane = t => window.JCStatus.lane(t, S.settings);
-  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, post, open: openTask, dur, lastTool });
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: openTask, dur, lastTool });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */
@@ -654,6 +654,12 @@
       return [
         h('label', { class: 'blk' }, 'Title', title = h('input', { value: t.title, disabled: !editable })),
         h('label', { class: 'blk' }, 'Details', desc = h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
+        editable ? (() => {
+          const others = S.board.tasks.filter(o => o.id !== t.id && !o.archived && o.status !== 'done' || (t.dependsOn || []).includes(o.id));
+          return others.length ? h('details', { class: 'adv', open: !!t.dependsOn?.length }, h('summary', {}, `After${t.dependsOn?.length ? ` (${t.dependsOn.length})` : ''}: Run all starts this task only when these are done`),
+            h('div', { class: 'deps' }, others.map(o => h('label', { class: 'chip' }, h('input', { type: 'checkbox', checked: (t.dependsOn || []).includes(o.id),
+              onchange: e => { const cur = new Set(t.dependsOn || []); e.target.checked ? cur.add(o.id) : cur.delete(o.id); post('editTask', { id: t.id, patch: { dependsOn: [...cur] } }); } }), ' ', o.title.slice(0, 60))))) : '';
+        })() : '',
         editable ? h('div', { class: 'row' }, btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary'),
           h('span', { class: 'muted small' }, 'To rework it with Claude, use ✦ Plan.')) : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
         t.images?.length ? h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
