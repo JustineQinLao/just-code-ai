@@ -7,7 +7,8 @@ import { isRepo } from './git';
 // the board can do (or start) for you.
 
 export interface Check {
-  id: 'claude' | 'login' | 'git' | 'identity' | 'repo' | 'frontendDesign' | 'superpowers' | 'playwright' | 'designMd';
+  id: 'claude' | 'login' | 'git' | 'identity' | 'repo' | 'frontendDesign' | 'superpowers' | 'playwright' | 'designMd'
+    | 'board' | 'policy' | 'registry' | 'worktrees' | 'sources' | 'transcripts';
   ok: boolean;
   label: string;
   detail: string;
@@ -85,3 +86,46 @@ export const pluginInstallCommands = (bin: string, name: string) => [
 export const playwrightCommand = (bin: string) => pluginInstallCommands(bin, 'playwright').join(' && ');
 // Shown if the CLI route fails: the same steps typed inside Claude Code.
 export const SUPERPOWERS_FALLBACK = ['/plugin marketplace add obra/superpowers-marketplace', '/plugin install superpowers@superpowers-marketplace'];
+
+/* ---------- health: the project's JustCode files ---------- */
+
+// Problems in the project's .justcode/ files, each a checklist row with one fix. Only problems are returned.
+export interface HealthInput {
+  root: string;
+  taskIds: Set<string>;
+  worktrees: Set<string>;            // folder names under .justcode/worktrees that a task uses (plus the baseline)
+  staleSources: string[];            // artifact sources whose saved copy is missing or older than the refresh setting
+  unarchived: string[];              // tasks whose transcript Claude Code still has but .justcode does not
+}
+export function checkHealth(h: HealthInput, policyErrors: string[]): Check[] {
+  const out: Check[] = [];
+  const jc = (...p: string[]) => path.join(h.root, '.justcode', ...p);
+  const problem = (id: Check['id'], label: string, detail: string, fix: Check['fix']) => out.push({ id, ok: false, optional: true, label, detail, fix });
+  // board.json: readable, and every task has an id, a title and a known status.
+  try {
+    const b = JSON.parse(fs.readFileSync(jc('board.json'), 'utf8'));
+    const bad = (Array.isArray(b?.tasks) ? b.tasks : [null]).filter((t: any) => !t || typeof t.id !== 'string' || typeof t.title !== 'string' || !['todo', 'doing', 'review', 'done'].includes(t.status));
+    const ids = (b?.tasks ?? []).map((t: any) => t?.id), dup = ids.filter((x: any, i: number) => ids.indexOf(x) !== i);
+    if (bad.length || dup.length || !Array.isArray(b?.sprints)) problem('board', 'Board file', `.justcode/board.json has ${[bad.length && `${bad.length} broken task(s)`, dup.length && `duplicate ids (${dup.slice(0, 3).join(', ')})`, !Array.isArray(b?.sprints) && 'no sprint list'].filter(Boolean).join(', ')}.`, { action: 'openJustcodeFile:board.json', label: 'Open board.json' });
+  } catch (e: any) {
+    if (e?.code !== 'ENOENT') problem('board', 'Board file', `.justcode/board.json cannot be read (${String(e.message).slice(0, 100)}).`, { action: 'openJustcodeFile:board.json', label: 'Open board.json' });
+  }
+  if (policyErrors.length) problem('policy', 'Policy file', `.justcode/policy.json: ${policyErrors.join('; ')}. The defaults apply for those fields.`, { action: 'openPolicy', label: 'Open policy.json' });
+  // artifacts.json: a list, and every task it names still exists.
+  try {
+    const list = JSON.parse(fs.readFileSync(jc('artifacts.json'), 'utf8'));
+    if (!Array.isArray(list) || list.some((e: any) => !e || typeof e.url !== 'string' || !Array.isArray(e.taskIds))) problem('registry', 'Artifact registry', '.justcode/artifacts.json is not a valid artifact list.', { action: 'resetRegistry', label: 'Reset registry' });
+    else {
+      const gone = new Set(list.flatMap((e: any) => e.taskIds.filter((t: string) => !h.taskIds.has(t))));
+      if (gone.size) problem('registry', 'Artifact registry', `.justcode/artifacts.json links ${gone.size} task(s) that no longer exist.`, { action: 'pruneRegistry', label: 'Remove the stale links' });
+    }
+  } catch (e: any) {
+    if (e?.code !== 'ENOENT') problem('registry', 'Artifact registry', `.justcode/artifacts.json cannot be read (${String(e.message).slice(0, 100)}).`, { action: 'resetRegistry', label: 'Reset registry' });
+  }
+  let orphans: string[] = [];
+  try { orphans = fs.readdirSync(jc('worktrees')).filter(d => !h.worktrees.has(d)); } catch { /* none */ }
+  if (orphans.length) problem('worktrees', 'Leftover task folders', `.justcode/worktrees has ${orphans.length} folder(s) no task uses: ${orphans.slice(0, 4).join(', ')}${orphans.length > 4 ? '…' : ''}. They may hold uncommitted work.`, { action: 'deleteOrphans', label: 'Delete them…' });
+  if (h.staleSources.length) problem('sources', 'Artifact sources', `${h.staleSources.length} claude.ai source(s) have no recent saved copy, so tasks read an old version or none.`, { action: 'refreshSources', label: 'Save copies now' });
+  if (h.unarchived.length) problem('transcripts', 'Task transcripts', `${h.unarchived.length} task(s) have no transcript under .justcode yet; it is lost when Claude Code's session store is cleared.`, { action: 'archiveTranscripts', label: 'Archive now' });
+  return out;
+}

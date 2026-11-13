@@ -9,9 +9,9 @@ import { Store, Task, resolveWhere } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
 import { pluginDir } from './plugin';
-import { agentLog, archivedLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
+import { transcript, agentLog, archivedLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
 import { Limits } from './limits';
-import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
+import { checkHealth, checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
 import * as R from './registry';
 import * as Audit from './audit';
@@ -128,7 +128,16 @@ export function activate(context: vscode.ExtensionContext) {
   let setup: SetupState | undefined;
   let checking: Promise<void> | undefined;
   const recheck = () => checking ??= checkSetup(bin(), env(), runner()?.root, !!apiKey)
-    .then(s => { setup = s; }).catch(e => out.appendLine(`setup check failed: ${e.message}`)).finally(() => { checking = undefined; push(); });
+    .then(s => { const r = runner(); setup = r ? { ...s, checks: [...s.checks, ...health(r)] } : s; }).catch(e => out.appendLine(`setup check failed: ${e.message}`)).finally(() => { checking = undefined; push(); });
+
+  // Problems in the project's .justcode files (see checkHealth): extra checklist rows, each with one fix.
+  function health(r: Runner) {
+    const tasks = r.store.data.tasks, hours = Math.max(0, setting<number>('artifactRefreshHours', 24));
+    const stale = A.loadSources(r.root).filter(x => x.kind === 'url' && A.isArtifactLink(x.ref) && (!A.hasCopy(r.root, x) || Date.now() - (savedAt(r.root, x) ?? 0) > hours * 3600_000));
+    const unarchived = tasks.filter(t => t.sessionId && !fs.existsSync(A.transcriptFile(r.root, t.id)) && r.sessionDir(t.sessionId, t));
+    return checkHealth({ root: r.root, taskIds: new Set(tasks.map(t => t.id)), worktrees: new Set([...tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)), '_base']),
+      staleSources: stale.map(x => x.id), unarchived: unarchived.map(t => t.id) }, loadPolicy(r.root).errors);
+  }
 
   async function fix(action: string) {
     const term = (name: string, cmd: string) => {
@@ -173,6 +182,42 @@ export function activate(context: vscode.ExtensionContext) {
         return recheck();
       }
       case 'recheck': return recheck();
+    }
+    const r = runner();
+    if (!r) return;
+    if (action.startsWith('openJustcodeFile:')) { void vscode.window.showTextDocument(vscode.Uri.file(path.join(r.root, '.justcode', path.basename(action.slice(17))))); return; }
+    switch (action) {
+      case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
+      case 'resetRegistry':
+        if (!await confirm('Reset the artifact registry? .justcode/artifacts.json starts empty (the old file is kept as artifacts.json.bak). Links you type or publish are added again.', 'Reset registry')) return;
+        try { fs.copyFileSync(R.registryFile(r.root), R.registryFile(r.root) + '.bak'); } catch { /* nothing to keep */ }
+        R.save(r.root, []);
+        return recheck();
+      case 'pruneRegistry': {
+        const ids = new Set(r.store.data.tasks.map(t => t.id));
+        R.save(r.root, R.load(r.root).map(e => ({ ...e, taskIds: e.taskIds.filter(t => ids.has(t)) })));
+        return recheck();
+      }
+      case 'deleteOrphans': {
+        const used = new Set([...r.store.data.tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)), '_base']);
+        const dir = path.join(r.root, '.justcode', 'worktrees');
+        const orphans = (() => { try { return fs.readdirSync(dir).filter(d => !used.has(d)); } catch { return []; } })();
+        if (!orphans.length || !await confirm(`Delete ${orphans.length} task folder(s) no task uses? Uncommitted work in them is lost.\n\n${orphans.join('\n')}`, 'Delete')) return;
+        for (const o of orphans) await g.removeWorktree(r.root, path.join(dir, o)).catch(e => out.appendLine(`could not remove ${o}: ${e.message}`));
+        return recheck();
+      }
+      case 'refreshSources': {
+        const hours = Math.max(0, setting<number>('artifactRefreshHours', 24));
+        const stale = A.loadSources(r.root).filter(x => x.kind === 'url' && A.isArtifactLink(x.ref) && (!A.hasCopy(r.root, x) || Date.now() - (savedAt(r.root, x) ?? 0) > hours * 3600_000));
+        await Promise.all(stale.map(x => saveArtifactSource(r.root, x)));
+        return recheck();
+      }
+      case 'archiveTranscripts':
+        for (const t of r.store.data.tasks) {
+          const dir = t.sessionId && r.sessionDir(t.sessionId, t);
+          for (const sid of [...(t.pastSessions ?? []), t.sessionId].filter((x): x is string => !!x)) if (dir) A.archiveTranscript(r.root, t.id, transcript(dir, sid), sid);
+        }
+        return recheck();
     }
   }
 

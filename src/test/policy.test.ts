@@ -97,3 +97,26 @@ test('budgets: a task over its budget is stopped after its turn with a clear car
   assert.equal(r.spent(store.task(t.id)).project, 1.52);
   r.dispose();
 });
+
+import { checkHealth } from '../setup';
+test('health: corrupted registry, stale links, leftover folders, policy errors and broken board each give one row with a fix', () => {
+  const root = tmp(), jc = (...p: string[]) => path.join(root, '.justcode', ...p);
+  fs.mkdirSync(jc('worktrees', 'abc'), { recursive: true }); fs.mkdirSync(jc('worktrees', '_base'));
+  const base = { root, taskIds: new Set(['t1']), worktrees: new Set(['_base']), staleSources: [], unarchived: [] };
+  fs.writeFileSync(jc('artifacts.json'), '{oops');
+  fs.writeFileSync(jc('board.json'), JSON.stringify({ sprints: [], tasks: [{ id: 't1', title: 'A', status: 'todo' }, { id: 't1', title: 'B', status: 'weird' }] }));
+  const rows = checkHealth({ ...base, staleSources: ['s'], unarchived: ['t1'] }, ['denyTools must be a list of strings']);
+  const by = Object.fromEntries(rows.map(r => [r.id, r]));
+  assert.equal(by.registry.fix!.label, 'Reset registry');
+  assert.match(by.board.detail, /1 broken task\(s\), duplicate ids \(t1\)/);
+  assert.equal(by.policy.fix!.action, 'openPolicy');
+  assert.match(by.worktrees.detail, /1 folder\(s\) no task uses: abc/);
+  assert.equal(by.sources.fix!.action, 'refreshSources');
+  assert.equal(by.transcripts.fix!.action, 'archiveTranscripts');
+  assert.ok(rows.every(r => !r.ok && r.optional));
+  fs.writeFileSync(jc('artifacts.json'), JSON.stringify([{ id: 'x', url: 'u', taskIds: ['t1', 'gone'] }]));
+  fs.writeFileSync(jc('board.json'), JSON.stringify({ sprints: [], tasks: [{ id: 't1', title: 'A', status: 'todo' }] }));
+  fs.rmSync(jc('worktrees', 'abc'), { recursive: true });
+  const clean = checkHealth(base, []);
+  assert.deepEqual(clean.map(r => [r.id, r.fix!.action]), [['registry', 'pruneRegistry']]);
+});

@@ -31,7 +31,7 @@
       },
       {
         "command": "justCode.setup",
-        "title": "JustCode: Check Setup"
+        "title": "JustCode: Check Setup and Health"
       },
       {
         "command": "justCode.setApiKey",

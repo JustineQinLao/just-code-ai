@@ -18,6 +18,7 @@
   let shots = {};                          // task id → screenshots
   let agentView, agentsSaved = {};         // agent shown in the Agents tab; finished agents from transcripts
   let showSetup = false;
+  const HEALTH = new Set(['board', 'policy', 'registry', 'worktrees', 'sources', 'transcripts']);   // checklist rows about the project's .justcode files
   let more = false;                        // new-task details open
   let images = [];                         // pasted screenshots for the new task
   let files = [];                          // files attached to the new task
@@ -306,6 +307,11 @@
           !c.ok && c.fix ? btn(c.fix.label, () => post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : ''))),
         h('p', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : 'Remote Control (continue on your phone) needs a Claude account login.')));
     } else if (!st) out.push(h('div', { class: 'banner' }, 'Checking your setup…'));
+    else if (!REMOTE) {
+      const sick = st.checks.filter(c => !c.ok && HEALTH.has(c.id));
+      if (sick.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
+        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : (showSetup = true, render()), 'ghost')));
+    }
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => openTask(init.running.id), 'primary')));
