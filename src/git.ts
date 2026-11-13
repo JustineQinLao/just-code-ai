@@ -201,6 +201,32 @@ export async function changes(dir: string, base: string): Promise<Change[]> {
   return list;
 }
 
+// Direct tasks: what changed in the checkout since `startHead`, limited to `files` (the task's directFiles).
+// Untracked files are included (as new files); nothing is staged.
+async function untracked(dir: string, files: string[]) {
+  if (!files.length) return [] as string[];
+  return (await git(dir, ['ls-files', '-z', '--others', '--exclude-standard', '--', ...files]).catch(() => '')).split('\0').filter(Boolean);
+}
+export async function workingChanges(dir: string, startHead: string, files: string[]): Promise<Change[]> {
+  if (!files.length) return [];
+  const out = await git(dir, ['diff', '--name-status', startHead || 'HEAD', '--', ...files]).catch(() => '');
+  const list = out.split('\n').filter(Boolean).map(l => { const [s, ...f] = l.split('\t'); return { status: s[0], file: f[f.length - 1] }; });
+  for (const file of await untracked(dir, files)) if (!list.some(c => c.file === file)) list.push({ status: 'A', file });
+  return list;
+}
+export async function workingDiff(dir: string, startHead: string, files: string[]): Promise<string> {
+  if (!files.length) return '';
+  let diff = await git(dir, ['diff', startHead || 'HEAD', '--', ...files]).catch(() => '');
+  for (const file of await untracked(dir, files)) {
+    let body = '';
+    try { const b = fs.readFileSync(path.join(dir, file)); body = b.includes(0) ? '' : b.toString('utf8'); } catch { continue; }
+    const lines = body ? body.replace(/\n$/, '').split('\n') : [];
+    diff += `${diff ? '\n' : ''}diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n` +
+      (lines.length ? `@@ -0,0 +1,${lines.length} @@\n${lines.map(l => '+' + l).join('\n')}` : '');
+  }
+  return diff;
+}
+
 // A merged task's branch and folder are gone; its merge commit ("Merge <branch>: <title>") still says what it changed.
 export async function mergeCommit(repo: string, branch: string) {
   return (await git(repo, ['log', '--all', '--merges', '--fixed-strings', `--grep=Merge ${branch}: `, '-1', '--format=%H']).catch(() => '')).trim() || undefined;

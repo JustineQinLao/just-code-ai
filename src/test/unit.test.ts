@@ -967,3 +967,26 @@ test('direct tasks: one at a time, not during a merge; directFiles = status minu
   assert.deepEqual(store.task(t1.id)!.directFiles, ['new.txt']);
   assert.equal(sh('rev-parse', 'HEAD').toString(), head);
 });
+
+test('git: workingDiff and workingChanges cover tracked edits and untracked files in the list only', async () => {
+  const root = tmp();
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 't@t'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 't'], { cwd: root });
+  fs.writeFileSync(path.join(root, 'a.txt'), 'one\n');
+  fs.writeFileSync(path.join(root, 'other.txt'), 'x\n');
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['commit', '-qm', 'init'], { cwd: root });
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  fs.writeFileSync(path.join(root, 'a.txt'), 'two\n');
+  fs.writeFileSync(path.join(root, 'new.txt'), 'hello\n');
+  fs.writeFileSync(path.join(root, 'other.txt'), 'changed\n');
+  const files = ['a.txt', 'new.txt'];
+  const list = await g.workingChanges(root, head, files);
+  assert.deepEqual(list.map(c => `${c.status} ${c.file}`).sort(), ['A new.txt', 'M a.txt']);
+  const diff = await g.workingDiff(root, head, files);
+  assert.match(diff, /\+two/);
+  assert.match(diff, /\+\+\+ b\/new\.txt[\s\S]*\+hello/);
+  assert.doesNotMatch(diff, /other\.txt/);
+  assert.equal(await g.workingDiff(root, head, []), '');
+});
