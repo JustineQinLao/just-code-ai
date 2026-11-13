@@ -11,7 +11,7 @@ import * as g from './git';
 import { pluginDir } from './plugin';
 import { agentLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
 import { Limits } from './limits';
-import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
+import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
 import * as C from './checks';
 import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
@@ -131,6 +131,11 @@ export function activate(context: vscode.ExtensionContext) {
       const sub = vscode.window.onDidCloseTerminal(c => { if (c === t) { sub.dispose(); void recheck(); } });
       vscode.window.showInformationMessage(`${name}: follow the steps in the terminal. The board checks again when you close it.`, 'Check again').then(c => { if (c) void recheck(); });
     };
+    if (action.startsWith('installPlugin:')) {
+      const name = action.slice('installPlugin:'.length).replace(/[^\w-]/g, '');
+      if (name === 'superpowers') vscode.window.showInformationMessage(`If the install fails, type these in Claude Code: ${SUPERPOWERS_FALLBACK.join(' then ')}`);
+      return term(`Install ${name}`, pluginInstallCommands(q(bin() ?? 'claude'), name).join(' && '));
+    }
     switch (action) {
       case 'installClaude': return term('Install Claude Code', installCommand());
       case 'login': return term('Sign in to Claude', `${q(bin() ?? 'claude')} auth login`);
@@ -149,6 +154,15 @@ export function activate(context: vscode.ExtensionContext) {
         if (!r) return;
         if (await vscode.window.showWarningMessage(`Create a local git repository in ${path.basename(r.root)} and commit its files? Secrets (.env, keys) and node_modules are left out.`, { modal: true }, 'Create') !== 'Create') return;
         await g.ensureRepo(r.root).catch(e => vscode.window.showErrorMessage(e.message));
+        return recheck();
+      }
+      case 'installPlaywright': return term('Install Playwright', playwrightCommand(q(bin() ?? 'claude')));
+      case 'createDesignMd': {
+        const r = runner();
+        if (!r) return;
+        const f = path.join(r.root, '.justcode', 'design', 'DESIGN.md');
+        if (!fs.existsSync(f)) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '# Design\n\nPalette, typography, spacing and tone for this project.\n'); }
+        await vscode.window.showTextDocument(vscode.Uri.file(f));
         return recheck();
       }
       case 'recheck': return recheck();

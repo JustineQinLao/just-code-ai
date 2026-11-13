@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
+import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store, resolveWhere } from '../store';
 import { projectSetup } from '../setup';
@@ -513,8 +513,10 @@ test('artifact tasks: frontend-design is found by path, the brief sets the rules
   const file = path.join(dir, 'installed_plugins.json');
   fs.writeFileSync(file, JSON.stringify({ version: 2, plugins: { 'frontend-design@claude-plugins-official': [
     { scope: 'project', installPath: path.join(dir, 'missing') }, { scope: 'user', installPath: install }] } }));
-  assert.equal(frontendDesignPlugin(file), install);
-  assert.equal(frontendDesignPlugin(path.join(dir, 'none.json')), undefined);
+  assert.equal(installedPlugin('frontend-design', file), install);
+  assert.equal(installedPlugin('superpowers', file), undefined);
+  assert.deepEqual(installedPlugins(file), { 'frontend-design': install });
+  assert.equal(installedPlugin('frontend-design', path.join(dir, 'none.json')), undefined);
   const brief = artifactBrief('/p/.justcode/tasks/t1/artifact.html', true);
   assert.match(brief, /\/p\/\.justcode\/tasks\/t1\/artifact\.html/);
   assert.match(brief, /frontend-design/);
@@ -1089,4 +1091,41 @@ test('Runner.discard reverts only the listed files and refuses done tasks', asyn
   await r.discard(id);
   assert.equal(store.task(id)!.status, 'done');
   r.dispose?.();
+});
+
+test('setup: Recommended rows are optional and follow the lookups', async () => {
+  const { checkSetup, pluginInstallCommands } = await import('../setup');
+  const run = (have: string[], md: boolean) => checkSetup(undefined, {}, '/p', false, { plugin: n => have.includes(n) ? '/x' : undefined, designMd: () => md });
+  const s = await run(['superpowers'], false);
+  const row = (id: string) => s.checks.find(c => c.id === id)!;
+  for (const id of ['frontendDesign', 'superpowers', 'playwright', 'designMd']) assert.ok(row(id).optional);
+  assert.ok(row('superpowers').ok && !row('frontendDesign').ok);
+  assert.equal(row('playwright').fix?.action, 'installPlaywright');
+  assert.equal(row('frontendDesign').fix?.action, 'installPlugin:frontend-design');
+  assert.ok((await run([], true)).checks.find(c => c.id === 'designMd')!.ok);
+  assert.equal(pluginInstallCommands('claude', 'superpowers').length, 2);
+  // the install route registers a plugin named playwright, which is what the row looks up
+  const { playwrightCommand } = await import('../setup');
+  assert.equal(playwrightCommand('claude'), 'claude plugin install playwright@claude-plugins-official');
+  assert.equal(row('playwright').fix?.action, 'installPlaywright');
+});
+
+test('installedPlugins: scopes, fallbacks, bare keys, two marketplaces, no skills/', () => {
+  const dir = tmp(), mk = (n: string, skills = true) => { const d = path.join(dir, n); fs.mkdirSync(skills ? path.join(d, 'skills') : d, { recursive: true }); return d; };
+  const file = path.join(dir, 'p.json');
+  const [u, pr, only, bare, m1, m2, mcp] = [mk('u'), mk('pr'), mk('only'), mk('bare'), mk('m1'), mk('m2'), mk('mcp', false)];
+  fs.writeFileSync(file, JSON.stringify({ plugins: {
+    'both@x': [{ scope: 'project', installPath: pr }, { scope: 'user', installPath: u }],
+    'proj@x': [{ scope: 'project', installPath: only }],
+    'bare': [{ scope: 'user', installPath: bare }],
+    'dup@a': [{ scope: 'user', installPath: m1 }], 'dup@b': [{ scope: 'user', installPath: m2 }],
+    'playwright@claude-plugins-official': [{ scope: 'user', installPath: mcp }] } }));
+  const all = installedPlugins(file);
+  assert.equal(all.both, u);
+  assert.equal(all.proj, only);
+  assert.equal(all.bare, bare);
+  assert.equal(all.dup, m1); // first marketplace wins
+  assert.equal(all.playwright, mcp); // MCP-only plugin: no skills/ needed
+  assert.equal(installedPlugin('playwright', file, 'skills'), undefined);
+  assert.equal(installedPlugin('both', file, 'skills'), u);
 });

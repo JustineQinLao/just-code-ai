@@ -330,9 +330,9 @@
       `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString()}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
     const st = S.setup;
     if (st && (!st.ready || showSetup)) {
-      const done = st.checks.filter(c => c.ok).length;
+      const req = st.checks.filter(c => !c.optional || c.id === 'repo'), done = req.filter(c => c.ok).length;
       out.push(h('div', { class: 'setup' },
-        h('div', { class: 'row' }, h('h3', {}, st.ready ? '✓ All set' : `Get set up · ${done} of ${st.checks.length}`), h('div', { class: 'spacer' }),
+        h('div', { class: 'row' }, h('h3', {}, st.ready ? '✓ All set' : `Get set up · ${done} of ${req.length}`), h('div', { class: 'spacer' }),
           btn('Check again', () => post('fix', { action: 'recheck' }), 'ghost'), st.ready ? btn('Hide', () => { showSetup = false; render(); }, 'ghost') : ''),
         h('ul', {}, st.checks.map(c => h('li', { class: c.ok ? 'ok' : c.optional ? 'opt' : 'bad' },
           h('span', { class: 'dot' }, c.ok ? '✓' : c.optional ? '○' : '✗'), h('b', {}, c.label), h('span', { class: 'muted' }, c.detail),

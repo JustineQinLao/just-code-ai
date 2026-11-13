@@ -1,13 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { claudeAuth, claudeVersion, gitIdentity, gitVersion } from './claude';
+import { claudeAuth, claudeVersion, gitIdentity, gitVersion, installedPlugin } from './claude';
 import { isRepo } from './git';
 
 // The setup checklist the board shows until everything a task needs is in place. Each failed check has one fix
 // the board can do (or start) for you.
 
 export interface Check {
-  id: 'claude' | 'login' | 'git' | 'identity' | 'repo';
+  id: 'claude' | 'login' | 'git' | 'identity' | 'repo' | 'frontendDesign' | 'superpowers' | 'playwright' | 'designMd';
   ok: boolean;
   label: string;
   detail: string;
@@ -17,7 +17,8 @@ export interface Check {
 
 export interface SetupState { checks: Check[]; ready: boolean; remote: boolean; at: number }
 
-export async function checkSetup(bin: string | undefined, env: Record<string, string>, root: string | undefined, apiKey: boolean): Promise<SetupState> {
+export async function checkSetup(bin: string | undefined, env: Record<string, string>, root: string | undefined, apiKey: boolean,
+  lookup: { plugin: (name: string) => string | undefined; designMd: (root: string) => boolean } = { plugin: n => installedPlugin(n), designMd: r => projectSetup(r).designMd }): Promise<SetupState> {
   const checks: Check[] = [];
   const version = bin ? await claudeVersion(bin) : undefined;
   checks.push(version
@@ -56,6 +57,13 @@ export async function checkSetup(bin: string | undefined, env: Record<string, st
           fix: { action: 'gitInit', label: 'Create it now' } });
   }
 
+  const rec = (id: Check['id'], label: string, ok: boolean, detail: string, fix: Check['fix']) =>
+    checks.push({ id, ok, optional: true, label: `Recommended: ${label}`, detail: ok ? 'Installed' : detail, ...(ok ? {} : { fix }) });
+  rec('frontendDesign', 'frontend-design plugin', !!lookup.plugin('frontend-design'), 'Gives page and artifact tasks a deliberate visual design.', { action: 'installPlugin:frontend-design', label: 'Install' });
+  rec('superpowers', 'superpowers plugin', !!lookup.plugin('superpowers'), 'Planning, debugging and review skills.', { action: 'installPlugin:superpowers', label: 'Install' });
+  rec('playwright', 'Playwright', !!lookup.plugin('playwright'), 'Lets Claude open pages in a browser to check UI work.', { action: 'installPlaywright', label: 'Install' });
+  if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), 'A design brief (.justcode/design/DESIGN.md) keeps UI work consistent.', { action: 'createDesignMd', label: 'Create' });
+
   return { checks, ready: checks.every(c => c.ok || c.optional), remote, at: Date.now() };
 }
 
@@ -67,3 +75,13 @@ export const installCommand = () => process.platform === 'win32'
 export function projectSetup(root: string) {
   return { projectMd: fs.existsSync(path.join(root, '.justcode', 'project.md')), designMd: fs.existsSync(path.join(root, '.justcode', 'design', 'DESIGN.md')) };
 }
+
+// Terminal commands for the Recommended installs. Superpowers is not in the official marketplace, so it adds its own first.
+export const MARKETPLACE: Record<string, string> = { 'frontend-design': 'claude-plugins-official', superpowers: 'superpowers-marketplace', playwright: 'claude-plugins-official' };
+export const pluginInstallCommands = (bin: string, name: string) => [
+  ...(name === 'superpowers' ? [`${bin} plugin marketplace add obra/superpowers-marketplace`] : []),
+  `${bin} plugin install ${name}@${MARKETPLACE[name] ?? 'claude-plugins-official'}`];
+// Playwright is installed as a plugin, so the same lookup that detects it (installed_plugins.json) sees the result.
+export const playwrightCommand = (bin: string) => pluginInstallCommands(bin, 'playwright').join(' && ');
+// Shown if the CLI route fails: the same steps typed inside Claude Code.
+export const SUPERPOWERS_FALLBACK = ['/plugin marketplace add obra/superpowers-marketplace', '/plugin install superpowers@superpowers-marketplace'];
