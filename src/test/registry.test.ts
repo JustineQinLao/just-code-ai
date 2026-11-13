@@ -34,11 +34,11 @@ test('registry: typed links are inputs; saved copies are hashed and a changed co
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'index.html'), 'v1');
   const a = R.recordSaved(root, U1, 'src1', 5);
-  assert.equal(a.files, 1); assert.equal(a.savedAt, 5); assert.equal(a.changed, undefined);
+  assert.equal(a.files, 1); assert.equal(a.savedAt, 5); assert.equal(a.changedAt, undefined);
   R.recordSaved(root, U1, 'src1');
-  assert.equal(R.find(root, U1)!.changed, undefined, 'same content is not a change');
+  assert.equal(R.find(root, U1)!.changedAt, undefined, 'same content is not a change');
   fs.writeFileSync(path.join(dir, 'index.html'), 'v2');
-  assert.equal(R.recordSaved(root, U1, 'src1').changed, true);
+  assert.equal(R.recordSaved(root, U1, 'src1', 9).changedAt, 9);
 });
 
 test('registry: brief lines name titles, kinds and tasks, newest first, skipping listed sources', () => {

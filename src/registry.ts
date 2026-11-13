@@ -18,7 +18,7 @@ export interface ArtifactEntry {
   sha256?: string;            // input: hash of the saved copy's files; output: hash of the published page
   files?: number;
   note?: string;
-  changed?: boolean;          // the last refresh found different content; cleared when you look at it
+  changedAt?: number;         // when a refresh last found different content (To do tasks written before it get a note)
 }
 
 export const registryFile = (root: string) => path.join(root, '.justcode', 'artifacts.json');
@@ -85,7 +85,7 @@ export function hashCopy(root: string, sourceId: string) {
 export function recordSaved(root: string, url: string, sourceId: string, now = Date.now()) {
   const prev = find(root, url), { sha256, files } = hashCopy(root, sourceId);
   const changed = !!prev?.sha256 && prev.sha256 !== sha256;
-  return upsert(root, url, { savedAt: now, sha256, files, ...(changed ? { changed: true } : {}) }, now);
+  return upsert(root, url, { savedAt: now, sha256, files, ...(changed ? { changedAt: now } : {}) }, now);
 }
 
 export const titleOf = (html: string) => /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1]?.trim() || undefined;

@@ -24,7 +24,8 @@
   let srcOff = new Set();                  // project sources unticked for the new task
   let dragId;
   let initLater = saved.initLater || {};   // project root → the user chose "Not now" on the setup banner
-  const remember = () => vscode.setState({ view, open, initLater });
+  let artSeen = saved.artSeen || 0;             // newest artifact change you have seen in the Artifacts dialog
+  const remember = () => vscode.setState({ view, open, initLater, artSeen });
 
   // Is this project described for JustCode? Set up = .justcode/project.md exists.
   // `running` is the setup task while it works.
@@ -68,7 +69,12 @@
   const sprintOf = id => S.board.sprints.find(s => s.id === id);
   const sprintSrcs = id => { const sp = sprintOf(id); return sp?.sources ? (S.sources || []).filter(s => sp.sources.includes(s.id)) : (S.sources || []); };
   const savedAgo = t => { const m = Math.round((Date.now() - t) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} h ago` : `${Math.floor(m / 1440)} d ago`; };
-  const srcLabel = s => s.kind === 'url' ? s.ref.replace(/^https?:\/\//, '').slice(0, 40) : (s.ref.split(/[\\/]/).filter(Boolean).pop() || s.ref) + (s.kind === 'folder' ? '/' : '');
+  const artKey = u => String(u).trim().replace(/[?#].*$/, '').replace(/\/$/, '');
+  // The artifact links a task rests on: its ticked sources (or its sprint's) and links in its text.
+  const taskArtUrls = t => [...(t.sources ? (S.sources || []).filter(s => t.sources.includes(s.id)) : sprintSrcs(t.sprintId)).filter(s => s.kind === 'url').map(s => artKey(s.ref)),
+    ...(`${t.title} ${t.description || ''}`.match(/https:\/\/claude\.ai\/(?:code\/)?artifact\/[\w-]+/g) || [])];
+  const regEntry = u => (S.registry || []).find(e => e.url === artKey(u));
+  const srcLabel = s => s.kind === 'url' ? (regEntry(s.ref)?.title || s.ref.replace(/^https?:\/\//, '').slice(0, 40)) : (s.ref.split(/[\\/]/).filter(Boolean).pop() || s.ref) + (s.kind === 'folder' ? '/' : '');
   // Claude Code's own names for its permission modes (code.claude.com/docs/en/permission-modes).
   const MODES = [['auto', 'Auto', 'A classifier approves safe actions; risky ones ask'], ['acceptEdits', 'Edit automatically', 'File edits and simple file commands approved; other commands ask'],
     ['default', 'Manual', 'Only reads run; every edit and command asks'], ['plan', 'Plan', 'Read-only'], ['bypassPermissions', 'Bypass permissions ⚠', 'No approvals at all']];
@@ -355,6 +361,7 @@
       btn('✦ Plan', () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
       sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
       btn('🎨 Design', () => designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
+      btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
       (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
@@ -456,6 +463,7 @@
         h('span', { class: `tag mode-${S.settings?.bypassAll ? 'bypassPermissions' : t.mode}` }, modeName(S.settings?.bypassAll ? 'bypassPermissions' : t.mode)),
         t.output === 'artifact' ? h('span', { class: 'tag', title: 'Result: a page published as a claude.ai artifact' }, '⧉ artifact') : t.where === 'direct' ? h('span', { class: 'tag' }, 'workspace') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
+        t.status === 'todo' && (urls => (S.registry || []).some(e => (e.changedAt || 0) > (t.created || 0) && (e.taskIds.includes(t.id) || urls.includes(e.url))))(taskArtUrls(t)) ? h('span', { class: 'tag warn', title: 'A source artifact this task uses has new content: check the task still fits' }, 'design changed since this task was written') : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
@@ -655,6 +663,7 @@
           : h('span', { class: 'muted' }, t.publishing ? 'publishing…' : 'not published yet'),
           t.status !== 'todo' ? btn(t.artifactUrl ? 'Publish again' : 'Publish', () => post('publishArtifact', { id: t.id }), 'ghost') : '') : '',
         t.files?.length ? h('p', { class: 'small' }, 'Attached: ', t.files.map(base).join(', ')) : '',
+        (arts => arts.length ? h('p', { class: 'small' }, 'Artifacts: ', ...arts.map((e, i) => [i ? ', ' : '', h('a', { onclick: () => post('openUrl', { url: e.url }), title: e.url }, `${e.title || e.url.replace(/^https?:\/\//, '')} (${e.kind === 'output' ? 'published' : 'used'})`)])) : '')((S.registry || []).filter(e => e.taskIds.includes(t.id))),
         t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
         h('details', { class: 'adv' }, h('summary', {}, 'Files Claude wrote, logs and tokens'),
           h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => btn(l, () => post('openArtifact', { id: t.id, which: k }), 'ghost')),
@@ -1014,6 +1023,33 @@
     d.dataset.kind = 'sources';
   }
 
+  // Every artifact the project typed, saved or published, with the tasks that used or produced it.
+  function artifactsDialog() {
+    const list = [...(S.registry || [])].sort((a, b) => b.lastSeen - a.lastSeen);
+    const title = id => S.board.tasks.find(t => t.id === id)?.title;
+    const isSource = e => (S.sources || []).some(s => s.kind === 'url' && artKey(s.ref) === e.url);
+    const src = e => (S.sources || []).find(s => s.kind === 'url' && artKey(s.ref) === e.url);
+    const row = e => h('li', { class: 'src' },
+      h('div', { class: 'srchead' },
+        h('span', { class: `tag${e.kind === 'output' ? ' ok' : ''}` }, e.kind === 'output' ? 'published' : 'input'),
+        h('a', { onclick: () => post('openUrl', { url: e.url }), title: e.url }, e.title || e.url.replace(/^https?:\/\//, '')),
+        e.changedAt ? h('span', { class: 'spill warn', title: 'The last refresh found different content' }, `changed ${savedAgo(e.changedAt)}`) : '',
+        e.kind === 'input' && src(e)?.copy ? h('span', { class: 'spill ok' }, `✓ Saved${src(e).savedAt ? ` ${savedAgo(src(e).savedAt)}` : ''}`) : '',
+        h('div', { class: 'spacer' }),
+        btn('Copy link', () => post('copy', { text: e.url }), 'ghost'),
+        e.kind === 'input' && isSource(e) ? btn('Refresh copy', () => post('refreshArtifact', { url: e.url }), 'ghost', 'Save the artifact\'s files again') : '',
+        !REMOTE ? btn('Use as source', () => post('useArtifact', { url: e.url, sprintId: sprintOf(view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
+      e.taskIds.length ? h('p', { class: 'small' }, e.kind === 'output' ? 'Produced by: ' : 'Used by: ',
+        ...e.taskIds.filter(title).map((id, i) => [i ? ', ' : '', h('a', { onclick: () => { $('#dlg').close(); openTask(id, 'details'); } }, title(id))])) : '',
+      h('input', { class: 'grow', value: e.note || '', placeholder: 'Note (Claude reads it in briefs)', onchange: ev => post('artifactNote', { url: e.url, note: ev.target.value }) }));
+    const d = dialog('Artifacts',
+      h('p', { class: 'muted' }, 'Every claude.ai artifact this project used as input or published as a result. Briefs list them, so a later task can build on or update one instead of starting over.'),
+      list.length ? h('ul', { class: 'srclist' }, list.map(row)) : h('p', { class: 'muted empty' }, 'None yet. Paste a claude.ai artifact link in a task or prompt, or run an artifact task.'));
+    d.dataset.kind = 'artifacts';
+    const newest = Math.max(0, ...list.map(e => e.changedAt || 0));
+    if (newest > artSeen) { artSeen = newest; remember(); }
+  }
+
   function designDialog() {
     const has = !!(S.project || {}).designMd;
     const d = dialog('Design', h('p', { class: 'muted' }, has ? 'DESIGN.md is set. UI and artifact tasks are told to follow it.' : 'Pick a design from VoltAgent/awesome-design-md, or use your own file. UI and artifact tasks are told to follow it.'),
@@ -1052,6 +1088,7 @@
       if (view !== 'all' && view !== 'backlog' && !S.board?.sprints.some(s => s.id === view)) { view = 'all'; remember(); } // its sprint was deleted if (open && open !== '__planner' && !S.board?.tasks.some(t => t.id === open)) open = undefined;
       render();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'sources') sourcesDialog();
+      if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') artifactsDialog();
     }
     else if (m.type === 'completions') { acData = m; acLoaded = true; if (acField) acDraw(); }
     else if (m.type === 'history') { history = m.items; if ($('#dlg').open && !sessionView) drawHistory(); }
@@ -1062,6 +1099,7 @@
     else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) renderDrawer(); }
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
     else if (m.type === 'focus') openTask(m.id);
+    else if (m.type === 'usedSource') { srcOff.delete(m.sourceId); renderAddOptions(); }
     else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); toggleMore(true); drawFiles(); }
     else if (m.type === 'dialog') bridged(m);
     else if (m.type === 'toast') toast(m.text);

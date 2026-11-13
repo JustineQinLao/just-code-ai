@@ -217,6 +217,7 @@ export function activate(context: vscode.ExtensionContext) {
       agents: discoverAgents(r.root).map(a => ({ name: a.name, description: a.description, scope: a.scope })),
       skills: discoverSkills(r.root, setting('personalSetup', false)),
       sources: A.loadSources(r.root).map(x => ({ ...x, artifact: x.kind === 'url' && A.isArtifactLink(x.ref), copy: A.hasCopy(r.root, x), savedAt: savedAt(r.root, x), saving: savingTerms.has(x.id), asking: askingTerms.has(x.id) })),
+      registry: R.load(r.root),
       detectedChecks: C.detectChecks(r.root),
       settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), defaultWhere: setting('defaultWhere', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       planner: r.plannerLive(),
@@ -692,6 +693,26 @@ export function activate(context: vscode.ExtensionContext) {
       case 'saveSourceCopy': {
         const src = A.loadSources(r.root).find(x => x.id === m.sourceId);
         if (src) void saveArtifactSource(r.root, src).then(() => push());
+        return;
+      }
+      case 'artifactNote': { const e = R.find(r.root, String(m.url)); if (e) R.upsert(r.root, e.url, { note: String(m.note ?? '').trim() || undefined }); return push(); }
+      case 'useArtifact': {
+        // A registry artifact becomes a project source (once), used by the current sprint when it picks its sources.
+        const e = R.find(r.root, String(m.url));
+        if (!e) return;
+        let src = A.loadSources(r.root).find(x => x.kind === 'url' && A.artifactKey(x.ref) === e.url);
+        if (!src) { src = { id: randomUUID().slice(0, 8), kind: 'url', ref: e.url, note: e.title ?? (e.kind === 'output' ? 'claude.ai artifact a task published' : undefined) }; A.saveSources(r.root, [...A.loadSources(r.root), src]); }
+        const sp = s.data.sprints.find(x => x.id === m.sprintId);
+        if (sp?.sources && !sp.sources.includes(src.id)) s.updateSprint(sp.id, { sources: [...sp.sources, src.id] });
+        emit({ type: 'usedSource', sourceId: src.id });
+        if (!A.hasCopy(r.root, src)) void saveArtifactSource(r.root, src).then(() => push());
+        return push();
+      }
+      case 'refreshArtifact': {
+        const e = R.find(r.root, String(m.url));
+        const src = e && A.loadSources(r.root).find(x => x.kind === 'url' && A.artifactKey(x.ref) === e.url);
+        if (src) void saveArtifactSource(r.root, src).then(() => push());
+        else if (e) say('Use it as a source first: only sources keep a saved copy.');
         return;
       }
       case 'editSource': A.saveSources(r.root, A.loadSources(r.root).map(x => x.id === m.sourceId ? { ...x, note: String(m.note ?? '').trim() || undefined } : x)); return push();
