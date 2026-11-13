@@ -5,7 +5,10 @@ import { PAGE } from './phonepage';
 export interface PhoneDeps {
   token: string;
   state(): unknown;
-  act(m: Record<string, unknown>): Promise<string | void>;
+  /** `via`: which credential sent it ("token …abcd" or "session …wxyz"), for the audit log. */
+  act(m: Record<string, unknown>, via: string): Promise<string | void>;
+  /** A pairing code was redeemed: a new phone session started. */
+  paired?(via: string): void;
   /** Board messages relayed from a remote page; the host always handles them as remote. */
   board?(m: Record<string, unknown>): Promise<void>;
   events?(since: number): unknown;
@@ -93,8 +96,10 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
     const viaToken = [hdr, q].some(t => t && same(t, d.token));
     if (!(paired || viaToken || sessionOk(ck))) return send(401, '{"error":"bad token"}');
     // Redeeming a pairing code (or a token link) starts a session: an HttpOnly cookie, so later requests need nothing in the URL.
+    const via = viaToken ? `token …${d.token.slice(-4)}` : paired ? 'pairing code' : `session …${ck.slice(-4)}`;
     if (paired || (q && viaToken)) {
       const id = randomBytes(24).toString('base64url');
+      if (paired) d.paired?.(`session …${id.slice(-4)}`);
       sessions.set(id, Date.now() + SESSION_TTL_MS);
       res.setHeader('set-cookie', `jc_session=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_TTL_MS / 1000}`);
     }
@@ -132,7 +137,7 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
         try {
           const m = JSON.parse(body);
           if (!(PHONE_ACTIONS as readonly string[]).includes(m.type)) return send(400, '{"error":"action not allowed"}');
-          const err = await d.act(m);
+          const err = await d.act(m, via);
           send(err ? 400 : 200, JSON.stringify(err ? { error: err } : { ok: true }));
         } catch (e: any) { send(500, JSON.stringify({ error: String(e?.message ?? e) })); }
       });

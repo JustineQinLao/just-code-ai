@@ -14,6 +14,8 @@ import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
 import * as R from './registry';
+import * as Audit from './audit';
+import type { Actor } from './audit';
 import * as C from './checks';
 import * as D from './design';
 import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
@@ -272,15 +274,17 @@ export function activate(context: vscode.ExtensionContext) {
         canMerge: canPhoneMerge(t) };
     }) };
   };
-  async function phoneAct(m: any): Promise<string | void> {
+  async function phoneAct(m: any, via = 'phone'): Promise<string | void> {
     const r = runner();
     if (!r) return 'no project open';
     const t = m.id ? r.store.task(m.id) : undefined;
+    if (m.type !== 'project') r.audit('phone.action', t?.id, `${m.type}${m.choice ? ` ${m.choice}` : ''}${m.status ? ` → ${m.status}` : ''} (${via})`, 'phone');
     switch (m.type) {
       case 'addTask': {
         if (!String(m.title ?? '').trim()) return 'title required';
         const task = r.store.addTask({ title: String(m.title).trim(), mode: (setting<string>('defaultMode', 'auto') === 'bypassPermissions' ? 'auto' : setting<string>('defaultMode', 'auto')) as Task['mode'] });
         A.logPrompt(r.root, { kind: 'task', text: task.title, taskId: task.id, title: task.title });
+        r.audit('task.create', task.id, task.title, 'phone');
         if (m.start) await r.run(task.id);
         return;
       }
@@ -288,18 +292,18 @@ export function activate(context: vscode.ExtensionContext) {
       case 'stop': if (!t) return 'no such task'; r.stop(t.id); return;
       case 'answer':
         if (m.choice !== 'allow' && m.choice !== 'deny') return 'phone can only allow or deny';
-        return r.answer(m.id, { id: m.ask, choice: m.choice }) ? undefined : 'request no longer open';
+        return r.answer(m.id, { id: m.ask, choice: m.choice, by: 'phone' }) ? undefined : 'request no longer open';
       case 'project':
         if (!phoneProjectOk(m.root, roots())) return 'unknown project';
         setCurrent(m.root); watching = undefined; void recheck(); push(); return;
       case 'move':
         if (!t) return 'no such task';
         { const l = r.live(t.id); const e = phoneMoveError({ status: t.status, worktree: t.worktree, where: t.where, review: t.review, busy: l.busy, asks: l.asks }, m.status); if (e) return e; }
-        if (m.status === 'done') { await r.merge(t.id); return; }
+        if (m.status === 'done') { await r.merge(t.id, false, 'phone'); return; }
         r.store.updateTask(t.id, { status: m.status }); return;
       case 'merge':
         if (!t || !canPhoneMerge(t)) return 'only tasks that passed review (and are not flagged critical) can be merged from the phone';
-        await r.merge(t.id); return;
+        await r.merge(t.id, false, 'phone'); return;
     }
   }
   // Only a reply to a pending dialog, or a merge of a task that passed review (same rule as /api/act), may come from a phone.
@@ -310,7 +314,7 @@ export function activate(context: vscode.ExtensionContext) {
     const on = setting('phoneServer', false);
     if (!on) { phone?.close(); phone = undefined; return; }
     if (phone) return;
-    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, board: phoneBoard, events: n => hub.events(n),
+    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, paired: via => { const r = runner(); if (r) Audit.log(r.root, { actor: 'phone', event: 'phone.pair', detail: via }); }, board: phoneBoard, events: n => hub.events(n),
       task: async id => { const r = runner(), t = r?.store.task(id); if (!r || !t) return undefined; const l = r.live(t.id);
         return { id: t.id, ...await detailOf(id), agents: l.agents, costUsd: t.costUsd ?? 0, usage: t.usage, context: l.context }; },
       detail: id => detailOf(id), allowTokenInUrl: false }); }
@@ -423,6 +427,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // `remote` is set by the phone server only (never read from the message), so a client cannot pick the confirmation path.
   async function handle(m: any, remote = false) {
+    const who: Actor = remote ? 'phone' : 'user';
     if (remote) {
       m = mobileMessage(m); if (!m) return;
       // Agents must be ones the project defines.
@@ -484,6 +489,7 @@ export function activate(context: vscode.ExtensionContext) {
           output: m.output === 'artifact' ? 'artifact' : undefined,
           files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
         A.logPrompt(r.root, { kind: 'task', text: [task.title, task.description].filter(Boolean).join('\n\n'), taskId: task.id, title: task.title });
+        r.audit('task.create', task.id, task.title, who);
         if (m.images?.length) s.updateTask(task.id, { images: saveImages(r.root, task.id, m.images) });
         if (m.start) await r.run(task.id);
         return;
@@ -540,7 +546,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (sp?.branch && await confirm(`Merge ${sp.branch} into ${sp.target}?`, 'Merge sprint')) await r.finishSprint(sp.id);
         return;
       }
-      case 'run': await r.requestRun(m.id); return;
+      case 'run': r.audit('task.run', m.id, undefined, who); await r.requestRun(m.id); return;
       case 'runAll': {
         r.runAll(m.ids);
         const b = r.userBlocker();
@@ -548,12 +554,13 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       case 'cancelQueue': r.cancelQueue(); return;
-      case 'runNow': await r.runNow(m.id); return;
-      case 'stop': r.stop(m.id); return;
+      case 'runNow': r.audit('task.run', m.id, 'run now', who); await r.runNow(m.id); return;
+      case 'stop': r.audit('task.stop', m.id, undefined, who); r.stop(m.id); return;
       case 'interrupt': await r.interrupt(m.id); return;
       case 'say':
         if (typeof m.text !== 'string' || !m.text.trim()) return;
         A.logPrompt(r.root, { kind: 'message', text: m.text.trim(), taskId: m.id, title: t?.title });
+        r.audit('task.message', m.id, m.text.trim().slice(0, 200), who);
         await r.say(m.id, withImages(m.text.trim(), r.root, m.id, m.images)); return;
       case 'completions': {
         const b = bin(), personal = setting('personalSetup', false), key = `${r.root}|${personal}`;
@@ -569,11 +576,12 @@ export function activate(context: vscode.ExtensionContext) {
         emit({ type: 'sessionLog', sessionId: m.sessionId, steps: dir ? sessionLog(dir, m.sessionId) : [] }); return;
       }
       case 'answer':
-        if (!r.answer(m.id, { id: m.ask, choice: m.choice, message: m.message, answers: m.answers }))
+        if (!r.answer(m.id, { id: m.ask, choice: m.choice, message: m.message, answers: m.answers, by: who }))
           vscode.window.showWarningMessage('That request is no longer open (Claude moved on or the session closed).');
         return;
       case 'setMode':
         if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return push(); // the picker goes back to the mode it has
+        r.audit('mode.switch', m.id, `${t?.mode} → ${m.mode}`, who);
         await r.setMode(m.id, m.mode); return;
       case 'rules': s.setRules(Array.isArray(m.rules) ? m.rules.map(String) : []); return;
       case 'watch': watching = m.id ? { root: r.root, id: m.id, n: -1 } : undefined; sendSteps(true); return;
@@ -595,8 +603,8 @@ export function activate(context: vscode.ExtensionContext) {
       case 'openFile': return openTaskFile(r, t, m.file);
       case 'openFolder': if (t?.worktree) void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); return;
       case 'merge':
-        if (t && t.where === 'direct' && !t.init) { if (await confirm(`Finish "${t.title}"? Its ${t.directFiles?.length ?? 0} file(s) are committed on the current branch.`, 'Finish')) await r.merge(m.id); return; }
-        if (t && await confirm(`Merge "${t.title}" (${t.branch}) into ${t.base}?`, 'Merge')) await r.merge(m.id);
+        if (t && t.where === 'direct' && !t.init) { if (await confirm(`Finish "${t.title}"? Its ${t.directFiles?.length ?? 0} file(s) are committed on the current branch.`, 'Finish')) await r.merge(m.id, false, who); return; }
+        if (t && await confirm(`Merge "${t.title}" (${t.branch}) into ${t.base}?`, 'Merge')) await r.merge(m.id, false, who);
         return;
       case 'mergeReady': {
         const ids: string[] = (m.ids ?? []).filter((id: string) => s.task(id)?.review?.state === 'pass' && s.task(id)?.review?.risk !== 'critical');
@@ -618,7 +626,7 @@ export function activate(context: vscode.ExtensionContext) {
           const verb = t.where === 'direct' && !t.init ? 'finish' : 'merge';
           if (!await confirm(`Accept ${open.length} review issue(s) and ${verb} "${t.title}"?\n\n${open.map(i => `• ${i.text}`).join('\n')}`, verb === 'merge' ? 'Accept and merge' : 'Accept and finish')) return;
         }
-        await r.acceptIssues(m.id, keys, !!m.merge);
+        await r.acceptIssues(m.id, keys, !!m.merge, who);
         return;
       }
       case 'sendChecks': await r.sendChecks(m.id); return;
@@ -626,10 +634,10 @@ export function activate(context: vscode.ExtensionContext) {
       case 'discard':
         if (t && t.where === 'direct' && !t.init) {
           const fl = t.directFiles ?? [];
-          if (await confirm(`Discard "${t.title}"? These files are reverted (new ones deleted):\n${fl.join('\n') || '(none)'}`, 'Discard')) await r.discard(m.id);
+          if (await confirm(`Discard "${t.title}"? These files are reverted (new ones deleted):\n${fl.join('\n') || '(none)'}`, 'Discard')) await r.discard(m.id, who);
           return;
         }
-        if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);
+        if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id, who);
         return;
       case 'remotePr': await r.remotePr(m.id); return;
       case 'remote': return handoff(r, t);
@@ -899,6 +907,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (url) try {
         const html = fs.readFileSync(file, 'utf8');
         R.link(root, url, id, t.sprintId, 'output');
+        r.audit('publish', id, url);
         R.upsert(root, url, { title: R.titleOf(html), sha256: createHash('sha256').update(html).digest('hex') });
       } catch { /* the registry is a convenience */ }
       out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] info: ${url ? `Artifact for "${t.title}": ${url}` : `No artifact link for "${t.title}"`}`);
@@ -1041,6 +1050,14 @@ export function activate(context: vscode.ExtensionContext) {
         phone?.close(); phone = undefined; await syncPhone(); render();
       });
       render();
+    }),
+    vscode.commands.registerCommand('justCode.exportAudit', async () => {
+      const r = runner();
+      if (!r) { vscode.window.showInformationMessage('Open a project on the board first.'); return; }
+      const file = path.join(r.root, '.justcode', 'reports', `audit-${new Date().toISOString().slice(0, 10)}.csv`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, Audit.toCsv(Audit.read(r.root), id => r.store.task(id)?.title));
+      void vscode.window.showTextDocument(vscode.Uri.file(file));
     }),
     vscode.commands.registerCommand('justCode.showPhonePairing', async () => {
       if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }

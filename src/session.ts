@@ -1,3 +1,4 @@
+import type { Actor } from './audit';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { sdk, Sdk } from './sdk';
@@ -60,6 +61,7 @@ export interface SessionOptions {
   personal?: boolean;         // also load the user's own Claude setup (plugins, skills, MCP, memory)
   plugins?: string[];         // plugin folders to load even in a lean session (e.g. frontend-design for artifact pages)
   label: string;              // name of the root node in the agent map
+  audit?: (event: 'permission.allow' | 'permission.always' | 'permission.deny', detail: string, actor: Actor) => void;
 }
 
 // The tool-related SDK options: MCP servers, allow rules, extra folders and plugins, passed through unchanged.
@@ -300,7 +302,8 @@ export class Session {
 
   private async permission(tool: string, input: Record<string, unknown>, opt: { signal: AbortSignal; suggestions?: Suggestion[]; decisionReason?: string; blockedPath?: string; toolUseID?: string; suppressAlwaysAllowRule?: boolean }): Promise<Sdk.PermissionResult> {
     // A rule approved on another card while this session runs.
-    if (tool !== 'AskUserQuestion' && allowedBy(this.o.rules(), tool, input)) return { behavior: 'allow', updatedInput: input };
+    const rule = tool !== 'AskUserQuestion' ? allowedBy(this.o.rules(), tool, input) : undefined;
+    if (rule) { this.o.audit?.('permission.allow', `${tool} ${toolArg(input)} (rule ${rule})`, 'justcode'); return { behavior: 'allow', updatedInput: input }; }
     // The task's mode as the user set it. Claude Code may still ask in some cases (a protected path, a mode switch it
     // refused); the user's choice wins.
     if (tool !== 'AskUserQuestion' && autoApproves(this.mode, tool)) return { behavior: 'allow', updatedInput: input };
@@ -328,7 +331,12 @@ export class Session {
       if (answer.choice === 'deny' || !answer.answers) return { behavior: 'deny', message: answer.message || 'The user did not answer.' };
       return { behavior: 'allow', updatedInput: { ...input, questions: input.questions, answers: answer.answers } };
     }
-    if (answer.choice === 'deny') return { behavior: 'deny', message: answer.message?.trim() || 'The user denied this.', interrupt: false };
+    const what = `${tool} ${toolArg(input)}`.trim();
+    if (answer.choice === 'deny') {
+      this.o.audit?.('permission.deny', `${what}${answer.message ? `: ${answer.message}` : ''}`, answer.by ?? 'user');
+      return { behavior: 'deny', message: answer.message?.trim() || 'The user denied this.', interrupt: false };
+    }
+    this.o.audit?.(answer.choice === 'always' && always ? 'permission.always' : 'permission.allow', answer.choice === 'always' && always ? `${what} (always: ${always.rules.join(', ') || always.mode})` : what, answer.by ?? 'user');
     if (answer.choice === 'always' && always) {
       if (always.rules.length) this.emit('rules', always.rules);
       const updatedPermissions = always.mode
@@ -408,7 +416,7 @@ export class Session {
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const autoApproves = (mode: string, tool: string) => mode === 'bypassPermissions' || (mode === 'acceptEdits' && EDIT_TOOLS.has(tool));
 
-export interface Answer { id: string; choice: 'allow' | 'always' | 'deny'; message?: string; answers?: Record<string, string> }
+export interface Answer { id: string; choice: 'allow' | 'always' | 'deny'; message?: string; answers?: Record<string, string>; by?: Actor }
 
 function normalizeQuestions(q: unknown): Question[] {
   if (!Array.isArray(q)) return [];

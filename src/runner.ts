@@ -8,6 +8,7 @@ import * as g from './git';
 import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
+import * as Audit from './audit';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
@@ -337,6 +338,10 @@ export class Runner {
     } catch { /* the registry is a convenience */ }
   }
 
+  audit(event: Audit.AuditEvent, taskId?: string, detail?: string, actor: Audit.Actor = 'justcode') {
+    Audit.log(this.root, { actor, event, taskId, sprintId: taskId ? this.store.task(taskId)?.sprintId : undefined, detail });
+  }
+
   // The published artifact whose title the task's text names (longest title wins), if any.
   private publishedNamedIn(t: Task) {
     const text = `${t.title}\n${t.description ?? ''}`.toLowerCase();
@@ -379,6 +384,7 @@ export class Runner {
       allowed: [...new Set([...web.allowed, ...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
       env: this.folderEnv(id, cwd), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
+      audit: (event, detail, actor) => this.audit(event, id, detail, actor),
     });
     this.sessions.set(id, s);
     s.on('change', () => this.changed());
@@ -561,6 +567,7 @@ export class Runner {
     this.store.updateTask(id, { checks: { state: real.length ? 'fail' : 'pass', rounds, head,
       results: results.map(r => ({ name: r.name, cmd: r.cmd, ok: r.ok, ms: r.ms, tail: r.tail || undefined, preexisting: r.preexisting, timedOut: r.timedOut })) } });
     if (!real.length) return 'pass';
+    this.audit('checks.fail', id, real.map(r => r.cmd).join(', '));
     if (rounds > set.maxCheckRounds) {
       this.d.notify('warn', `"${t.title}": checks still fail after ${rounds - 1} fix rounds. Details are on the card.`, id, true);
       return 'fail';
@@ -822,14 +829,16 @@ export class Runner {
 
   // You decided these issues do not block the merge. With every issue accepted the review counts as passed;
   // `merge` then merges (branch task) or finishes (direct task) right away.
-  async acceptIssues(id: string, keys: string[] | 'all', merge = false) {
+  async acceptIssues(id: string, keys: string[] | 'all', merge = false, by: Audit.Actor = 'user') {
     const t = this.store.task(id);
     if (!t?.review?.issues?.length) return;
     const issues = t.review.issues.map(i => keys === 'all' || keys.includes(i.key) ? { ...i, accepted: true } : i);
+    const now = issues.filter((i, n) => i.accepted && !t.review!.issues![n].accepted);
+    this.audit(merge ? 'review.override' : 'review.accept', id, now.map(i => i.text.slice(0, 160)).join(' | '), by);
     const done = !issues.some(i => !i.accepted) && t.review.state === 'fail';
     this.store.updateTask(id, { review: { ...t.review, issues, ...(done ? { state: 'pass' as const } : {}) }, ...(done && t.status === 'doing' && !this.isOpen(id) ? { status: 'review' as const } : {}) });
     this.changed();
-    if (merge && done) await this.merge(id);
+    if (merge && done) await this.merge(id, false, by);
   }
 
   // A read-only reviewer checks the branch. Fail: its issues go back to the task's Claude, and the new commit is
@@ -864,6 +873,7 @@ export class Runner {
       if (tri.level === 'none' && !force) {
         const v = { pass: true, issues: [], risk: 'minor' as const, tested: [] as string[] };
         this.store.updateTask(id, { review: { ...keep, state: 'pass', attempts, head, risk: 'minor', level: 'none', why: tri.why } });
+        this.audit('review.pass', id, `no review needed: ${tri.why}`, 'review');
         A.writeReview(this.root, id, v, attempts + 1);
         this.reviews.delete(id);
         if (o.autoMerge) { await this.merge(id, true); return; }
@@ -930,6 +940,7 @@ export class Runner {
       if (!v.pass && !tracked.some(i => !i.accepted)) v = { ...v, pass: true };
       if (v.pass) {
         this.store.updateTask(id, { review: { ...lv, state: 'pass', attempts, head, risk: v.risk, issues: tracked.length ? tracked : undefined, screenshots: screenshots(), tested: v.tested } });
+        this.audit('review.pass', id, `round ${attempts + 1}, risk ${v.risk}`, 'review');
         this.reviews.delete(id);
         if (o.autoMerge && v.risk !== 'critical') { await this.merge(id, true); return; }
         this.d.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id, true);
@@ -938,6 +949,7 @@ export class Runner {
       const n = attempts + 1;
       const review = { ...lv, state: 'fail' as const, attempts: n, head, issues: tracked, risk: v.risk, screenshots: screenshots(), tested: v.tested };
       this.store.updateTask(id, { review });
+      this.audit('review.fail', id, `round ${n}: ${openIssues(review).length} open issue(s)`, 'review');
       this.reviews.delete(id);
       if (n >= roundLimit(review, o.maxAttempts)) return this.d.notify('warn', `"${t.title}": ${openIssues(review).length} review issue(s) left after ${n} rounds. Open the card to see them, accept them, try once more or discard.`, id, true);
       await this.sendIssues(id);
@@ -975,7 +987,7 @@ export class Runner {
   }
 
   // Base is brought into the branch first, inside the task's folder; conflicts stop there, never in the user's checkout.
-  merge(id: string, auto = false) {
+  merge(id: string, auto = false, by: Audit.Actor = 'user') {
     return this.guarded(id, async t => {
       this.requireLease();
       if (t.where === 'direct' && !t.init) {
@@ -986,6 +998,7 @@ export class Runner {
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
         this.stop(id);
         this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
+        this.audit('finish', id, `${files.length} file(s) committed${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}`, auto ? 'justcode' : by);
         this.d.notify('info', `Finished "${t.title}".`, undefined, auto);
         this.pump();
         return;
@@ -1009,6 +1022,7 @@ export class Runner {
       try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
       await this.cleanup(t);
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
+      this.audit('merge', id, `${t.branch} into ${t.base}${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}${t.review?.unreviewed ? ', unreviewed' : ''}`, auto ? 'justcode' : by);
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
       if (t.sprintId) await this.mergeSprint(t.sprintId);
       this.pump();  // its slot is free: the next queued task starts on top of this merge
@@ -1058,8 +1072,9 @@ export class Runner {
   }
 
   // Drops the branch and its work; the task goes back to To do with a fresh session next run.
-  discard(id: string) {
+  discard(id: string, by: Audit.Actor = 'user') {
     return this.guarded(id, async t => {
+      this.audit('discard', id, t.where === 'direct' ? (t.directFiles ?? []).join(', ') : t.branch, by);
       if (t.where === 'direct' && !t.init) {
         if (t.status === 'done') throw new Error('This task is finished and committed. Revert the commit in git instead.');
         this.stop(id);

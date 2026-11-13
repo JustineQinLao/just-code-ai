@@ -44,6 +44,10 @@
       {
         "command": "justCode.showPhonePairing",
         "title": "JustCode: Show Phone Pairing"
+      },
+      {
+        "command": "justCode.exportAudit",
+        "title": "JustCode: Export Audit Log"
       }
     ],
     "configuration": {
