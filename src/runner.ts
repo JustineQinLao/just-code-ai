@@ -9,6 +9,7 @@ import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
 import * as Audit from './audit';
+import { SecretsFound, describeSecrets } from './secrets';
 import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript } from './claude';
@@ -371,6 +372,23 @@ export class Runner {
     return true;
   }
 
+  private secretScan() { return loadPolicy(this.root).policy.secretScan; }
+  private secretsAsked = new Set<string>();
+  // Possible keys or tokens in what JustCode was about to commit: nothing is committed, the card names the lines, and
+  // Claude is asked once to take them out (a second hit on the same lines waits for you).
+  private secretsBlocked(id: string, e: SecretsFound, cost?: number) {
+    const t = this.store.task(id);
+    if (!t) return;
+    this.store.updateTask(id, { error: e.message, live: undefined, ...(cost !== undefined ? { costUsd: cost } : {}) });
+    this.audit('secrets.block', id, describeSecrets(e.hits), 'policy');
+    this.d.notify('warn', `"${t.title}": ${e.message}`, id, true);
+    const key = `${id}|${describeSecrets(e.hits)}`;
+    if (this.secretsAsked.has(key) || !this.sessions.get(id)?.open) return;
+    this.secretsAsked.add(key);
+    void this.say(id, `JustCode did not commit your changes: these lines look like secrets: ${describeSecrets(e.hits)}. ` +
+      'Remove them (read keys from environment variables or an untracked .env file instead), then finish your turn. If one is a harmless example, rename the file to *.fixture.* or say why in your handoff.').catch(() => undefined);
+  }
+
   // What the project policy forbids about running this task now, or undefined.
   policyBlock(t: Task) {
     const over = this.overBudget(t);
@@ -560,7 +578,8 @@ export class Runner {
       this.store.updateTask(id, { directFiles: now.filter(f => !before.includes(f)) });
     }
     if (t.worktree && fs.existsSync(t.worktree) && !t.conflicts?.length) {
-      try { committed = await g.commitAll(t.worktree, t.title); } catch (e: any) {
+      try { committed = await g.commitAll(t.worktree, t.title, this.secretScan()); } catch (e: any) {
+        if (e instanceof SecretsFound) return this.secretsBlocked(id, e, cost);
         this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });
         return this.d.notify('error', `"${t.title}": ${e.message}`, id);
       }
@@ -1084,7 +1103,7 @@ export class Runner {
         const s0 = this.sessions.get(id);
         if (t.status !== 'review' || this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle')) throw new Error('Claude is still working on this task. Wait for it to finish, then Finish.');
         const files = t.directFiles ?? [];
-        if (files.length) await g.commitFiles(this.root, t.title, files);
+        if (files.length) await g.commitFiles(this.root, t.title, files, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
         this.stop(id);
         this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
@@ -1101,7 +1120,7 @@ export class Runner {
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
       if (this.checking.has(id)) throw new Error('The checks are still running in this task\'s folder. Merge when they finish.');
       this.stop(id);
-      await g.commitAll(t.worktree, t.title);
+      await g.commitAll(t.worktree, t.title, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
       const conflicts = await g.syncWithBase(t.worktree, t.base);
       if (conflicts.length) {
         this.store.updateTask(id, { conflicts, status: 'review' });
@@ -1186,7 +1205,7 @@ export class Runner {
   remotePr(id: string) {
     return this.guarded(id, async t => {
       if (!t.worktree || !t.branch || !t.base) throw new Error('Run the task first');
-      await g.commitAll(t.worktree, t.title);
+      await g.commitAll(t.worktree, t.title, this.secretScan());
       const url = await g.openRemotePr(t.worktree, t.base, t.branch, t.title, t.description ?? '');
       this.store.updateTask(id, { pr: url });
     });

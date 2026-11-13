@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { findSecrets, SecretsFound } from './secrets';
 
 // Every task works on its own branch in its own worktree (<project>/.justcode/worktrees/<id>),
 // so the user's checkout is never switched and parallel tasks never share files.
@@ -178,24 +179,35 @@ export async function removeWorktree(repo: string, dir: string) {
 }
 
 // Commits whatever the task's session changed. false = nothing to commit.
-export async function commitAll(dir: string, message: string) {
+// secretScan: the staged diff is checked first; on a hit everything is unstaged again and SecretsFound is thrown.
+export async function commitAll(dir: string, message: string, secretScan = false) {
   // Unresolved conflicts: committing now would put the markers on the branch.
   if ((await git(dir, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim()) return false;
   await git(dir, ['add', '-A']);
   if (await ok(dir, ['diff', '--cached', '--quiet'])) return false;
+  await scanStaged(dir, secretScan);
   await git(dir, ['commit', '-q', '-m', message]);
   return true;
 }
 
 // One commit with exactly these files; other staged or dirty files stay as they are. A stale entry (gone, never
 // tracked, or ignored) is skipped so it cannot block the rest. Returns false when nothing changed.
-export async function commitFiles(repo: string, message: string, files: string[]) {
+async function scanStaged(dir: string, on: boolean, files?: string[]) {
+  if (!on) return;
+  const hits = findSecrets(await git(dir, ['diff', '--cached', '--unified=0', '--no-color', ...(files ? ['--', ...files] : [])]));
+  if (!hits.length) return;
+  await ok(dir, ['reset', '-q', '--', ...(files ?? ['.'])]);
+  throw new SecretsFound(hits);
+}
+
+export async function commitFiles(repo: string, message: string, files: string[], secretScan = false) {
   const use: string[] = [];
   for (const f of files) {
     if (await ok(repo, ['add', '-A', '--', f])) use.push(f);
   }
   const staged = (await git(repo, ['diff', '--cached', '--name-only', '-z', '--', ...(use.length ? use : ['.'])])).split('\0').filter(Boolean);
   if (!use.length || !staged.length) return false;
+  await scanStaged(repo, secretScan, staged);
   await git(repo, ['commit', '-q', '-m', message, '--only', '--', ...staged]);
   return true;
 }
