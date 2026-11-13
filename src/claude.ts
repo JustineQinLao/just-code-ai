@@ -185,17 +185,26 @@ export function artifactUrlIn(cwd: string, id: string) {
   try { return ARTIFACT_URL.exec(fs.readFileSync(transcript(cwd, id), 'utf8'))?.[0]; } catch { return undefined; }
 }
 
-// The frontend-design plugin, if Claude Code has it installed (/plugin install frontend-design@claude-plugins-official).
-// Lean task sessions do not load your plugins, so artifact tasks are given this one by path.
-export function frontendDesignPlugin(file = path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'plugins', 'installed_plugins.json')) {
+// Plugins Claude Code has installed (plugins/installed_plugins.json): name (without @marketplace) → install path.
+// With several scopes the user scope wins; entries whose folder lacks skills/ are ignored.
+const pluginsFile = () => path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'plugins', 'installed_plugins.json');
+export function installedPlugins(file = pluginsFile()): Record<string, string> {
+  const found: Record<string, string> = {};
   try {
     const all = JSON.parse(fs.readFileSync(file, 'utf8'))?.plugins ?? {};
-    const key = Object.keys(all).find(k => /^frontend-design@/.test(k));
-    const entries: { scope?: string; installPath?: string }[] = key ? all[key] : [];
     const ok = (e: { installPath?: string }) => !!e.installPath && fs.existsSync(path.join(e.installPath, 'skills'));
-    return (entries.find(e => e.scope === 'user' && ok(e)) ?? entries.find(ok))?.installPath;
-  } catch { return undefined; }
+    for (const [key, list] of Object.entries<{ scope?: string; installPath?: string }[]>(all)) {
+      const entries = Array.isArray(list) ? list : [];
+      const hit = entries.find(e => e.scope === 'user' && ok(e)) ?? entries.find(ok);
+      const name = key.split('@')[0];
+      if (hit?.installPath && !(name in found)) found[name] = hit.installPath;
+    }
+  } catch { /* no plugins file */ }
+  return found;
 }
+// One installed plugin's folder, e.g. installedPlugin('frontend-design'). Lean task sessions do not load your plugins,
+// so artifact tasks are given the design plugin by path.
+export const installedPlugin = (name: string, file?: string) => installedPlugins(file)[name];
 
 // What an artifact task is told: build one page with the design skill, in the shape claude.ai artifacts accept.
 export function artifactBrief(file: string, design: boolean) {
