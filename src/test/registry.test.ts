@@ -52,3 +52,32 @@ test('registry: brief lines name titles, kinds and tasks, newest first, skipping
   assert.equal(R.forBrief(root, () => undefined, [U2]).length, 1);
   assert.equal(R.titleOf('<html><head><title> Q3 Sales </title>'), 'Q3 Sales');
 });
+
+import { Store } from '../store';
+import { Runner } from '../runner';
+import { Limits } from '../limits';
+import { artifactBrief } from '../claude';
+
+test('brief: project artifacts are listed once, not repeating sources; artifact brief names the page to update', () => {
+  const root = tmp();
+  R.link(root, U1, 't0', undefined, 'output'); R.upsert(root, U1, { title: 'Sales dashboard' });
+  R.upsert(root, U2, { kind: 'input' });
+  const t = { id: 'x', title: 'Restyle', mode: 'auto', status: 'todo', created: 0 } as any;
+  const brief = A.writeBrief(root, t, [{ id: 's', kind: 'url', ref: U2 }], id => id === 't0' ? 'First dashboard' : undefined);
+  assert.match(brief, /## Project artifacts[\s\S]*Sales dashboard: https:\/\/claude\.ai\/artifact\/aaa111 \(output, produced by task "First dashboard"\)/);
+  assert.doesNotMatch(brief.split('## Project artifacts')[1], /bbb222/);
+  assert.doesNotMatch(A.writeBrief(tmp(), t, []), /## Project artifacts/);
+  assert.match(artifactBrief('/f.html', false, { url: U1, title: 'Sales dashboard', file: '/old.html' }), /updates the existing artifact "Sales dashboard" \(https:\/\/claude\.ai\/artifact\/aaa111\)[\s\S]*Start from its current page, \/old\.html/);
+  assert.doesNotMatch(artifactBrief('/f.html', false), /updates the existing/);
+});
+
+test('runner: an artifact task naming a published page updates that page (same link)', () => {
+  const root = tmp();
+  const store = new Store(root);
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => ({ review: {} } as any), limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  R.link(root, U1, 't0', undefined, 'output'); R.upsert(root, U1, { title: 'Sales dashboard' });
+  R.link(root, U2, 't1', undefined, 'output'); R.upsert(root, U2, { title: 'Sales' });
+  assert.equal(r.publishedNamedIn({ title: 'Add a region filter to the sales dashboard', output: 'artifact' }).url, U1, 'longest matching title wins');
+  assert.equal(r.publishedNamedIn({ title: 'Build a new pricing page', output: 'artifact' }), undefined);
+  r.dispose();
+});

@@ -116,7 +116,19 @@ export const outsideDirs = (root: string, sources: Source[]) => [...new Set(sour
 
 // The brief: everything the builder needs to start, as references rather than pasted content, so it reads only
 // what the task needs. Rewritten on each fresh session (the task may have been edited).
-export function writeBrief(root: string, t: Task, sources: Source[]) {
+// Artifacts the project already used or published (from the registry), beyond the ones listed as sources: a later task
+// can build on or update one instead of recreating it. Newest first, at most 20.
+export function artifactsSection(root: string, sources: Source[], taskTitle: (id: string) => string | undefined = () => undefined) {
+  let lines: string[] = [];
+  try {
+    const listed = sources.filter(s => s.kind === 'url').map(s => s.ref);
+    const copyOf = (url: string) => { const s = sources.find(x => x.kind === 'url' && artifactKey(x.ref) === url && hasCopy(root, x)); return s ? sourceCopy(root, s.id) : undefined; };
+    lines = R.forBrief(root, taskTitle, listed, 20, copyOf);
+  } catch { /* no registry */ }
+  return lines.length ? `## Project artifacts (published or used before; update one rather than recreate it)\n${lines.join('\n')}` : '';
+}
+
+export function writeBrief(root: string, t: Task, sources: Source[], taskTitle?: (id: string) => string | undefined) {
   const picked = t.sources ? sources.filter(s => t.sources!.includes(s.id)) : sources;
   const files = t.files ?? [];
   const text = [
@@ -129,6 +141,7 @@ export function writeBrief(root: string, t: Task, sources: Source[]) {
     `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo).${isUiTask(t) ? ` Take screenshots only with the Playwright MCP browser_take_screenshot tool (headless), filename always an absolute path in that folder.` : ''}`,
     projectSection(root),
     designSection(root, t),
+    artifactsSection(root, picked, taskTitle),
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
     fs.existsSync(progressFile(root)) ? `## Project history\nWhat earlier tasks changed: ${progressFile(root)} (read it if you need context on recent work).` : '',
     `## When you finish\nUpdate ${handoffFile(root, t.id)} (create it if missing), at most 30 lines:\n` +

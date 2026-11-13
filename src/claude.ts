@@ -208,16 +208,17 @@ export function installedPlugins(file = pluginsFile(), need?: string): Record<st
 export const installedPlugin = (name: string, file?: string, need?: string) => installedPlugins(file, need)[name];
 
 // What an artifact task is told: build one page with the design skill, in the shape claude.ai artifacts accept.
-export function artifactBrief(file: string, design: boolean) {
+export function artifactBrief(file: string, design: boolean, update?: { url: string; title?: string; file?: string }) {
   return [`## Result: a page, published as a claude.ai artifact`,
     `This task's result is one web page, not a code change. Write it as a single self-contained HTML file at ${file} (create or overwrite it).`,
+    update ? `This task updates the existing artifact "${update.title ?? update.url}" (${update.url}): JustCode republishes it to the same link.${update.file ? ` Start from its current page, ${update.file} (copy it to the file above, then change it).` : ''}` : '',
     design ? 'Use the frontend-design skill (/frontend-design:frontend-design) for the visual design: a deliberate palette, typography and layout, not a generic template.' :
       'Give it a deliberate visual design: a clear palette, typography and layout, not a generic template.',
     'The page must follow the artifact rules: a <title> of two to four words; all CSS and JavaScript inline; images as inline SVG or data URIs; ' +
       'scripts only from cdnjs.cloudflare.com, cdn.jsdelivr.net/npm, unpkg.com, cdn.tailwindcss.com or code.jquery.com with an exact version; fonts only from Google Fonts; ' +
       'no fetch to other hosts; no relative links; colors as CSS variables with a dark mode (prefers-color-scheme); works at phone width; under 16 MB.',
     'Build the content from the project and the task (read the code or data you need). Do not publish it yourself: when you finish, JustCode publishes the file and puts the link on the card. ' +
-      'If the user asks for changes later, edit the same file.'].join('\n');
+      'If the user asks for changes later, edit the same file.'].filter(Boolean).join('\n');
 }
 export const sessionSize = (cwd: string, id: string) => { try { return fs.statSync(transcript(cwd, id)).size; } catch { return 0; } };
 

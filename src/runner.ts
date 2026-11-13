@@ -336,6 +336,19 @@ export class Runner {
     } catch { /* the registry is a convenience */ }
   }
 
+  // The published artifact whose title the task's text names (longest title wins), if any.
+  private publishedNamedIn(t: Task) {
+    const text = `${t.title}\n${t.description ?? ''}`.toLowerCase();
+    try {
+      return R.load(this.root).filter(e => e.kind === 'output' && e.title && e.title.length >= 3 && text.includes(e.title.toLowerCase()))
+        .sort((a, b) => b.title!.length - a.title!.length)[0];
+    } catch { return undefined; }
+  }
+  // The page file of the task that last published this artifact, as a starting point.
+  private previousPage(e: R.ArtifactEntry) {
+    for (const id of [...e.taskIds].reverse()) { const f = A.artifactFile(this.root, id); if (fs.existsSync(f)) return f; }
+  }
+
   private async start(t: Task, bin: string, cwd: string, patch: Partial<Task>, prompt?: string) {
     const id = t.id;
     const sessionId = t.sessionId ?? randomUUID();
@@ -343,7 +356,12 @@ export class Runner {
     // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
     const sources = A.sprintSources(A.loadSources(this.root), t.sprintId ? this.store.data.sprints.find(x => x.id === t.sprintId) : undefined);
-    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), t.init ? setupSkillBody() : '', t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!installedPlugin('frontend-design', undefined, 'skills')) : '', prompt].filter(Boolean).join('\n\n');
+    // An artifact task that names a page an earlier task published updates that page (same link) instead of a new one.
+    const reuse = !resume && t.output === 'artifact' && !t.artifactUrl ? this.publishedNamedIn(t) : undefined;
+    if (reuse) { patch = { ...patch, artifactUrl: reuse.url }; R.link(this.root, reuse.url, t.id, t.sprintId); }
+    const title = (x: string) => this.store.task(x)?.title;
+    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title)), t.init ? setupSkillBody() : '',
+      t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!installedPlugin('frontend-design', undefined, 'skills'), reuse && { ...reuse, file: this.previousPage(reuse) }) : '', prompt].filter(Boolean).join('\n\n');
     if (!resume) this.linkArtifacts(t, sources);
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
@@ -1153,7 +1171,9 @@ export class Runner {
     s.on('ask', a => { if (a.kind !== 'question') setImmediate(() => s.answer({ id: a.id, choice: 'deny', message: 'Read-only planning chat: use Read, Grep, Glob or read-only commands (ls, cat, grep, git log), and reply with the proposed task list.' })); });
     s.on('exit', () => this.changed());
     const sprints = this.store.data.sprints.filter(x => !x.closed).map(x => ({ name: x.name, goal: x.goal }));
-    await s.start((A.projectSection(this.root) ? `${A.projectSection(this.root)}\n\n` : '') + A.sourceLines(this.root, A.sprintSources(A.loadSources(this.root), sid ? this.store.data.sprints.find(x => x.id === sid) : undefined)) + plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint,
+    const planSources = A.sprintSources(A.loadSources(this.root), sid ? this.store.data.sprints.find(x => x.id === sid) : undefined);
+    const arts = A.artifactsSection(this.root, planSources, x => this.store.task(x)?.title);
+    await s.start((A.projectSection(this.root) ? `${A.projectSection(this.root)}\n\n` : '') + A.sourceLines(this.root, planSources) + (arts ? `${arts}\n\n` : '') + plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint,
       others.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status })), into && this.store.data.sprints.some(x => x.name === into && !x.closed) ? into : undefined));
     this.changed();
   }
