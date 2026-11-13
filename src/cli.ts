@@ -4,34 +4,45 @@ import * as path from 'path';
 import { Store } from './store';
 import { findTasksFile, formatResult, syncTasks } from './tasksmd';
 import { adb } from './claude';
+import { DEFAULT_SKILLS } from './skill';
 import { execFileSync } from 'child_process';
 
 // JustCode CLI, used by the just-code-ai-sync skill:
 //   node cli.js sync [projectRoot] [--dry-run] [--file path/to/TASKS.md]
 //   node cli.js screenshot <out.png> [--serial id]   saves the Android device's screen (adb screencap) without a
 //                                     shell redirect, which unattended Claude sessions are not allowed to use
-//   node cli.js setup [projectRoot]   copies drafts from .justcode/setup/ into .claude/ (Claude Code asks before
-//                                     every write into .claude/, so the init skill drafts there and this installs)
+//   node cli.js setup [projectRoot] [--update]   copies drafts from .justcode/setup/ into .claude/ (Claude Code asks
+//                                     before every write into .claude/, so the init skill drafts there and this
+//                                     installs), plus the default skills (plan-tasks, design-from-artifact).
+//                                     --update replaces existing files with the drafts and the current default skills.
 
-// Copies .justcode/setup/** to .claude/**, skipping files that already exist, then removes the drafts.
-function setup(root: string) {
+// Copies .justcode/setup/** to .claude/**, then removes the drafts, and installs the default skills every project
+// gets. Existing files are kept (a project's own edits stay) unless `update`: then the approved drafts and the current
+// default skills replace them.
+function setup(root: string, update = false) {
   const from = path.join(root, '.justcode', 'setup');
-  if (!fs.existsSync(from)) { console.error(`Nothing to install: ${from} does not exist.`); return 2; }
   const installed: string[] = [], kept: string[] = [];
+  for (const sk of DEFAULT_SKILLS) {
+    const dest = path.join(root, '.claude', sk.path);
+    if (fs.existsSync(dest) && (!update || fs.readFileSync(dest, 'utf8') === sk.text())) { kept.push(sk.path); continue; }
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, sk.text());
+    installed.push(sk.path);
+  }
   const walk = (dir: string) => {
     for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
       const src = path.join(dir, d.name);
       if (d.isDirectory()) { walk(src); continue; }
       const rel = path.relative(from, src), dest = path.join(root, '.claude', rel);
-      if (fs.existsSync(dest)) { kept.push(rel); continue; }
+      if (fs.existsSync(dest) && !update) { kept.push(rel); continue; }
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(src, dest);
       installed.push(rel);
     }
   };
-  walk(from);
+  if (fs.existsSync(from)) walk(from);
   fs.rmSync(from, { recursive: true, force: true });
-  console.log([`Installed into .claude/ (${installed.length}):`, ...installed.map(f => `  - ${f}`),
+  console.log([`${update ? 'Installed or updated' : 'Installed'} into .claude/ (${installed.length}):`, ...installed.map(f => `  - ${f}`),
     ...(kept.length ? [`Kept existing (${kept.length}):`, ...kept.map(f => `  - ${f}`)] : [])].join('\n'));
   return 0;
 }
@@ -56,9 +67,9 @@ function main(argv: string[]) {
     const si = rest.indexOf('--serial');
     return screenshot(rest.find((a, i) => !a.startsWith('--') && (si < 0 || i !== si + 1)), si >= 0 ? rest[si + 1] : undefined);
   }
-  if (cmd === 'setup') return setup(path.resolve(rest.find(a => !a.startsWith('--')) ?? process.cwd()));
+  if (cmd === 'setup') return setup(path.resolve(rest.find(a => !a.startsWith('--')) ?? process.cwd()), rest.includes('--update'));
   if (cmd !== 'sync') {
-    console.log('Usage: cli.js sync [projectRoot] [--dry-run] [--file TASKS.md]\n       cli.js setup [projectRoot]');
+    console.log('Usage: cli.js sync [projectRoot] [--dry-run] [--file TASKS.md]\n       cli.js setup [projectRoot] [--update]');
     return cmd ? 1 : 0;
   }
   const dryRun = rest.includes('--dry-run');

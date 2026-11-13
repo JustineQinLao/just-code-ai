@@ -2,7 +2,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import { sdk, Sdk } from './sdk';
 import { alwaysChoice, allowedBy, toolArg, Suggestion } from './policy';
-import { settingSources, systemPrompt, TASK_APPEND, OUTPUT_CAPS, addUsage, Usage } from './claude';
+import { sessionSettings, settingSources, systemPrompt, TASK_APPEND, OUTPUT_CAPS, addUsage, Usage } from './claude';
 
 // One task's live Claude session, through the Agent SDK. Claude runs as a child process the SDK owns; JustCode talks
 // to it in structured messages, so a permission request arrives as data (tool + input) and is answered as data. No
@@ -93,6 +93,7 @@ export class Session {
   agents = new Map<string, AgentNode>();
   mode: string;
   modeNote?: string;               // e.g. Auto mode unavailable, so Claude asks instead
+  model?: string;                  // the model actually answering (from Claude, not the setting): shown in the conversation
   context = 0;                     // tokens in context (last main-thread request)
   output = 0;                      // tokens Claude wrote this session
   private ev = new EventEmitter();
@@ -133,10 +134,10 @@ export class Session {
       // Lets the user switch a running task to Bypass permissions; it does not turn that mode on by itself.
       allowDangerouslySkipPermissions: true,
       settingSources: settingSources(!!o.personal),
-      ...(o.settingsFile ? { settings: o.settingsFile } : {}),
+      settings: sessionSettings(o.settingsFile) as Sdk.Options['settings'],
       ...(o.model ? { model: o.model } : {}),
       ...(o.effort ? { effort: o.effort as Sdk.Options['effort'] } : {}),
-      ...(o.readOnly ? { disallowedTools: ['Agent', 'Task', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'] } : o.subagents ? {} : { disallowedTools: ['Agent', 'Task'] }),
+      ...(o.readOnly ? { disallowedTools: ['Agent', 'Task', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'EnterPlanMode', 'ExitPlanMode'] } : o.subagents ? {} : { disallowedTools: ['Agent', 'Task'] }),
       ...(o.agent ? { agent: o.agent } : {}),
       ...(o.agents && Object.keys(o.agents).length ? { agents: o.agents as any } : {}),
       ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
@@ -181,6 +182,14 @@ export class Session {
     this.ev.removeAllListeners();
   }
 
+  // A note in the conversation when the model is first known or changes (e.g. a fallback when one is overloaded).
+  private useModel(model: string) {
+    if (model === this.model || model.startsWith('<')) return;
+    this.model = model;
+    this.step({ kind: 'info', text: `Model: ${model}` });
+    this.changed();
+  }
+
   /* ---------- messages from Claude ---------- */
 
   private message(m: Sdk.SDKMessage) {
@@ -189,6 +198,7 @@ export class Session {
       case 'system': {
         const s = m as any;
         if (s.subtype === 'init') {
+          if (s.model) this.useModel(s.model);
           if (s.permissionMode && s.permissionMode !== this.o.mode) {
             this.modeNote = `${this.o.mode} is not available here, so Claude runs in ${s.permissionMode} mode.`;
             this.mode = s.permissionMode;
@@ -222,6 +232,7 @@ export class Session {
         const a = m as any;
         const sub = a.parent_tool_use_id ? this.agentFor(a.parent_tool_use_id) : undefined;
         if (!a.parent_tool_use_id) {
+          if (a.message?.model) this.useModel(a.message.model);
           const u = a.message?.usage;
           if (u) {
             this.context = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);

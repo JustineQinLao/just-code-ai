@@ -9,8 +9,32 @@ import { Task } from './store';
 //   tasks/<id>/brief.md   the task, its acceptance criteria and which sources it rests on (written by JustCode)
 //   tasks/<id>/handoff.md what the builder changed and how it verified it (written by Claude at the end of each turn)
 //   tasks/<id>/review.md  the reviewer's last verdict (written by JustCode)
+//   prompts.jsonl         every prompt you typed (new task, message, planning request), kept after tasks are merged or deleted
 
 export interface Source { id: string; kind: 'file' | 'folder' | 'url'; ref: string; note?: string }
+
+// A claude.ai artifact link opens only when signed in to claude.ai, so a task's Claude gets just its title from a
+// fetch. JustCode saves the artifact's files in a folder next to the sources; briefs point Claude at that copy.
+// An artifact made from a type (a Design canvas, a deck) has the type's editor as its index.html and its real content
+// under project/, so the copy holds project/ (canvas.json and one .dc.html per screen) rather than the editor page.
+export const isArtifactLink = (url: string) => /^https:\/\/claude\.ai\/(?:code\/)?artifact\/[\w-]+\/?(?:[?#].*)?$/.test(url.trim());
+export const sourceCopy = (root: string, id: string) => jc(root, 'sources', id);
+const files = (dir: string): string[] => { try { return fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? files(path.join(dir, e.name)) : [path.join(dir, e.name)]); } catch { return []; } };
+export const copyFiles = (root: string, id: string) => files(sourceCopy(root, id)).filter(f => !path.basename(f).startsWith('.'));
+// claude.ai artifact links written in a prompt or a task's text.
+export const artifactLinksIn = (text: string) => [...new Set((text.match(/https:\/\/claude\.ai\/(?:code\/)?artifact\/[\w-]+/g) ?? []))];
+// Links from a prompt become project sources (once), so every later plan and task builds on them too.
+export const artifactKey = (url: string) => url.trim().replace(/[?#].*$/, '').replace(/\/$/, '');
+export function addLinkSources(root: string, text: string) {
+  const all = loadSources(root), have = new Set(all.map(s => artifactKey(s.ref)));
+  const add = artifactLinksIn(text).filter(l => !have.has(l)).map(ref => ({ id: Math.random().toString(16).slice(2, 10), kind: 'url' as const, ref, note: 'claude.ai artifact from a prompt' }));
+  if (add.length) saveSources(root, [...all, ...add]);
+  return add;
+}
+// The sources section of a planning chat's first message: where each one is, as a task's brief lists them.
+export const sourceLines = (root: string, sources: Source[]) => sources.length
+  ? `## Sources (the basis for this plan: read the ones that matter before proposing tasks)\n${sources.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`).join('\n')}\n\n` : '';
+export const hasCopy = (root: string, s: Source) => s.kind === 'url' && isArtifactLink(s.ref) && copyFiles(root, s.id).length > 0;
 
 const jc = (root: string, ...p: string[]) => path.join(root, '.justcode', ...p);
 export const taskDir = (root: string, id: string) => jc(root, 'tasks', id);
@@ -23,6 +47,20 @@ export const planFile = (root: string, id: string) => path.join(taskDir(root, id
 export const writePlan = (root: string, id: string, plan: string) => write(planFile(root, id), plan.trim() + '\n');
 export const progressFile = (root: string) => jc(root, 'progress.md');
 
+export interface Prompt { time: number; kind: 'task' | 'message' | 'plan'; text: string; taskId?: string; title?: string; sessionId?: string }
+export const promptsFile = (root: string) => jc(root, 'prompts.jsonl');
+export function logPrompt(root: string, p: Omit<Prompt, 'time'>) {
+  try {
+    fs.mkdirSync(jc(root), { recursive: true });
+    fs.appendFileSync(promptsFile(root), JSON.stringify({ time: Date.now(), ...p }) + '\n');
+  } catch { /* history is a convenience: never stops the prompt itself */ }
+}
+export function readPrompts(root: string): Prompt[] {
+  let text = '';
+  try { text = fs.readFileSync(promptsFile(root), 'utf8'); } catch { return []; }
+  return text.split('\n').flatMap(l => { try { const p = JSON.parse(l); return typeof p?.text === 'string' && typeof p.time === 'number' ? [p] : []; } catch { return []; } });
+}
+
 const read = (f: string) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
 const write = (f: string, text: string) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); };
 
@@ -33,15 +71,31 @@ export function loadSources(root: string): Source[] {
   } catch { return []; }
 }
 export const saveSources = (root: string, s: Source[]) => write(jc(root, 'sources.json'), JSON.stringify(s, null, 2));
+// Sources live in one project library; a sprint uses the ones it lists (all of them when it lists none, as before).
+export const sprintSources = (all: Source[], sprint?: { sources?: string[] }) => sprint?.sources ? all.filter(s => sprint.sources!.includes(s.id)) : all;
+// The library sources a prompt's claude.ai links point at (a source's ref may carry a #page part).
+export const linkedSources = (all: Source[], text: string) => {
+  const links = artifactLinksIn(text);
+  return all.filter(s => links.includes(artifactKey(s.ref)));
+};
 
 // The source's location as Claude can open it: project files by their path in the task's copy, outside files absolute.
 function where(root: string, s: Source) {
+  if (hasCopy(root, s)) {
+    const dir = sourceCopy(root, s.id), canvas = path.join(dir, 'project', 'canvas.json');
+    return fs.existsSync(canvas)
+      ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
+        `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +
+        `Read the screens your task covers and build them to match: same sections, labels, order, colors, type and spacing; only the data comes from the app`
+      : `${dir}/ (saved copy of ${s.ref}; that link needs a claude.ai sign-in, so read the files here, and open index.html in a browser to see it)`;
+  }
   if (s.kind === 'url') return s.ref;
   const rel = path.relative(root, s.ref);
   return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel : s.ref;
 }
 // Sources outside the project (Claude needs read access to them).
-export const outsideDirs = (root: string, sources: Source[]) => [...new Set(sources.filter(s => s.kind !== 'url').map(s => {
+export const outsideDirs = (root: string, sources: Source[]) => [...new Set(sources.filter(s => s.kind !== 'url' || hasCopy(root, s)).map(s => {
+  if (s.kind === 'url') return sourceCopy(root, s.id); // not in the task's copy of the project
   const rel = path.relative(root, s.ref);
   if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return '';
   return s.kind === 'folder' ? s.ref : path.dirname(s.ref);

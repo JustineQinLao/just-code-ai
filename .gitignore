@@ -3,3 +3,6 @@ out/
 out-test/
 *.vsix
 .justcode/
+
+
+data/

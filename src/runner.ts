@@ -53,10 +53,13 @@ export interface RunnerDeps {
   cli: string; // out/cli.js, for the reviewer's screenshot command
   // Publishes an artifact task's page (needs an interactive claude: the Agent SDK cannot publish artifacts).
   publish?(id: string): void;
+  // Saves a local copy of every claude.ai artifact source that has none yet (links in `text` are added as sources
+  // first), so plans and tasks build on the real page. Resolves when the copies are saved or could not be.
+  saveSources?(text: string): Promise<void>;
 }
 
 // What a card shows about its live work, beyond what board.json keeps.
-export interface Live { phase?: string; run?: RunState; asks: Ask[]; agents: AgentNode[]; context: number; output: number; modeNote?: string; mode?: string; reviewing?: number; busy: boolean; queued: boolean }
+export interface Live { phase?: string; run?: RunState; asks: Ask[]; agents: AgentNode[]; context: number; output: number; modeNote?: string; mode?: string; modelUsed?: string; reviewing?: number; busy: boolean; queued: boolean }
 
 /** The mode a task actually runs with: bypass-all forces bypassPermissions. */
 export const effectiveMode = <M,>(mode: M, bypassAll?: boolean): M | 'bypassPermissions' => bypassAll ? 'bypassPermissions' : mode;
@@ -154,7 +157,7 @@ export class Runner {
       phase: this.phase.get(id),
       run: this.starting.has(id) ? 'starting' : s?.open ? s.state : undefined,
       asks: s ? [...s.asks.values()] : [], agents: s ? [...s.agents.values()] : [],
-      context: s?.context ?? 0, output: s?.output ?? 0, modeNote: s?.modeNote, mode: s?.mode,
+      context: s?.context ?? 0, output: s?.output ?? 0, modeNote: s?.modeNote, mode: s?.mode, modelUsed: s?.model,
       reviewing: r?.started, busy: this.busy.has(id), queued: this.store.queue.includes(id),
     };
   }
@@ -207,6 +210,7 @@ export class Runner {
     const t = this.store.task(id);
     if (!t || this.sessions.get(id)?.open || this.starting.has(id) || t.remote) return;
     this.requireLease();
+    if (t.noWait) this.store.updateTask(id, { noWait: undefined });
     if (await this.settleMerged(t)) return;
     if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. The task starts by itself after the reset.');
     const bin = this.d.bin();
@@ -214,6 +218,12 @@ export class Runner {
     this.starting.add(id); // claimed before the awaits, so Run all never double-starts a task
     this.changed();
     try {
+      if (this.d.saveSources) {
+        this.setPhase(id, 'Saving claude.ai sources locally…');
+        const text = [t.title, t.description, prompt].filter(Boolean).join('\n');
+        try { await this.d.saveSources(text); } finally { this.setPhase(id); }
+        this.useLinkedSources(t.sprintId, text);
+      }
       if (t.where === 'root') return await this.start(t, bin, this.root, {}, prompt);
       const prep = await this.prepare(t);
       if (!prep) return; // the user cancelled
@@ -241,19 +251,34 @@ export class Runner {
         if (!c) return;
         await g.ensureRepo(this.root);
       } else if (!await g.hasCommits(this.root)) await g.ensureRepo(this.root);
-      const base = t.base ?? await g.currentBranch(this.root);
-      if (base === 'HEAD') throw new Error('Your project folder is on a detached HEAD. Check out a branch first (git switch main).');
-      if (!t.worktree && await g.currentBranch(this.root) === base) {
+      // A sprint task starts from the sprint's branch; the sprint's first task cuts it from the branch you are on.
+      const current = await g.currentBranch(this.root);
+      let sprint = t.sprintId && !t.worktree ? this.store.sprint(t.sprintId) : undefined;
+      if (sprint?.closed) sprint = undefined;
+      if (sprint?.branch && !await g.branchExists(this.root, sprint.branch)) {
+        this.store.updateSprint(sprint.id, { branch: undefined, target: undefined }); // deleted by hand: start it again
+        sprint = this.store.sprint(sprint.id);
+      }
+      const from = sprint ? sprint.branch ?? current : t.base ?? current;
+      if (from === 'HEAD') throw new Error('Your project folder is on a detached HEAD. Check out a branch first (git switch main).');
+      if (!t.worktree && current === from) {
         const dirty = await g.dirtyFiles(this.root);
         if (dirty.length) {
           const c = await this.d.choose(`${dirty.length} file(s) in ${path.basename(this.root)} are not committed (${dirty.slice(0, 4).join(', ')}${dirty.length > 4 ? ', …' : ''}). ` +
-            `The task works on a copy of what is committed on ${base}. Commit them first so the task sees them?`, 'Commit and run', 'Run without them');
+            `The task works on a copy of what is committed on ${from}. Commit them first so the task sees them?`, 'Commit and run', 'Run without them');
           if (!c) return;
           if (c === 'Commit and run') {
             const snap = await g.snapshot(this.root);
             if (snap.skipped.length) this.d.notify('warn', `Left out of git (over 10 MB): ${snap.skipped.join(', ')}`);
           }
         }
+      }
+      let base = from;
+      if (sprint && !sprint.branch) {
+        base = g.sprintBranch(sprint.name, sprint.id);
+        if (!await g.branchExists(this.root, base)) await g.git(this.root, ['branch', base, from]);
+        this.store.updateSprint(sprint.id, { branch: base, target: from });
+        this.d.notify('info', `${sprint.name} works on its own branch ${base}. Its tasks merge there; when the last one merges, ${base} merges into ${from}.`);
       }
       const branch = t.branch ?? g.taskBranch(t.title, t.id);
       const worktree = t.worktree ?? g.worktreeDir(this.root, t.id);
@@ -273,7 +298,7 @@ export class Runner {
     const resume = !!t.sessionId && sessionExists(cwd, sessionId);
     // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
-    const sources = A.loadSources(this.root);
+    const sources = A.sprintSources(A.loadSources(this.root), t.sprintId ? this.store.data.sprints.find(x => x.id === t.sprintId) : undefined);
     const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources)), t.init ? syncSkillBody(this.d.cli) : '', t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!frontendDesignPlugin()) : '', prompt].filter(Boolean).join('\n\n');
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
@@ -521,6 +546,26 @@ export class Runner {
   }
   cancelQueue() { this.store.setQueue([]); }
 
+  // The task the queue waits on, when only you can move it on (merge it, answer it, fix it): nothing is running.
+  userBlocker() {
+    const b = this.inFlight()[0];
+    if (!b || !this.store.queue.length || this.starting.has(b.id) || this.reviews.has(b.id) || b.remote || b.limited) return;
+    const s = this.sessions.get(b.id);
+    if (s?.open && s.state !== 'idle' && s.state !== 'waiting') return;
+    return { id: b.id, title: b.title, why: this.queueInfo().blocker!.why };
+  }
+  // Run all goes on without this task; it keeps its branch and still waits for you on its card.
+  skipWait(id: string) {
+    this.store.updateTask(id, { noWait: true });
+    this.pump();
+  }
+
+  // "Run now" on a queued card: you asked for this one, so it starts past the "tasks at once" limit.
+  async runNow(id: string) {
+    this.store.setQueue(this.store.queue.filter(q => q !== id));
+    await this.run(id);
+  }
+
   // A card's ▶ Run. It honors the "tasks at once" limit (maxParallel): if a slot is free it starts now, otherwise it
   // goes to the front of the queue and starts when a running task is merged. Raise the limit in Settings to run several.
   async requestRun(id: string) {
@@ -540,6 +585,9 @@ export class Runner {
       if (t.archived || t.status === 'done' || t.init) return false;
       if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') return true;
       if (this.starting.has(t.id) || t.remote) return true;
+      // Stopped on an error: nothing runs until you press Resume, so it must not hold the slot (a stopped task in
+      // another sprint left ▶ Run only queueing, with nothing visible to wait for).
+      if (t.error || t.noWait) return false;
       return t.where !== 'root' && !!t.worktree && (t.status === 'doing' || t.status === 'review');
     });
   }
@@ -555,6 +603,7 @@ export class Runner {
       : b.limited ? 'waits for the usage limit to reset'
       : b.error ? 'stopped on an error (Resume it)'
       : this.reviews.has(b.id) ? 'is being reviewed'
+      : r?.state === 'pass' && r.risk === 'critical' && this.d.settings().review.autoMerge ? 'passed review but is flagged critical, so it is not merged automatically: open it and merge it yourself'
       : r?.state === 'pass' ? 'is ready to merge'
       : r?.state === 'fail' ? (r.attempts >= max ? 'still has review issues' : 'is fixing review issues')
       : b.conflicts?.length ? 'has merge conflicts'
@@ -775,6 +824,7 @@ export class Runner {
 
   changes(id: string) {
     const t = this.store.task(id);
+    if (t?.status === 'done' && !t.worktree && t.branch && t.where !== 'root') return g.mergedChanges(this.root, t.branch);
     if (!t?.worktree || !t.base || !fs.existsSync(t.worktree)) return Promise.resolve([]);
     return g.changes(t.worktree, t.base);
   }
@@ -809,8 +859,33 @@ export class Runner {
       await this.cleanup(t);
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
+      if (t.sprintId) await this.mergeSprint(t.sprintId);
       this.pump();  // its slot is free: the next queued task starts on top of this merge
     });
+  }
+
+  // A sprint is finished when none of its tasks is left to do and no task still builds on its branch. Its branch
+  // then merges into the branch it was cut from. Conflicts leave both branches as they are and say which files.
+  finishSprint(id: string) {
+    return this.serial(() => this.mergeSprint(id)).catch(e => this.d.notify('error', e.message));
+  }
+  private async mergeSprint(id: string) {
+    const sp = this.store.sprint(id);
+    if (!sp?.branch || !sp.target) return;
+    const tasks = this.store.data.tasks;
+    if (tasks.some(x => (x.sprintId === id && !x.archived && x.status !== 'done') || (x.base === sp.branch && x.worktree && x.status !== 'done'))) return;
+    this.requireLease();
+    if (await g.branchExists(this.root, sp.branch)) {
+      const conflicts = await g.mergeBranch(this.root, sp.target, sp.branch, `Merge sprint ${sp.name} (${sp.branch})`);
+      if (conflicts.length) {
+        this.d.notify('warn', `${sp.name} is done, but ${sp.branch} conflicts with ${sp.target} in: ${conflicts.join(', ')}. ` +
+          `Merge it by hand (git merge ${sp.branch} on ${sp.target}), then use Merge sprint.`, undefined, true);
+        return;
+      }
+      await g.deleteBranch(this.root, sp.branch).catch(() => undefined);
+    }
+    this.store.updateSprint(id, { branch: undefined, target: undefined });
+    this.d.notify('info', `${sp.name} is done: merged ${sp.branch} into ${sp.target}.`, undefined, true);
   }
 
   resolveWithClaude(id: string) {
@@ -874,6 +949,8 @@ export class Runner {
   // A read-only chat that plans new tasks or edits the To do list. You see its history and keep talking to it; it
   // maintains a proposed task list you apply when ready. One per project; lives only while open.
   private planner?: Session;
+  private plannerSession?: string;
+  private plannerOthers: string[] = [];         // started and done tasks of the sprint: checked, changed only if needed
   private plannerTargets: string[] = [];        // the To do task ids this chat is editing (empty = planning fresh)
   private plannerProposals?: RefineResult[];
   private plannerNote?: string;  // last apply result, shown in the panel
@@ -883,24 +960,45 @@ export class Runner {
   plannerLive() {
     const s = this.planner;
     if (!s?.open && !this.plannerProposals) return undefined;
-    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, context: s?.context ?? 0, note: this.plannerNote, turnAt: this.plannerTurnAt, sprint: this.plannerSprint,
+    return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, others: this.plannerOthers, context: s?.context ?? 0, model: s?.model, note: this.plannerNote, turnAt: this.plannerTurnAt, sprint: this.plannerSprint,
       asks: s?.open ? [...s.asks.values()].filter(a => a.kind === 'question') : [] };
   }
 
-  async startPlanner(instruction: string, targetIds: string[], sprint?: { name: string; goal?: string }) {
+  plannerPhase?: string;
+  // A claude.ai link pasted in a sprint's task or plan prompt becomes one of that sprint's sources.
+  private useLinkedSources(sprintId: string | undefined, text: string) {
+    const sp = sprintId ? this.store.data.sprints.find(x => x.id === sprintId) : undefined;
+    if (!sp?.sources) return;
+    const add = A.linkedSources(A.loadSources(this.root), text).map(s => s.id).filter(id => !sp.sources!.includes(id));
+    if (add.length) this.store.updateSprint(sp.id, { sources: [...sp.sources, ...add] });
+  }
+
+  async startPlanner(instruction: string, targetIds: string[], sprint?: { name: string; goal?: string }, into?: string) {
     const bin = this.d.bin();
     if (!bin) throw new Error('Claude Code is not installed. Open JustCode: Check Setup.');
     if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. Try again after the reset.');
     this.planner?.kill();
     this.plannerTargets = targetIds;
+    // Reworking a sprint also checks the tasks already started or done in it.
+    const sid = sprint ? this.store.data.sprints.find(x => x.name === sprint.name && !x.closed)?.id : undefined;
+    const others = sid ? this.store.data.tasks.filter(t => t.sprintId === sid && !t.archived && !t.init && !targetIds.includes(t.id) && (t.status !== 'todo' || !!t.worktree)) : [];
+    this.plannerOthers = others.map(t => t.id);
     this.plannerProposals = undefined;
     this.plannerNote = undefined;
     this.plannerTurnAt = Date.now();
     this.plannerSprint = sprint?.name;
+    this.plannerPhase = 'Saving the claude.ai design locally first. This takes about 30 seconds…';
+    this.changed();
+    try { await this.d.saveSources?.(instruction); } finally { this.plannerPhase = undefined; }
+    this.useLinkedSources(sid, instruction);
     const tasks = targetIds.map(id => this.store.task(id)).filter((t): t is Task => !!t);
     const set = this.d.settings();
+    this.plannerSession = randomUUID();
+    A.logPrompt(this.root, { kind: 'plan', text: instruction, sessionId: this.plannerSession, title: sprint ? `Edit ${sprint.name}` : 'Plan' });
     const s = new Session({
-      bin, cwd: this.root, sessionId: randomUUID(), resume: false, mode: 'plan', model: set.plannerModel || undefined,
+      // Not Claude Code's plan mode: it tells Claude to write a plan file, which a read-only chat cannot, so each turn
+      // spent tokens on a refused Write. Default mode with the write tools removed keeps it read-only.
+      bin, cwd: this.root, sessionId: this.plannerSession, resume: false, mode: 'default', model: set.plannerModel || undefined,
       append: PLANNER_APPEND, readOnly: true, effort: set.plannerEffort || undefined,
       allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup,
     });
@@ -908,18 +1006,19 @@ export class Runner {
     s.on('change', () => this.changed());
     s.on('rate', info => this.d.limits.update(info));
     s.on('turn', turn => { this.onPlannerTurn(turn); });
-    // Questions show in the planning panel. The chat stays in plan mode: a request to leave it is declined.
-    s.on('ask', a => { if (a.kind !== 'question') setImmediate(() => s.answer({ id: a.id, choice: 'deny', message: 'This is a planning chat. Stay read-only and reply with the proposed task list.' })); });
+    // Questions show in the planning panel. Anything else that asks (a command that is not read-only) is declined.
+    s.on('ask', a => { if (a.kind !== 'question') setImmediate(() => s.answer({ id: a.id, choice: 'deny', message: 'Read-only planning chat: use Read, Grep, Glob or read-only commands (ls, cat, grep, git log), and reply with the proposed task list.' })); });
     s.on('exit', () => this.changed());
     const sprints = this.store.data.sprints.filter(x => !x.closed).map(x => ({ name: x.name, goal: x.goal }));
-    await s.start(plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint));
+    await s.start(A.sourceLines(this.root, A.sprintSources(A.loadSources(this.root), sid ? this.store.data.sprints.find(x => x.id === sid) : undefined)) + plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint,
+      others.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status })), into && this.store.data.sprints.some(x => x.name === into && !x.closed) ? into : undefined));
     this.changed();
   }
 
   private onPlannerTurn(turn: TurnEnd) {
     if (turn.limit) { this.d.limits.setReached('usage'); return; }
     if (!turn.ok) { this.d.notify('error', `Planner stopped: ${String(turn.error).slice(0, 200)}`); return; }
-    const ids = new Set(this.plannerTargets);
+    const ids = new Set([...this.plannerTargets, ...this.plannerOthers]);
     const p = parseProposals(turn.text, ids);
     if (p) { this.plannerProposals = p; this.plannerNote = undefined; }
     this.changed();
@@ -930,8 +1029,49 @@ export class Runner {
   plannerSay(text: string) {
     if (!this.planner?.open) throw new Error('The planning chat has ended. Start it again.');
     this.planner.send(text);
+    A.logPrompt(this.root, { kind: 'plan', text, sessionId: this.plannerSession, title: 'Plan' });
     this.plannerTurnAt = Date.now();
   }
+  // Your prompts, newest first, with the sessions each one belongs to. Tasks from before the log existed are
+  // filled in from the board, so nothing you ran is missing.
+  history() {
+    const logged = A.readPrompts(this.root);
+    const seen = new Set(logged.filter(p => p.kind === 'task').map(p => p.taskId));
+    const items = [...logged.reverse(), ...this.store.data.tasks.filter(t => !seen.has(t.id))
+      .map(t => ({ time: t.created, kind: 'task' as const, text: [t.title, t.description].filter(Boolean).join('\n\n'), taskId: t.id, title: t.title }))];
+    return items.sort((a, b) => b.time - a.time).map(p => {
+      const t = p.taskId ? this.store.task(p.taskId) : undefined;
+      const sessions = p.kind === 'plan' ? (p.sessionId && this.sessionDir(p.sessionId) ? [p.sessionId] : [])
+        : t ? [...(t.pastSessions ?? []), t.sessionId].filter((s): s is string => !!s && !!this.sessionDir(s, t)) : [];
+      return { ...p, title: t?.title ?? p.title, exists: !!t, status: t?.status, sessions };
+    });
+  }
+
+  // Where a session's transcript is: the task's own folder (gone after a merge, its transcript stays) or the project.
+  // Only sessions the board or the prompt log knows: a remote viewer can't read an arbitrary transcript.
+  sessionDir(sessionId: string, t?: Task) {
+    const task = t ?? this.store.data.tasks.find(x => x.sessionId === sessionId || x.pastSessions?.includes(sessionId));
+    const known = task ? task.sessionId === sessionId || !!task.pastSessions?.includes(sessionId) : A.readPrompts(this.root).some(p => p.kind === 'plan' && p.sessionId === sessionId);
+    if (!known) return;
+    const dirs = task ? [task.worktree, g.worktreeDir(this.root, task.id), this.root] : [this.root];
+    return dirs.find((d): d is string => !!d && sessionExists(d, sessionId));
+  }
+
+  // A done task that must change goes back to To do with the new text. Its work is already merged, so the next run
+  // starts a fresh branch and session on top of it; the old session stays in its history.
+  private reopen(t: Task, c: RefineResult) {
+    this.store.updateTask(t.id, { status: 'todo', title: c.title, description: c.description || undefined, ...(this.sprintFor(c.sprint) ? { sprintId: this.sprintFor(c.sprint) } : {}),
+      pastSessions: t.sessionId ? [...(t.pastSessions ?? []), t.sessionId] : t.pastSessions, sessionId: undefined, branch: undefined, worktree: undefined, base: undefined,
+      doneAt: undefined, startedAt: undefined, checks: undefined, review: undefined, error: undefined, reply: undefined, conflicts: undefined, live: undefined, pr: undefined, usage: undefined });
+  }
+
+  // A working or in-review task that must change: the new text is saved and the change goes to its Claude.
+  private async amend(t: Task, c: RefineResult) {
+    this.store.updateTask(t.id, { title: c.title, description: c.description || undefined });
+    await this.say(t.id, `The plan for this task changed. Update your work to match, verify it, update your handoff, then finish your turn.\n\n# ${c.title}\n${c.description ?? ''}`)
+      .catch(e => this.d.notify('error', `"${t.title}": ${e.message}`, t.id));
+  }
+
   stopPlanner() { this.planner?.kill(); this.planner = undefined; this.plannerProposals = undefined; this.plannerTargets = []; this.changed(); }
 
   // Applies the proposals the user kept: edits, adds (in order), removes, reorder of the To do tasks.
@@ -941,8 +1081,15 @@ export class Runner {
     const sprintId = this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean)
       ?? (this.plannerTargets.length ? undefined : this.store.data.sprints.find(s => s.active && !s.closed)?.id);
     const orderIds: string[] = [];
-    let added = 0, edited = 0, removed = 0;
+    let added = 0, edited = 0, removed = 0, reopened = 0, sent = 0;
     for (const c of changes) {
+      const started = c.ref && this.plannerOthers.includes(c.ref) ? this.store.task(c.ref) : undefined;
+      if (started && started.status !== 'todo') {
+        if (!c.apply) continue;
+        if (started.status === 'done') { this.reopen(started, c); orderIds.push(started.id); reopened++; }
+        else { void this.amend(started, c); sent++; }
+        continue;
+      }
       if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; }
       const named = this.sprintFor(c.sprint);
       if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined, ...(named ? { sprintId: named } : {}) }); orderIds.push(c.ref); edited++; }
@@ -950,12 +1097,15 @@ export class Runner {
     }
     for (const rm of removes) if (rm.apply) { void this.remove(rm.id); removed++; }
     const after = this.store.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !this.plannerTargets.includes(t.id));
-    for (const id of orderIds.reverse()) this.store.reorder(id, after?.id);
+    // Each goes in front of the same task (or to the end), so in proposal order they keep the planner's build order.
+    for (const id of orderIds) this.store.reorder(id, after?.id);
     // The proposals are now real tasks: clear the panel (no double-apply) and let further chat refine them.
     this.plannerProposals = undefined;
-    this.plannerTargets = orderIds.slice().reverse();
-    const parts = [added && `added ${added}`, edited && `updated ${edited}`, removed && `removed ${removed}`].filter(Boolean);
-    this.plannerNote = parts.length ? `Applied: ${parts.join(', ')} task${added + edited + removed === 1 ? '' : 's'}. Keep chatting to add or change more.` : 'No tasks changed.';
+    this.plannerTargets = orderIds.slice();
+    this.plannerOthers = this.plannerOthers.filter(id => !this.plannerTargets.includes(id));
+    const n = added + edited + removed + reopened + sent;
+    const parts = [added && `added ${added}`, edited && `updated ${edited}`, removed && `removed ${removed}`, reopened && `${reopened} done back to To do`, sent && `sent the change to ${sent} started`].filter(Boolean);
+    this.plannerNote = parts.length ? `Applied: ${parts.join(', ')} task${n === 1 ? '' : 's'}. Keep chatting to add or change more.` : 'No tasks changed.';
     this.changed();
   }
   defaultMode: Task['mode'] = 'auto';  // set by the extension from justCode.defaultMode

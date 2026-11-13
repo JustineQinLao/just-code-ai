@@ -107,6 +107,14 @@ Type what you want in the box at the top:
   - **Skill chips** (`/deploy`, `/test`…): skills this task can use, from the project's `.claude/skills` and
     `.claude/commands`. Your personal skills appear when *Your personal Claude setup in tasks* is on (⚙). Hover for
     the description; click to add it.
+  - **Sprint branch**: the first task of a sprint cuts a branch `jc/sprint-<name>-<id>` from the branch you are on.
+    Every task in the sprint starts from it and merges into it. When the last task merges, the sprint branch merges
+    into the branch you started from and is deleted. On conflicts nothing changes: merge it by hand, then use
+    **Merge sprint**. Backlog tasks still merge straight into your branch.
+  - **/ and @ menus**: in the task title, Details, ✦ Plan, ✦ Edit sprint and the message box, type `/` for everything
+    a session can run (built-in commands, bundled skills, plugins, your project's skills) and `@` for project files and
+    folders. ↑↓ choose, Enter or Tab insert, Esc closes. Personal skills and plugins list when *Your personal Claude
+    setup in tasks* is on (⚙).
   - **Advanced**:
     - **Agent**: an agent from `.claude/agents`. *Default* is plain Claude.
     - **Permissions**: see section 7.
@@ -143,7 +151,8 @@ the page file instead. If no link comes back within five minutes, the ⧉ termin
 **✦ Plan** (toolbar) turns a goal into tasks, or reworks the To do list. It is the only planning entry; while a
 planning chat is open, ✦ Plan reopens it.
 
-1. **Describe what you want**, such as "Add password reset by email, with tests". Tick *Also rework the To do tasks*
+1. **Describe what you want**, such as "Add password reset by email, with tests". Paste screenshots or designs into
+   the box; Claude looks at them first. You can paste them into the chat box later too, and into a task's message box. Tick *Also rework the To do tasks*
    to reword, split, merge or reorder the existing ones too. Quick instructions (chips) appear when you do.
 2. **Claude reads the code**, read-only. It never changes files in a planning chat.
 3. **When the goal is unclear, it asks you 2-4 questions** in the panel first. Answer, or press **Skip** to let it
@@ -161,6 +170,15 @@ Claude is doing now.
 
 The planner uses the *Planner model* and *Planner thinking* settings (⚙). The chat closes itself after 30 idle
 minutes.
+
+**Planning in a sprint:** with a sprint shown (or one marked active ★), ✦ Plan puts the new tasks in that sprint. It
+makes other sprints only when you ask for them.
+
+
+**Reworking a sprint** (✦ Edit sprint, or ticking *Also rework* while a sprint is shown) also checks the tasks already
+started or done in it. A done task that must change shows as **BACK TO TO DO**: applied, it returns to To do with the
+new text and is built again on top of its merged work. A working or in-review task shows as **CHANGE SENT**: its new
+text is saved and sent to its Claude as a message. Tasks that are fine are left alone.
 
 ## 5. Sprints
 
@@ -341,6 +359,7 @@ JustCode**.
 |---|---|
 | **Agent map** | Every Claude session, subagent and reviewer at work across your projects, with status, time, tokens and current tool. Click a task to open it. |
 | **Report** | The tasks in the current view: tokens (build and review), check and review rounds, first-try passes and minutes. **Copy as Markdown** pastes it into a PR or a note. |
+| **Prompt history** (also **🕘** in the toolbar) | Every prompt you sent: new tasks, messages to a task and planning requests, newest first, with search. **Conversation** opens that session's full transcript, **Use again** puts the prompt back in the add box. It is kept in `.justcode/prompts.jsonl` after a task is merged or deleted. A task's Details tab has **🕘 Prompts and sessions** for that task only. |
 | **Project history** | One entry per merged task. Later tasks read it instead of digging through git. |
 | **Show archived tasks** | Archived tasks, in place of the lanes. |
 | **Set up project with Claude** | Section 2. |
@@ -363,6 +382,25 @@ Every task keeps short notes. Open them in the task panel under **Details → Fi
 | Review notes | JustCode: the reviewer's last verdict | fix rounds |
 | Setup log | JustCode: preparing the task's folder | you |
 | Project history | JustCode on each merge | later tasks |
+
+### When Run all seems stuck
+
+With *Tasks at once* at 1, each task waits until the one before it is merged. The bar under the toolbar names the task
+it waits for (click it to open it) and why. When only you can move that task on (it passed review but is flagged
+critical, or it ran out of review rounds), clicking **Run all** asks whether to start the queue without it. It keeps
+its branch and still waits for you on its card.
+
+### claude.ai artifact links
+
+A claude.ai artifact link opens only when signed in to claude.ai, so a task's Claude would see just its title. JustCode
+saves a local copy instead, every time it is needed, not once:
+
+- A link in a plan request or a task's text is added to 📎 Sources by itself.
+- Before a planning chat starts and before a task runs, every artifact source with no copy, or a copy older than a
+  day, is saved through a ⧉ terminal running `claude` (signed in with a Claude account). The card says *Saving
+  claude.ai sources locally…* meanwhile. A failed refresh keeps the old copy.
+- Plans and task briefs then point Claude at the copy in `.justcode/sources/`. **Refresh copy** under 📎 Sources
+  picks up a newer version right away.
 
 ## 15. Checks and ready folders
 

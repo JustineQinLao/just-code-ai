@@ -5,12 +5,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
+import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store } from '../store';
 import { parseTasks, syncTasks } from '../tasksmd';
 import { Session } from '../session';
-import { cliCommand, syncSkill } from '../skill';
+import { cliCommand, syncSkill, DESIGN_SKILL_PATH } from '../skill';
 import * as g from '../git';
 import * as A from '../artifacts';
 
@@ -362,6 +362,37 @@ test('setup skill: its commands match the setup task\'s allow rules', () => {
   assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync && rm -rf x` }), false);
 });
 
+test('setup installs the design skill by default and keeps a project\'s own copy', () => {
+  const root = tmp(), cli = path.join(__dirname, '..', 'cli.js'), file = path.join(root, '.claude', DESIGN_SKILL_PATH);
+  execFileSync(process.execPath, [cli, 'setup', root]);
+  assert.match(fs.readFileSync(file, 'utf8'), /^---\nname: design-from-artifact\n[\s\S]*project\/canvas\.json/);
+  fs.writeFileSync(file, 'mine');
+  execFileSync(process.execPath, [cli, 'setup', root]);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'mine');
+  assert.match(syncSkill('/x/cli.js'), /no description[\s\S]*docs\/project\.md/);
+  const plan = path.join(root, '.claude', 'skills', 'plan-tasks', 'SKILL.md');
+  assert.match(fs.readFileSync(plan, 'utf8'), /^---\nname: plan-tasks\n[\s\S]*LAST/);
+  // --update: an approved agent draft replaces the old one, and the default skills come back current.
+  fs.mkdirSync(path.join(root, '.claude', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude', 'agents', 'planner.md'), 'old');
+  fs.mkdirSync(path.join(root, '.justcode', 'setup', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'setup', 'agents', 'planner.md'), 'new');
+  execFileSync(process.execPath, [cli, 'setup', root, '--update']);
+  assert.equal(fs.readFileSync(path.join(root, '.claude', 'agents', 'planner.md'), 'utf8'), 'new');
+  assert.match(fs.readFileSync(file, 'utf8'), /^---\nname: design-from-artifact/);
+  assert.match(syncSkill('/x/cli.js'), /3b\. Update what exists[\s\S]*setup --update/);
+});
+
+test('deleting a sprint keeps its tasks, in the backlog', () => {
+  const store = new Store(tmp());
+  const sp = store.addSprint('Old'), keep = store.addSprint('Keep');
+  const a = store.addTask({ title: 'A', mode: 'auto', sprintId: sp.id }), b = store.addTask({ title: 'B', mode: 'auto', sprintId: keep.id });
+  store.updateTask(a.id, { status: 'done' });
+  store.deleteSprint(sp.id);
+  assert.deepEqual(store.data.sprints.map(x => x.name), ['Keep']);
+  assert.deepEqual([store.task(a.id)!.sprintId, store.task(a.id)!.status, store.task(b.id)!.sprintId], [undefined, 'done', keep.id]);
+});
+
 test('planner: editing a sprint scopes the instruction to all its tasks', () => {
   const text = plannerFirst([{ id: 'a', title: 'Login' }, { id: 'b', title: 'Logout' }], 'add Done when to each', [], { name: 'Sprint 1', goal: 'Auth' });
   assert.match(text, /every not-started task of Sprint 1 \(goal: Auth\)/);
@@ -582,4 +613,283 @@ test('a failed start tells the user once and stays on the card', async () => {
   assert.equal(store.task(t.id)!.error, 'git worktree: fatal: boom');
   assert.equal(notes.length, 1);
   r.dispose();
+});
+
+test('prompt history: logged prompts and older tasks, newest first; sessions only from known ids', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const old = store.addTask({ title: 'Old task', description: 'From before the log', mode: 'auto' });
+  store.updateTask(old.id, { created: 1 } as any);
+  const t = store.addTask({ title: 'New task', mode: 'auto' });
+  A.logPrompt(root, { kind: 'task', text: 'New task', taskId: t.id, title: 'New task' });
+  A.logPrompt(root, { kind: 'message', text: 'also add tests', taskId: t.id });
+  fs.appendFileSync(A.promptsFile(root), 'not json\n');
+  const h = r.history();
+  assert.deepEqual(h.map((p: any) => [p.kind, p.text]), [['message', 'also add tests'], ['task', 'New task'], ['task', 'Old task\n\nFrom before the log']]);
+  assert.equal(h[0].title, 'New task');
+  assert.equal(r.sessionDir('someone-elses-session'), undefined);
+  r.dispose();
+});
+
+test('conversation log notes the model that answered, and when it changes', () => {
+  const home = tmp(), cwd = '/x/proj', id = 'sess-1';
+  const dir = path.join(home, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const a = (model: string, text: string) => JSON.stringify({ type: 'assistant', timestamp: 't', message: { model, content: [{ type: 'text', text }] } });
+  fs.writeFileSync(path.join(dir, id + '.jsonl'), [a('claude-opus-5-5', 'one'), a('claude-opus-5-5', 'two'), a('<synthetic>', 'x'), a('claude-sonnet-5-5', 'three')].join('\n'));
+  const was = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = home;
+  try {
+    const steps = sessionLog(cwd, id).filter(s => s.kind === 'info').map(s => s.text);
+    assert.deepEqual(steps, ['Model: claude-opus-5-5', 'Model: claude-sonnet-5-5']);
+  } finally { if (was === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = was; }
+});
+
+test('a task stopped on an error does not hold the slot; Run now starts a queued task', async () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const stuck = store.addTask({ title: 'Stuck', mode: 'auto' });
+  store.updateTask(stuck.id, { status: 'doing', worktree: g.worktreeDir(root, stuck.id), branch: 'jc/x', base: 'main', error: 'Claude Code returned an error result' });
+  assert.equal(r.inFlight().length, 0);
+  const t = store.addTask({ title: 'Next', mode: 'auto' });
+  const ran: string[] = [];
+  r.run = async (id: string) => { ran.push(id); };
+  await r.requestRun(t.id);
+  assert.deepEqual(ran, [t.id]);
+  // With the slot really taken, ▶ Run queues and Run now starts it anyway.
+  store.updateTask(stuck.id, { error: undefined });
+  const u = store.addTask({ title: 'Later', mode: 'auto' });
+  await r.requestRun(u.id);
+  assert.deepEqual(store.queue, [u.id]);
+  await r.runNow(u.id);
+  assert.deepEqual(ran, [t.id, u.id]);
+  assert.deepEqual(store.queue, []);
+  r.dispose();
+});
+
+test('applying a plan keeps the planner\'s build order, before other To do tasks and on an empty board', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  r.plannerOthers = []; r.plannerTargets = [];
+  const p = (title: string) => ({ title, kind: 'add', apply: true });
+  r.applyProposals([p('Tokens'), p('Header'), p('Captures')], []);
+  assert.deepEqual(store.data.tasks.map(t => t.title), ['Tokens', 'Header', 'Captures']);
+  r.plannerTargets = []; // a new chat: the tasks above are other To do tasks
+  r.applyProposals([p('A'), p('B')], []);
+  assert.deepEqual(store.data.tasks.map(t => t.title), ['A', 'B', 'Tokens', 'Header', 'Captures']);
+  r.dispose();
+});
+
+test('reworking a sprint: a done task that must change goes back to To do; a started one gets the change as a message', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const said: [string, string][] = [];
+  r.say = async (id: string, text: string) => { said.push([id, text]); };
+  const sid = store.addSprint('S1').id;
+  const done = store.addTask({ title: 'Login page', mode: 'auto', sprintId: sid });
+  store.updateTask(done.id, { status: 'done', sessionId: 's-old', branch: 'jc/login', doneAt: 5, review: { state: 'pass', attempts: 0 } as any });
+  const wip = store.addTask({ title: 'Signup page', mode: 'auto', sprintId: sid });
+  store.updateTask(wip.id, { status: 'review', worktree: '/nowhere', branch: 'jc/signup', base: 'main' });
+  r.plannerOthers = [done.id, wip.id];
+  r.plannerTargets = [];
+  assert.match(plannerFirst([], 'restyle', [], { name: 'S1' }, [{ id: done.id, title: 'Login page', status: 'done' }]), /\(done, merged\) Login page/);
+  r.applyProposals([
+    { ref: done.id, title: 'Login page, new style', description: 'Goal: match the mockup', kind: 'reopen', apply: true },
+    { ref: wip.id, title: 'Signup page, new style', description: 'Goal: match the mockup', kind: 'amend', apply: true },
+  ], []);
+  const d = store.task(done.id)!;
+  assert.equal(d.status, 'todo');
+  assert.equal(d.title, 'Login page, new style');
+  assert.deepEqual([d.sessionId, d.branch, d.doneAt, d.review], [undefined, undefined, undefined, undefined]);
+  assert.deepEqual(d.pastSessions, ['s-old']);
+  assert.equal(store.task(wip.id)!.status, 'review');
+  assert.equal(store.task(wip.id)!.title, 'Signup page, new style');
+  assert.equal(said.length, 1);
+  assert.match(said[0][1], /plan for this task changed[\s\S]*match the mockup/);
+  r.dispose();
+});
+
+test('a claude.ai artifact source: briefs point at the saved copy, and the task can read its folder', () => {
+  const root = tmp();
+  const src = { id: 'abc', kind: 'url' as const, ref: 'https://claude.ai/artifact/RRgUoNaXSgxGCWotthB3qF' };
+  assert.ok(A.isArtifactLink(src.ref) && A.isArtifactLink('https://claude.ai/code/artifact/0b1c-2d') && !A.isArtifactLink('https://example.com/artifact/x'));
+  const t = { id: 't1', title: 'Restyle', mode: 'auto', status: 'todo', created: 1 } as any;
+  assert.match(A.writeBrief(root, t, [src]), /- https:\/\/claude\.ai\/artifact\/RRg/);
+  assert.deepEqual(A.outsideDirs(root, [src]), []);
+  const dir = A.sourceCopy(root, 'abc'), esc = dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.saved'), '');
+  assert.ok(!A.hasCopy(root, src), 'only the marker: no copy yet');
+  fs.writeFileSync(path.join(dir, 'index.html'), '<html></html>');
+  assert.match(A.writeBrief(root, t, [src]), new RegExp(`${esc}/ \\(saved copy of https://claude.ai/artifact/`));
+  assert.deepEqual(A.outsideDirs(root, [src]), [dir]);
+  // A design canvas: the brief names its screen index and says to match the screens.
+  fs.mkdirSync(path.join(dir, 'project'));
+  fs.writeFileSync(path.join(dir, 'project', 'canvas.json'), '{"boards":{}}');
+  assert.match(A.writeBrief(root, t, [src]), /saved copy of the design canvas[\s\S]*project\/canvas\.json lists every screen[\s\S]*build them to match/);
+});
+
+test('sprint sources: a sprint uses the ones it lists, an older sprint all; pasted links match their source', () => {
+  const all = [{ id: 'a', kind: 'url' as const, ref: 'https://claude.ai/artifact/Abc123#page-1' }, { id: 'b', kind: 'file' as const, ref: '/x/spec.md' }];
+  assert.deepEqual(A.sprintSources(all, { sources: ['b'] }).map(s => s.id), ['b']);
+  assert.deepEqual(A.sprintSources(all, {}).map(s => s.id), ['a', 'b']);
+  assert.deepEqual(A.sprintSources(all, { sources: [] }), []);
+  assert.deepEqual(A.linkedSources(all, 'match https://claude.ai/artifact/Abc123 please').map(s => s.id), ['a']);
+  assert.deepEqual(A.linkedSources(all, 'https://claude.ai/artifact/Abc1234'), []);
+  const root = tmp();
+  A.saveSources(root, [{ id: 'a', kind: 'url', ref: 'https://claude.ai/artifact/Abc123#page-1' }]);
+  assert.equal(A.addLinkSources(root, '/design-from-artifact https://claude.ai/artifact/Abc123').length, 0, 'same artifact without its #page part');
+  const store = new Store(tmp());
+  assert.deepEqual(store.addSprint('S1').sources, []);
+});
+
+test('artifact links in a prompt become sources once; plans list sources; runs save them before starting', async () => {
+  const { root } = leaseRepo();
+  const link = 'https://claude.ai/artifact/RRgUoNaXSgxGCWotthB3qF';
+  assert.equal(A.addLinkSources(root, `Redesign from ${link} please`).length, 1);
+  assert.equal(A.addLinkSources(root, `again ${link}`).length, 0);
+  assert.match(A.sourceLines(root, A.loadSources(root)), /## Sources[\s\S]*RRgUoNaXSgxGCWotthB3qF/);
+  const store = new Store(root);
+  const saved: string[] = [];
+  const r: any = new Runner(store, { bin: () => undefined, env: () => ({}), settings: () => ({ maxParallel: 1, worktreeCopy: [], review: { auto: false } }) as any,
+    limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '', saveSources: async (text: string) => { saved.push(text); } });
+  r.holdsLease = () => true;
+  const t = store.addTask({ title: 'Restyle', description: `Match ${link}`, mode: 'auto' });
+  r.d.bin = () => 'claude';
+  r.prepare = async () => undefined;  // stop right after the sources step
+  await r.run(t.id);
+  assert.equal(saved.length, 1);
+  assert.match(saved[0], /RRgUoNaXSgxGCWotthB3qF/);
+  r.dispose();
+});
+
+test('the @ menu lists tracked and new files with their folders, not ignored ones', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-files-'));
+  await g.git(dir, ['init', '-q']);
+  fs.mkdirSync(path.join(dir, 'src', 'deep'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'skip.log\n');
+  fs.writeFileSync(path.join(dir, 'skip.log'), '');
+  fs.writeFileSync(path.join(dir, 'src', 'deep', 'a b.ts'), '');
+  const files = await g.projectFiles(dir);
+  assert.deepEqual(files.sort(), ['.gitignore', 'src/', 'src/deep/', 'src/deep/a b.ts']);
+  assert.deepEqual(await g.projectFiles(path.join(dir, 'missing')), []);
+});
+
+test('the / menu hides internal commands and JustCode\'s own setup skill', () => {
+  assert.deepEqual(usableCommands([{ name: 'compact', description: 'Compact' }, { name: '__remote' }, { name: 'just-code-ai-sync' }, { name: 'lexcode-sync' }, { name: 'caveman:caveman' }]),
+    [{ name: 'compact', description: 'Compact' }, { name: 'caveman:caveman', description: '' }]);
+});
+
+test('a sprint works on its own branch, cut from the current one, and merges back after its last task', async () => {
+  const { root, sh } = leaseRepo();
+  const store = new Store(root);
+  const notes: string[] = [];
+  const r = leaseRunner(store, notes);
+  r.start = async () => {}; // no Claude: only the git side
+  const sp = store.addSprint('Login');
+  const a = store.addTask({ title: 'A', mode: 'auto', sprintId: sp.id }), b = store.addTask({ title: 'B', mode: 'auto', sprintId: sp.id });
+  const work = async (id: string, file: string) => {
+    const p = await r.prepare(store.task(id)!);
+    store.updateTask(id, { status: 'review', base: p.base, branch: p.branch, worktree: p.worktree });
+    fs.writeFileSync(path.join(p.worktree, file), file);
+    return p;
+  };
+  const pa = await work(a.id, 'a.md');
+  const branch = store.sprint(sp.id)!.branch!;
+  assert.match(branch, /^jc\/sprint-login-/);
+  assert.equal(store.sprint(sp.id)!.target, 'main');
+  assert.equal(pa.base, branch);
+  await r.merge(a.id);
+  assert.ok(sh('ls-tree', '--name-only', branch).toString().includes('a.md'));
+  assert.ok(!sh('ls-tree', '--name-only', 'main').toString().includes('a.md'), 'main waits for the whole sprint');
+  const pb = await work(b.id, 'b.md');
+  assert.equal(pb.base, branch);
+  fs.writeFileSync(path.join(root, 'other.txt'), 'x'); sh('add', 'other.txt'); sh('commit', '-qm', 'meanwhile on main');
+  await r.merge(b.id);
+  const files = sh('ls-tree', '--name-only', 'main').toString();
+  assert.ok(files.includes('a.md') && files.includes('b.md') && files.includes('other.txt'), files);
+  assert.equal(store.sprint(sp.id)!.branch, undefined);
+  assert.ok(!await g.branchExists(root, branch));
+  assert.equal(sh('status', '--porcelain').toString().trim(), '');
+  r.dispose();
+});
+
+test('mergeBranch reports conflicts and changes nothing', async () => {
+  const { root, sh } = leaseRepo();
+  sh('branch', 'side');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'main'); sh('commit', '-qam', 'm');
+  const head = sh('rev-parse', 'main').toString();
+  sh('worktree', 'add', '-q', path.join(root, '.wt'), 'side');
+  fs.writeFileSync(path.join(root, '.wt', 'a.txt'), 'side'); sh('-C', path.join(root, '.wt'), 'commit', '-qam', 's');
+  assert.deepEqual(await g.mergeBranch(root, 'main', 'side', 'x'), ['a.txt']);
+  assert.equal(sh('rev-parse', 'main').toString(), head);
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'main');
+});
+
+test('a merged task still lists what it changed, from its merge commit', async () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const t = store.addTask({ title: 'Make PDF', mode: 'auto' });
+  const p = await r.prepare(store.task(t.id)!);
+  store.updateTask(t.id, { status: 'review', base: p.base, branch: p.branch, worktree: p.worktree });
+  fs.mkdirSync(path.join(p.worktree, 'docs'));
+  fs.writeFileSync(path.join(p.worktree, 'docs', 'screens.pdf'), '%PDF');
+  await r.merge(t.id);
+  assert.equal(store.task(t.id)!.worktree, undefined);
+  assert.deepEqual(await r.changes(t.id), [{ status: 'A', file: 'docs/screens.pdf' }]);
+  r.dispose();
+});
+
+test('JustCode sessions commit without Claude attribution, keeping carried project settings', () => {
+  const file = path.join(tmp(), 'settings.local.json');
+  fs.writeFileSync(file, JSON.stringify({ permissions: { allow: ['Bash(ls:*)'] }, attribution: { commit: 'Co-Authored-By: x' } }));
+  assert.deepEqual(sessionSettings(file), { permissions: { allow: ['Bash(ls:*)'] }, attribution: { commit: '', pr: '' } });
+  assert.deepEqual(sessionSettings(), { attribution: { commit: '', pr: '' } });
+});
+
+test('planning in a sprint puts new tasks in it instead of new sprints', () => {
+  const first = plannerFirst([], 'add 2FA', [{ name: '2FA and Email' }, { name: 'Sprint 2' }], undefined, [], '2FA and Email');
+  assert.match(first, /## Target sprint\nI am planning in 2FA and Email: set "sprint" to "2FA and Email" on every new task\. Do not create other sprints/);
+  assert.doesNotMatch(plannerFirst([], 'x'), /Target sprint/);
+});
+
+test('Run all can go on without a task that only waits for you', async () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const started: string[] = [];
+  r.run = async (id: string) => { started.push(id); };
+  const blocker = store.addTask({ title: 'Critical', mode: 'auto' });
+  store.updateTask(blocker.id, { status: 'review', worktree: path.join(root, 'wt'), branch: 'jc/x', base: 'main', review: { state: 'pass', risk: 'critical' } as any });
+  const next = store.addTask({ title: 'Next', mode: 'auto' });
+  r.runAll([next.id]);
+  assert.deepEqual(started, []);
+  assert.equal(r.userBlocker()?.id, blocker.id);
+  r.skipWait(blocker.id);
+  assert.deepEqual(started, [next.id]);
+  assert.equal(store.task(blocker.id)!.status, 'review');
+  r.dispose();
+});
+
+test('a subagent\'s saved transcript: steps, model, final answer, tokens and time', () => {
+  const cfg = tmp(), cwd = '/proj/x', sid = 's1';
+  const old = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = cfg;
+  try {
+    const dir = path.join(cfg, 'projects', '-proj-x', sid, 'subagents');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent-a1.meta.json'), JSON.stringify({ agentType: 'bible-keeper', description: 'Bible update ch-0001', toolUseId: 'tu1', finished: true }));
+    fs.writeFileSync(path.join(dir, 'agent-a1.jsonl'), [
+      { isSidechain: true, type: 'user', timestamp: '2026-01-01T00:00:00Z', message: { role: 'user', content: 'Update the bible' } },
+      { isSidechain: true, type: 'assistant', timestamp: '2026-01-01T00:00:30Z', message: { model: 'claude-sonnet-5-5', usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: 'text', text: 'Ch-0003 is recorded.' }] } },
+    ].map(x => JSON.stringify(x)).join('\n'));
+    assert.deepEqual(savedAgents(cwd, sid), [{ id: 'a1', toolUseId: 'tu1', name: 'bible-keeper', description: 'Bible update ch-0001', finished: true }]);
+    const log = agentLog(cwd, sid, 'a1')!;
+    assert.equal(log.model, 'claude-sonnet-5-5'); assert.equal(log.result, 'Ch-0003 is recorded.'); assert.equal(log.tokens, 15); assert.equal(log.ms, 30000);
+    assert.deepEqual(log.steps.map(s => s.kind), ['user', 'info', 'say']);
+    assert.equal(agentLog(cwd, sid, '../x'), undefined);
+  } finally { if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = old; }
 });

@@ -92,6 +92,21 @@ export function discoverSkills(root: string, personal: boolean): SkillDef[] {
   return all.filter(k => !/^lex-?code|^just-code-ai-sync$/i.test(k.name) && !seen.has(k.name) && (seen.add(k.name), true));
 }
 
+// Everything a session here can run with /: built-in commands, bundled skills, plugins, project and (with personal
+// setup) your own skills. Asks the CLI itself; no prompt is sent, so it costs no tokens.
+export function usableCommands(all: { name: string; description?: string }[]) {
+  return all.filter(c => !/^__|^lex-?code|^just-code-ai-sync$/i.test(c.name)).map(c => ({ name: c.name, description: c.description ?? '' }));
+}
+export async function slashCommands(o: { bin: string; cwd: string; env: Record<string, string | undefined>; personal: boolean }) {
+  const { query } = await sdk();
+  async function* never(): AsyncGenerator<never> { await new Promise(() => {}); }
+  const q = query({ prompt: never(), options: { cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: o.env, settingSources: settingSources(o.personal) } });
+  try {
+    const timeout = new Promise<never>((_, no) => setTimeout(() => no(new Error('timed out')), 15_000).unref());
+    return usableCommands(await Promise.race([q.supportedCommands(), timeout]));
+  } finally { q.close(); }
+}
+
 // A task's copy of the project only has committed files. Project agents, skills and local settings that are not
 // committed are handed to its session instead of copied in, so the task's commit never picks them up. Nothing secret
 // goes on a command line: settings are passed as a file path.
@@ -133,6 +148,16 @@ When a turn ends, update the handoff file named in your brief with what changed 
 // Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
 // not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
 // allow rules are still applied (userAllowRules).
+// Commits and PRs made in JustCode sessions carry no Claude co-author trailer or "Generated with" line. Flag
+// settings win over the user's and the project's, so this holds whatever their settings say. `file`: project
+// settings a task's copy lacks (see carryOver), merged in.
+export const NO_ATTRIBUTION = { commit: '', pr: '' };
+export function sessionSettings(file?: string): Record<string, unknown> {
+  let base: Record<string, unknown> = {};
+  if (file) try { base = JSON.parse(fs.readFileSync(file, 'utf8')) ?? {}; } catch { /* unreadable: attribution only */ }
+  return { ...base, attribution: NO_ATTRIBUTION };
+}
+
 export const settingSources = (personal: boolean) => (personal ? ['user', 'project', 'local'] : ['project', 'local']) as ('user' | 'project' | 'local')[];
 
 export function userAllowRules(): string[] {
@@ -192,9 +217,49 @@ export interface LogStep { kind: 'user' | 'say' | 'tool' | 'result' | 'error' | 
 // A finished session's saved transcript as readable steps (main thread only), for a card whose session has closed.
 // Reads the last 4 MB.
 export function sessionLog(cwd: string, sessionId: string): LogStep[] {
+  return logOf(transcript(cwd, sessionId), false);
+}
+
+// Subagents' transcripts sit next to the session's: <session>/subagents/agent-<id>.jsonl, with a .meta.json each.
+export interface SavedAgent { id: string; toolUseId?: string; name: string; description: string; finished: boolean }
+const subagentDir = (cwd: string, sessionId: string) => transcript(cwd, sessionId).replace(/\.jsonl$/, '') + path.sep + 'subagents';
+export function savedAgents(cwd: string, sessionId: string): SavedAgent[] {
+  const dir = subagentDir(cwd, sessionId);
+  let names: string[];
+  try { names = fs.readdirSync(dir).filter(f => /^agent-[\w-]+\.meta\.json$/.test(f)); } catch { return []; }
+  return names.map(f => {
+    let m: any = {};
+    try { m = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { /* no details */ }
+    return { id: f.slice(6, -10), toolUseId: m.toolUseId, name: m.agentType || 'agent', description: m.description ?? '', finished: !!m.finished };
+  });
+}
+// One subagent's conversation, the model it ran on, its final answer, and how long and how many tokens it took.
+export function agentLog(cwd: string, sessionId: string, agentId: string) {
+  if (!/^[\w-]+$/.test(agentId)) return;
+  const file = path.join(subagentDir(cwd, sessionId), `agent-${agentId}.jsonl`);
+  if (!fs.existsSync(file)) return;
+  const steps = logOf(file, true);
+  let model = '', result = '', tokens = 0, first = '', last = '';
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      let r: any;
+      try { r = JSON.parse(line); } catch { continue; }
+      if (typeof r.timestamp === 'string') { first ||= r.timestamp; last = r.timestamp; }
+      if (r.type !== 'assistant') continue;
+      if (typeof r.message?.model === 'string' && !r.message.model.startsWith('<')) model = r.message.model;
+      const u = r.message?.usage;
+      if (u) tokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.output_tokens ?? 0);
+      const text = (Array.isArray(r.message?.content) ? r.message.content : []).filter((x: any) => x.type === 'text').map((x: any) => x.text).join('\n').trim();
+      if (text) result = text;
+    }
+  } catch { /* partial */ }
+  return { steps, model, result, tokens, ms: first && last ? Date.parse(last) - Date.parse(first) : 0 };
+}
+
+function logOf(file: string, sidechain: boolean): LogStep[] {
   let text: string;
   try {
-    const fd = fs.openSync(transcript(cwd, sessionId), 'r');
+    const fd = fs.openSync(file, 'r');
     try {
       const size = fs.fstatSync(fd).size, len = Math.min(size, 4 * 1024 * 1024), buf = Buffer.alloc(len);
       fs.readSync(fd, buf, 0, len, size - len);
@@ -206,11 +271,15 @@ export function sessionLog(cwd: string, sessionId: string): LogStep[] {
     const v = input?.command ?? input?.file_path ?? input?.pattern ?? input?.url ?? input?.description ?? input?.prompt;
     return typeof v === 'string' ? v.split('\n')[0].slice(0, 300) : '';
   };
+  let model = '';
   for (const line of text.split('\n')) {
     let r: any;
     try { r = JSON.parse(line); } catch { continue; }
-    if (r.isSidechain || r.isMeta || (r.type !== 'assistant' && r.type !== 'user')) continue;
+    if ((r.isSidechain && !sidechain) || r.isMeta || (r.type !== 'assistant' && r.type !== 'user')) continue;
     const time = typeof r.timestamp === 'string' ? r.timestamp : undefined;
+    // Which model answered: noted where it is first known and wherever it changes.
+    const m = r.type === 'assistant' ? r.message?.model : undefined;
+    if (typeof m === 'string' && m !== model && !m.startsWith('<')) { model = m; steps.push({ kind: 'info', text: `Model: ${m}`, time }); }
     const c = r.message?.content;
     if (typeof c === 'string') { if (r.type === 'user' && !c.startsWith('<')) steps.push({ kind: 'user', text: c, time }); continue; }
     for (const x of Array.isArray(c) ? c : []) {
@@ -327,7 +396,7 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   let result: any;
   try {
     for await (const m of query({ prompt, options: {
-      cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal),
+      cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal), settings: sessionSettings() as any,
       ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
       if (m.type === 'rate_limit_event') o.onRate?.((m as any).rate_limit_info);
@@ -415,29 +484,37 @@ export async function refine(tasks: { id: string; title: string; description?: s
 // The planner/editor is a chat: you talk with Claude, it reads the code read-only, and it keeps a proposed To do
 // list that you apply when ready. This append (identical every turn, so it stays cached) tells it to end each turn
 // with that list as a JSON block, which parseProposals reads.
-export const PLANNER_APPEND = `You are planning tasks for a kanban board where each task is built by Claude on its own branch, checked by an AI reviewer, then merged. You never change code: this is a read-only planning chat.
+export const PLANNER_APPEND = `You are planning tasks for a kanban board where each task is built by Claude on its own branch, checked by an AI reviewer, then merged. You never change code: this is a read-only planning chat. Write, Edit and plan files are not available: never try them, and never write a plan to a file. Your plan is your chat reply, ending with the tasks block below.
 
 How to plan:
 1. If the goal is vague (no clear outcome, scope or way to check it), first ask 2-4 short multiple-choice questions with AskUserQuestion. Do not ask what the code already answers.
 2. Read only the code you need (Grep/Glob first). Name real files.
 3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
 4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
+5. Build order: foundations first (models, tokens, shared components, layout), features next, and tasks that verify or document the whole (captures, PDFs, e2e reports) last. A task never depends on a later one. If the project has a plan-tasks skill, follow it.
+6. When a source is a design (a saved design canvas folder with project/canvas.json, mockups, screenshots), open it before proposing UI tasks. Give each UI task the exact screen files it must match in "files" (e.g. ".justcode/sources/<id>/project/Staff-Floor.dc.html") and in "done" a check that the built screen has the same sections, labels, order and styling as that file, shown by a screenshot at the design's width.
 
 After every turn, end your message with the FULL proposed To do list as one JSON block:
 \`\`\`tasks
 [{"ref": "<existing task id, or omit for a new task>", "title": "short imperative title", "goal": "the outcome in one sentence", "files": ["path/likely/changed.ts"], "done": ["a check the reviewer can verify", "the test or command that must pass"], "sprint": "Sprint 1: <goal>"}]
 \`\`\`
 Every task needs a goal and 1-4 "done" items that are concrete and testable (not "works well"). "files" are your best guess. Omit "sprint" for backlog tasks.
-Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.`;
+Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.
+Started and done tasks (listed separately, when there are any) are never removed. Check each against the request and the code: include one, with its id in "ref" and the updated text, only when it must change. A done one then goes back to To do and is built again on top of its merged work; a working or in-review one gets the change as a message. Leave out the ones that are fine.`;
 
 // The first message: the board's sprints, the To do tasks being edited (if any), and the user's request.
 // With `sprint`, the tasks are every not-started task of that sprint and the instruction applies to all of them.
-export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string, sprints: { name: string; goal?: string }[] = [], sprint?: { name: string; goal?: string }) {
+export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string, sprints: { name: string; goal?: string }[] = [], sprint?: { name: string; goal?: string },
+  others: { id: string; title: string; description?: string; status: string }[] = [], into?: string) {
+  const target = into && !sprint ? `## Target sprint\nI am planning in ${into}: set "sprint" to "${into}" on every new task. Do not create other sprints unless I ask for them.\n\n` : '';
   const sp = sprints.length ? `## Open sprints\n${sprints.map(s => `- ${s.name}${s.goal ? `: ${s.goal}` : ''}`).join('\n')}\n\n` : '';
   const scope = sprint ? `## Scope\nEdit all the tasks below: they are every not-started task of ${sprint.name}${sprint.goal ? ` (goal: ${sprint.goal})` : ''}. ` +
     `Apply my instruction to each of them, keep them in this sprint (set "sprint" to "${sprint.name}" on every item), and return the whole sprint list.\n\n` : '';
   const list = tasks.length ? `${scope}## Current To do tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
-  return `${sp}${list}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
+  const state = (s: string) => ({ done: 'done, merged', review: 'in review', doing: 'working' } as Record<string, string>)[s] ?? s;
+  const started = others.length ? `## Started and done tasks${sprint ? ` in ${sprint.name}` : ''}\nCheck each one; include it only if it must change (see the rules).\n` +
+    `${others.map(t => `[${t.id}] (${state(t.status)}) ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
+  return `${sp}${target}${list}${started}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
 }
 
 // A task's details as stored on the board and in TASKS.md: the reviewer checks the work against "Done when".

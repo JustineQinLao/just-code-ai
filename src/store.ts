@@ -6,7 +6,10 @@ import { EventEmitter } from 'events';
 export type Status = 'todo' | 'doing' | 'review' | 'done';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 
-export interface Sprint { id: string; name: string; goal?: string; active?: boolean; closed?: boolean }
+// sources: ids of the project sources this sprint's tasks and plans use; undefined (sprints made before) = all of them.
+// branch: the sprint's own branch, cut from `target` (the branch you were on) when its first task starts. Its tasks
+// merge into it; when the last one merges, it merges into `target` and both are cleared.
+export interface Sprint { id: string; name: string; goal?: string; active?: boolean; closed?: boolean; sources?: string[]; branch?: string; target?: string }
 
 export interface Task {
   id: string;
@@ -40,6 +43,7 @@ export interface Task {
   reply?: string;             // Claude's last message when its turn ended (shown when it asks something instead of changing files)
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
   error?: string;             // the last run failed to start or ended on an error
+  noWait?: boolean;           // Run all goes on without it (it waits for you to merge or fix it); cleared when it runs again
   costUsd?: number;           // estimated cost of the task's sessions so far (API pricing; plans are not billed per task)
   output?: 'artifact';        // the result is a page published as a claude.ai artifact (not a code change)
   artifactUrl?: string;       // its link, once published
@@ -186,7 +190,7 @@ export class Store {
 
   addSprint(name: string, goal?: string) {
     this.fresh();
-    const s: Sprint = { id: randomUUID().slice(0, 8), name, goal, active: !this.board.sprints.some(x => x.active) };
+    const s: Sprint = { id: randomUUID().slice(0, 8), name, goal, active: !this.board.sprints.some(x => x.active), sources: [] };
     this.board.sprints.push(s);
     this.save();
     return s;
@@ -198,6 +202,14 @@ export class Store {
     if (!s) return;
     if (patch.active) this.board.sprints.forEach(x => { x.active = false; });
     Object.assign(s, patch);
+    this.save();
+  }
+
+  // Deleting a sprint removes only the sprint: all its tasks, done ones too, move to the backlog.
+  deleteSprint(id: string) {
+    this.fresh();
+    for (const t of this.board.tasks) if (t.sprintId === id) delete t.sprintId;
+    this.board.sprints = this.board.sprints.filter(s => s.id !== id);
     this.save();
   }
 
