@@ -63,7 +63,7 @@ export async function checkSetup(bin: string | undefined, env: Record<string, st
   rec('frontendDesign', 'frontend-design plugin', !!lookup.plugin('frontend-design'), 'Gives page and artifact tasks a deliberate visual design.', { action: 'installPlugin:frontend-design', label: 'Install' });
   rec('superpowers', 'superpowers plugin', !!lookup.plugin('superpowers'), 'Planning, debugging and review skills.', { action: 'installPlugin:superpowers', label: 'Install' });
   rec('playwright', 'Playwright', !!lookup.plugin('playwright'), 'Lets Claude open pages in a browser to check UI work.', { action: 'installPlaywright', label: 'Install' });
-  if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), 'A design brief (.justcode/design/DESIGN.md) keeps UI work consistent.', { action: 'createDesignMd', label: 'Create' });
+  if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), 'A design brief (.justcode/design/DESIGN.md) keeps UI work consistent. Claude reads it from the styles your code already uses.', { action: 'designFromProject', label: 'Write from project' });
 
   return { checks, ready: checks.every(c => c.ok || c.optional), remote, at: Date.now() };
 }

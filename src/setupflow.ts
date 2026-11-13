@@ -26,6 +26,7 @@ import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
 import { bin, confirm, env, out, push, q, runner, setting, st } from './host';
 import { saveArtifactSource, savedAt } from './artifact-terminal';
+import { designFromProject } from './messages';
 
 // The setup checklist: checks, project health rows, and each row's fix.
 
@@ -75,12 +76,9 @@ export async function fix(action: string) {
       return recheck();
     }
     case 'installPlaywright': return term('Install Playwright', playwrightCommand(q(bin() ?? 'claude')));
-    case 'createDesignMd': {
+    case 'designFromProject': {
       const r = runner();
-      if (!r) return;
-      const f = path.join(r.root, '.justcode', 'design', 'DESIGN.md');
-      if (!fs.existsSync(f)) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, '# Design\n\nPalette, typography, spacing and tone for this project.\n'); }
-      await vscode.window.showTextDocument(vscode.Uri.file(f));
+      if (r) await designFromProject(r);
       return recheck();
     }
     case 'recheck': return recheck();

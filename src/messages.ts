@@ -294,6 +294,21 @@ export async function handle(m: any, remote = false) {
       for (const a of add) if (a.kind === 'url' && A.isArtifactLink(a.ref)) void saveArtifactSource(r.root, a);
       return push();
     }
+    case 'designFromProject': return designFromProject(r);
+    case 'openJustcodeFile': {
+      const f = path.join(r.root, '.justcode', ...String(m.file).split('/').filter(x => x && x !== '..'));
+      if (fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f)); else say('Not written yet.');
+      return;
+    }
+    case 'designArtifact': {
+      // The design as a page: an artifact task, so it is published, listed under ⧉ Artifacts, and a later run updates
+      // the same link (its title names the page an earlier run published).
+      const task = s.addTask({ title: 'Design system page', description: `A page that shows ${path.join(r.root, '.justcode', 'design', 'DESIGN.md')}: the palette as swatches (light and dark), the type scale, spacing, radius and shadows, and the main components in their states. Use only what DESIGN.md says.`,
+        mode: setting('defaultMode', 'auto'), output: 'artifact', where: resolveWhere({ artifact: true, setting: setting<string>('defaultWhere', 'auto'), remote }) });
+      r.audit('task.create', task.id, task.title, who);
+      await r.run(task.id);
+      return open(task.id);
+    }
     case 'designPick': {
       try {
         const list = await D.listDesigns();
@@ -491,8 +506,18 @@ export async function openInTerminal(r: Runner, t: Task | undefined, remote: boo
 /* ---------- planning and the optional Claude setup ---------- */
 
 // Optional: Claude interviews you and writes .justcode/project.md (and DESIGN.md when you name a design).
+// DESIGN.md read from the project's own UI (🎨 Design → From this project, or the setup checklist row).
+export async function designFromProject(r: Runner) {
+  const running = r.store.data.tasks.find(t => t.init === 'design' && !t.archived && t.status !== 'done');
+  if (running) return open(running.id);
+  const task = r.store.addTask({ title: 'Write DESIGN.md from this project\'s UI', description: 'Claude reads the styles, theme and components the code already uses and writes them to .justcode/design/DESIGN.md, so new UI matches. Nothing else changes.',
+    mode: 'acceptEdits', where: 'direct', init: 'design', allow: ['Write(.justcode/design/**)', 'Edit(.justcode/design/**)'] });
+  await r.run(task.id);
+  open(task.id);
+}
+
 async function initialize(r: Runner) {
-  const running = r.store.data.tasks.find(t => t.init && !t.archived && t.status !== 'done');
+  const running = r.store.data.tasks.find(t => t.init === true && !t.archived && t.status !== 'done');
   if (running) return open(running.id);
   const task = r.store.addTask({ title: 'Describe this project for JustCode', description: 'Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve: .justcode/project.md and, if you name a design, .justcode/design/DESIGN.md.',
     mode: 'acceptEdits', where: 'direct', init: true, allow: ['Write(.justcode/**)', 'Bash(ls:*)'] });

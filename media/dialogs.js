@@ -372,8 +372,14 @@
 
   function designDialog() {
     const has = !!(JC.S.project || {}).designMd;
-    const d = dialog('Design', JC.h('p', { class: 'muted' }, has ? 'DESIGN.md is set. UI and artifact tasks are told to follow it.' : 'Pick a design from VoltAgent/awesome-design-md, or use your own file. UI and artifact tasks are told to follow it.'),
-      JC.h('div', { class: 'acts' }, JC.btn(has ? 'Change' : 'Pick a design', () => { d.close(); JC.post('designPick'); }, 'primary'),
+    const d = dialog('Design', JC.h('p', { class: 'muted' }, has
+      ? 'DESIGN.md is set (.justcode/design/DESIGN.md). UI and artifact tasks follow it.'
+      : 'UI and artifact tasks follow .justcode/design/DESIGN.md. By default Claude writes it from the styles, theme and components your code already uses. For a project with no UI yet, pick one from the catalog or use your own file.'),
+      JC.h('div', { class: 'acts' },
+        JC.btn(has ? 'Rewrite from project' : 'From this project', () => { d.close(); JC.post('designFromProject'); }, has ? 'ghost' : 'primary', 'Claude reads the code\'s colors, type, spacing and components into DESIGN.md'),
+        JC.btn('Catalog or my own file…', () => { d.close(); JC.post('designPick'); }, 'ghost', 'Pick a design from VoltAgent/awesome-design-md, or use a file you have'),
+        has ? JC.btn('Show as artifact', () => { d.close(); JC.post('designArtifact'); }, 'ghost', 'A claude.ai page showing the palette, type and components; listed under ⧉ Artifacts and updated in place') : '',
+        has ? JC.btn('Open', () => { d.close(); JC.post('openJustcodeFile', { file: 'design/DESIGN.md' }); }, 'ghost') : '',
         has ? JC.btn('Remove', () => { d.close(); JC.post('designRemove'); }, 'ghost') : ''));
   }
 

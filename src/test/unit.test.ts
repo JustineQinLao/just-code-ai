@@ -1194,3 +1194,17 @@ test('UI wiring: webOptions reach the SDK options, the rule approves the server 
   assert.match(A.writeBrief(root, ui, []), /browser_take_screenshot/);
   assert.doesNotMatch(A.writeBrief(root, be, []), /browser_take_screenshot/);
 });
+
+import { designFromCodeBody, setupSkillBody } from '../skill';
+import { checkSetup } from '../setup';
+test('design: setup reads DESIGN.md from the code without asking; the checklist row starts that; catalog stays manual', async () => {
+  const setup = setupSkillBody();
+  assert.match(setup, /Do not ask about the design when the code already has a UI/);
+  assert.match(setup, /DESIGN\.md\*\*: when the project has a UI[\s\S]*CSS custom properties/);
+  const body = designFromCodeBody();
+  assert.match(body, /Write only `\.justcode\/design\/DESIGN\.md`/);
+  assert.match(body, /no UI code at all, write nothing/);
+  assert.match(body, /Never invent values/);
+  const st = await checkSetup(undefined, {}, tmp(), false, { plugin: () => undefined, designMd: () => false });
+  assert.deepEqual(st.checks.find(c => c.id === 'designMd')!.fix, { action: 'designFromProject', label: 'Write from project' });
+});

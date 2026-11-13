@@ -1,11 +1,11 @@
 import * as path from 'path';
 
-// The just-code-setup skill: Claude learns the project, interviews the user and writes .justcode/project.md (and,
-// when the user names a design, .justcode/design/DESIGN.md). The setup task gets its text in its first message.
+// The just-code-setup skill: Claude learns the project, interviews the user and writes .justcode/project.md and,
+// when the project has a UI or the user names a design, .justcode/design/DESIGN.md. The setup task gets its text in its first message.
 export function setupSkill() {
   return `---
 name: just-code-setup
-description: Describe this project for JustCode (read the code, interview, then write .justcode/project.md and optionally .justcode/design/DESIGN.md). Use for "/just-code-setup" or "set up JustCode".
+description: Describe this project for JustCode (read the code, interview, then write .justcode/project.md and, for a project with a UI, .justcode/design/DESIGN.md). Use for "/just-code-setup" or "set up JustCode".
 disable-model-invocation: true
 ---
 
@@ -23,7 +23,8 @@ code to know the stack, the test/build/lint commands, the layout and what is alr
 
 Ask with AskUserQuestion, in ONE call, only what the code does not answer (2-4 questions, multiple choice, your best
 guess first and marked "(Recommended)"): what the product does, who uses it (roles), the stack and commands, what must be
-true before a task counts as done, and whether there are designs (files or claude.ai artifact links).
+true before a task counts as done. Do not ask about the design when the code already has a UI: it is read from the code.
+Ask whether there are designs (files or claude.ai artifact links) only when the project has no UI yet.
 
 Then ask once more: "Write these files?" with "Write them (Recommended)" and "Change something", listing the files and a
 one-line summary of each in the first option's preview. Write nothing before the user approves.
@@ -34,12 +35,28 @@ one-line summary of each in the first option's preview. Write nothing before the
 commands to install, run, test, type check and lint, the folder layout in a few lines, conventions and no-go areas, and
 the definition of done. Nothing Claude can read from the code itself.
 
-**.justcode/design/DESIGN.md**: only if the user names a design. Where it lives (files or links), its screens or
-sections, and the tokens (colors, type, spacing) to match.
+**.justcode/design/DESIGN.md**: when the project has a UI, or the user names a design. ${DESIGN_FROM_CODE}
+Skip it for a project with no UI and no named design.
 
 Finish with at most 5 lines: the files you wrote.
 `;
 }
+
+// How DESIGN.md is written from a project's own UI: the design system the code already uses, so new UI matches it.
+const DESIGN_FROM_CODE = `Read it from the code: CSS custom properties and global styles, the Tailwind
+or theme config, design tokens, the component library and its main components (Grep/Glob first). Write the design system
+the code already uses, as a style spec under 150 lines: palette (names and values, light and dark), typography (families,
+sizes, weights), spacing scale, radius and shadows, the main components and their states, layout and breakpoints, tone,
+and where each is defined (file paths). Add any design files or links the user named. Never invent values the code does
+not have; say what is missing instead.`;
+
+// The task the 🎨 Design button and the setup checklist start: DESIGN.md from the project's own UI, no interview.
+export const designFromCodeBody = () => `# Write .justcode/design/DESIGN.md from this project's UI
+
+Write only \`.justcode/design/DESIGN.md\` (create the folder); change nothing else and run no command that writes.
+${DESIGN_FROM_CODE}
+If the project has no UI code at all, write nothing and reply in one line that there is no UI to read a design from
+(the user can pick one from the catalog instead). Finish with at most 3 lines: what you found and where.`;
 
 // The skill's instructions without frontmatter, for the setup task's first message.
 export const setupSkillBody = () => setupSkill().replace(/^---[\s\S]*?---\s*/, '');

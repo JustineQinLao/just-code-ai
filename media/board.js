@@ -33,7 +33,7 @@
   function initState() {
     const pr = S.project || {};
     const missing = [!pr.projectMd && 'a project description'].filter(Boolean);
-    const running = S.board.tasks.find(t => t.init && !t.archived && t.status !== 'done');
+    const running = S.board.tasks.find(t => t.init === true && !t.archived && t.status !== 'done');
     return { done: !missing.length, missing, running };
   }
 

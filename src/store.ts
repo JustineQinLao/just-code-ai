@@ -33,7 +33,7 @@ export interface Task {
   pr?: string;                // remote PR URL, when pushed
   review?: Review;            // AI review of the task's branch
   limited?: boolean;          // a usage limit stopped this task; it continues by itself after the reset
-  init?: boolean;             // the project's initialization run
+  init?: boolean | 'design';  // a JustCode setup run: true = describe the project, 'design' = DESIGN.md from the code
   allow?: string[];           // tools pre-approved for this task's session
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/
   files?: string[];           // files or URLs attached to this task as its basis (listed in its brief)
