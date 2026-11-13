@@ -30,67 +30,35 @@ After a fix, close its terminal or press **Check again**. You can reopen the che
 **Projects.** The folders open in VS Code become projects automatically. **+** adds any other folder; it is
 remembered across windows. **×** removes a project from the board, and its files are kept. The phone page only lists these known projects: add a folder in VS Code (**JustCode: Add Project**) for it to appear on the phone.
 
-## 2. Set up the project for Claude
+## 2. Describe the project for Claude
 
-A label next to the project name says whether the project is set up for Claude:
+A label next to the project name says whether the project has a description:
 
 | Label | Meaning | Click it to… |
 |---|---|---|
-| **✓ Set up** | The project has `CLAUDE.md`, an agent in `.claude/agents` and `TASKS.md`. Hover to see each. | — |
-| **● Not set up** | One or more of them is missing. A banner above the board says which. | start the setup |
+| **✓ Set up** | `.justcode/project.md` exists. Hover to see whether `.justcode/design/DESIGN.md` does too. | — |
+| **● Not set up** | There is no project description yet. A banner above the board says so. | start the setup |
 | **◌ Setting up…** | The setup task is running. | open it and answer its questions |
 
-Setup is optional: tasks work without it. With it, tasks follow your conventions and come with a checklist the
-reviewer can verify. Start it with **Set up project** on the banner, the label, the ✦ Plan dialog or **⋯**. **Not now**
-hides the banner for that project; the label stays.
+Setup is optional: tasks work without it. With it, every task brief and plan chat starts with a `## Project` line
+pointing at `.justcode/project.md`, so Claude learns the product, stack and commands first. Start it with **Set up
+project** on the banner, the label, the ✦ Plan dialog or **⋯**. **Not now** hides the banner for that project; the
+label stays.
 
-The setup runs as a task in the project folder:
+The setup runs as a task in the project folder (the `just-code-setup` skill):
 
 1. **Claude reads the project:** README, `CLAUDE.md`, package and build files, and enough code to know the stack, the
    commands and what is already built.
-2. **It asks you 2-4 questions on the card:** the goal of the next stretch of work, what "done" means (tests, type
-   check, screenshots), conventions it cannot see in the code, and which agents you want. Each question has a
-   recommended answer; you can also type your own. A yellow banner says when it is waiting for you.
+2. **It asks you 2-4 questions on the card:** what the product does and for whom, the stack and commands, what "done"
+   means, and whether you have designs. Each question has a recommended answer; you can also type your own.
 3. **It shows the files it will write** and waits for **Write them** or **Change something**. Nothing is written
    before you approve.
-4. **It writes:**
-   - `CLAUDE.md` (under 100 lines): stack, exact commands, layout, conventions and the definition of done.
-   - `.claude/agents/reviewer.md`: a read-only reviewer that checks each task's *Done when* list and runs your tests.
-     A planner or implementer agent only if you asked for one.
-   - `.claude/skills/…` only for multi-step workflows the project clearly has, such as a release.
-   - `TASKS.md`: the work in build order, grouped into sprints (see below).
-5. **It syncs `TASKS.md` into the board** and ends with a short summary of what it wrote, added and created.
+4. **It writes only inside `.justcode/`:**
+   - `.justcode/project.md` (under 100 lines): the product, users, stack, exact commands, layout, conventions and the
+     definition of done.
+   - `.justcode/design/DESIGN.md`, only if you named a design.
 
-Existing files are never overwritten. Files for `.claude/` are drafted under `.justcode/setup/` and installed by
-JustCode, because Claude Code asks before every write into `.claude/`.
-
-### TASKS.md
-
-```markdown
-## Sprint 1: Users can sign in
-- [ ] Add email login form
-  Goal: a user signs in with email and password
-  Files: src/auth/login.tsx, src/api/session.ts
-  Done when:
-  - a wrong password shows an error message
-  - npm test passes
-
-## Backlog
-- [ ] Password reset by email
-```
-
-| In TASKS.md | On the board |
-|---|---|
-| `## Sprint N: goal` | That sprint, created with its goal if the board has no open sprint of that name |
-| `## Backlog`, or no heading | The backlog |
-| `- [ ]` / `- [~]` / `- [x]` | To do / in progress / done |
-| Indented lines | The task's details. Sub-bullets keep their dashes. |
-| An item you delete | The task is archived |
-
-Tasks made on the board are never touched by a sync. A task with an unmerged branch is never marked done from
-`TASKS.md`: merge it on the board. To sync again after editing `TASKS.md`, run `/just-code-ai-sync sync` in Claude
-Code (after **JustCode: Install the TASKS.md Sync Skill**), or `node <extension>/out/cli.js sync` in a terminal.
-Add `--dry-run` to preview.
+It never touches `CLAUDE.md`, `.claude/`, `docs/` or your own task files. Existing files are not overwritten without asking.
 
 ## 3. Adding tasks
 
@@ -186,7 +154,6 @@ Sprints are optional groups of tasks with a goal. They come from three places:
 
 - **+ Sprint** in the toolbar: a name and an optional goal.
 - **✦ Plan**: Claude names sprints in its proposal, and applying creates them.
-- **TASKS.md**: each `## Sprint N: goal` heading (section 2).
 
 **The view menu** (left of the toolbar) shows *All tasks*, the *Backlog* or one sprint. ★ marks the active sprint.
 
@@ -455,7 +422,7 @@ where they stopped. **Try now** skips the wait.
 | "Claude Code is not installed or not found" | Run **JustCode: Check Setup** → *Install Claude Code*. If Claude is installed somewhere unusual, set `justCode.claudePath`. |
 | A task stops with "authentication" errors | Run **JustCode: Check Setup** → *Sign in*. |
 | "git needs your name and email" | Run **JustCode: Check Setup** → *Set name and email*. |
-| The label says **● Not set up** after setup | Setup counts `CLAUDE.md`, an agent in `.claude/agents` and `TASKS.md`. Hover the label to see which is missing, then run setup again: existing files are kept. |
+| The label says **● Not set up** after setup | Setup looks for `.justcode/project.md`. Run setup again, or write that file yourself. |
 | Setup seems stuck | It is probably waiting for your answer: open it from the **◌ Setting up…** label or the yellow banner. |
 | The planning chat stopped moving | Its progress bar says *Waiting for your answer* when Claude asked something. Otherwise press **Stop step** and send your message again. |
 | A task keeps asking for the same command | Press **Always allow …**, or add a rule in ⚙, e.g. `Bash(docker compose:*)`. A compound command like `cd x && make` needs a rule for each part. |

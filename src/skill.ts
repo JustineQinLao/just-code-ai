@@ -1,133 +1,48 @@
 import * as path from 'path';
 
-// ~/.claude/skills/just-code-ai-sync/SKILL.md: lets Claude set a project up for JustCode and sync its TASKS.md into
-// the board. Written only when the user asks (Set up project in the board's Plan dialog, or JustCode: Install the
-// TASKS.md Sync Skill). It changes files and the board, so Claude never starts it on its own
-// (disable-model-invocation, as the Claude Code docs advise for skills with side effects).
-// The exact command prefix the skill tells Claude to run. The init task's allow rules are built from the same string,
-// so each command matches its rule and runs without asking.
-export const cliCommand = (cli: string) => `node "${cli}"`;
-
-export function syncSkill(cli: string) {
-  const node = cliCommand(cli);
+// The just-code-setup skill: Claude learns the project, interviews the user and writes .justcode/project.md (and,
+// when the user names a design, .justcode/design/DESIGN.md). The setup task gets its text in its first message.
+export function setupSkill() {
   return `---
-name: just-code-ai-sync
-description: Set up this project for the JustCode board (interview, then CLAUDE.md, reviewer agent, TASKS.md) and sync TASKS.md into the board. Use for "/just-code-ai-sync", "set up JustCode", "sync tasks", or after editing TASKS.md.
+name: just-code-setup
+description: Describe this project for JustCode (read the code, interview, then write .justcode/project.md and optionally .justcode/design/DESIGN.md). Use for "/just-code-setup" or "set up JustCode".
 disable-model-invocation: true
-argument-hint: "[sync]"
 ---
 
-# Set up and sync the JustCode board
+# Describe the project for JustCode
 
-Work from the project root. Never overwrite a file that exists. Run each \`node\` command exactly as written, as its
-own command (no \`cd\`, \`&&\` or variables). If the argument is \`sync\`, or CLAUDE.md, an agent in \`.claude/agents\`
-and TASKS.md all exist already, skip to step 3b, then step 4.
+Work from the project root. Never overwrite a file that exists without asking. Write only under \`.justcode/\`: never
+\`CLAUDE.md\`, agents or \`docs/\`, and run no CLI command.
 
 ## 1. Learn the project (read only, be brief)
 
-Read docs/project.md, README, CLAUDE.md, the package or build files, and only enough code to know the stack, the
-test/build/lint commands, the layout and what is already built. Use Grep/Glob, not broad reads.
+Read the README, the package or build files, \`CLAUDE.md\` if it exists (do not repeat what it says), and only enough
+code to know the stack, the test/build/lint commands, the layout and what is already built. Use Grep/Glob, not broad reads.
 
 ## 2. Interview, then propose
 
-If the project has no description (no docs/project.md, and README and CLAUDE.md do not say what the product does and
-for whom), ask for it first with AskUserQuestion, in one call: what the product does, who uses it (roles), the main
-features, and whether there are designs or specs (files or claude.ai artifact links). Offer your best guess from the
-code as the first option. Its answers become docs/project.md in the files you propose.
-
 Ask with AskUserQuestion, in ONE call, only what the code does not answer (2-4 questions, multiple choice, your best
-guess first and marked "(Recommended)"). Typical topics:
-- the goal of the next stretch of work, in the user's words
-- what must be true before a task counts as done (tests pass, type check, screenshots of UI, manual check)
-- conventions or no-go areas Claude cannot see in the code
+guess first and marked "(Recommended)"): what the product does, who uses it (roles), the stack and commands, what must be
+true before a task counts as done, and whether there are designs (files or claude.ai artifact links).
 
-Then ask once more with AskUserQuestion: "Write these files?" with options "Write them (Recommended)" and
-"Change something". Put the list of files and a one-line summary of each in the first option's preview. If the user
-wants changes, apply them and ask again. Write nothing before the user approves.
+Then ask once more: "Write these files?" with "Write them (Recommended)" and "Change something", listing the files and a
+one-line summary of each in the first option's preview. Write nothing before the user approves.
 
 ## 3. Write the approved files
 
-**CLAUDE.md** (root, under 100 lines): only facts needed in every session. Stack; the exact commands to install, run,
-test, type check and lint; the folder layout in a few lines; conventions and no-go areas from the interview; the
-definition of done. No generic advice ("write clean code"), nothing Claude can read from the code itself.
+**.justcode/project.md** (under 100 lines): the product and its users, the main features, the stack, the exact
+commands to install, run, test, type check and lint, the folder layout in a few lines, conventions and no-go areas, and
+the definition of done. Nothing Claude can read from the code itself.
 
-**Agents**: JustCode already supplies \`reviewer\`, \`planner\` and \`implementer\` and the default skills from its own
-plugin (\`.justcode/plugin/\`, rewritten by JustCode: never edit it). Write an agent to \`.claude/agents/<name>.md\` only
-to tailor one to this project; a project agent shadows the plugin's of the same name. Frontmatter per the Claude Code docs: \`name\`, \`description\` (what it does and when to use it,
-one or two sentences), \`tools\` as a least-privilege allowlist, \`model\`. Body: a short role, numbered steps, and the
-exact output format.
-- \`reviewer.md\`: reviews a task's diff against its "Done when" list, runs the project's tests and build,
-  reports only blocking issues (bugs, missed requirements, broken conventions), no style notes. For UI changes it takes
-  screenshots (\`${node} screenshot <file>.png\` with an Android device, else
-  \`npx playwright screenshot <url> <file>.png\`) and reads them. When asked for a JSON verdict it ends with it.
-  \`tools: Read, Grep, Glob, Bash\`, \`model: sonnet\`.
-- \`planner.md\`: follows the \`plan-tasks\` skill and writes tasks in the TASKS.md format below, naming real
-  files and, for UI, the design screen files to match. Read only: \`tools: Read, Grep, Glob\`, \`model: sonnet\`.
-- \`implementer.md\`: builds one task following CLAUDE.md, then verifies it. \`tools\` per what the stack
-  needs, \`model: sonnet\`.
-- Keep every agent cheap. Write into each body: read only the files the task names and what they import; run only
-  the tests for the changed code, plus the build or type check once at the end; never re-run a check that passed
-  unless the code it covers changed; at most one screenshot per changed screen; stop after two failed fix attempts
-  and report instead of looping.
-- The \`plan-tasks\` and \`design-from-artifact\` skills (planning, and UI from a claude.ai design link) are installed
-  come from the JustCode plugin: do not draft them.
-- \`.claude/skills/<name>/SKILL.md\` only for a multi-step workflow the project clearly has (release, deploy,
-  migrations). Give it \`disable-model-invocation: true\` when it has side effects.
+**.justcode/design/DESIGN.md**: only if the user names a design. Where it lives (files or links), its screens or
+sections, and the tokens (colors, type, spacing) to match.
 
-
-## 3b. Update what exists (a project already set up)
-
-Read \`.claude/agents/*.md\` and \`CLAUDE.md\`, and Glob the code enough to know whether the commands and layout they
-name are still true. Each agent must have these rules, in the project's own words and commands:
-- **planner**: read only; follows the \`plan-tasks\` skill (browse the code first, sources and designs, build order with
-  foundations first and verify or capture tasks last, Goal / Files / Done when).
-- **implementer**: reads the brief and the files it names, not the whole repo; for UI follows \`design-from-artifact\`
-  and checks with headless Chrome screenshots; runs only the tests for the changed code, then the build once; stops
-  after two failed fix attempts and reports; writes the handoff.
-- **reviewer**: checks the diff against "Done when"; runs only the tests for the code the diff touches, once; for UI
-  takes headless Chrome screenshots and compares them with the design screen file when the task names one; one line
-  per blocking finding; ends with the JSON verdict when asked.
-- Missing agent of these three: draft it. Wrong commands or paths: fix them. Keep the project's own rules (security,
-  data, conventions) word for word.
-
-Nothing to change? Say so and go to step 4. Else ask once with AskUserQuestion: "Update these agents?" with
-"Update them (Recommended)" and "Leave as they are", the changes per file in the first option's preview. Approved:
-write each changed agent whole to \`.claude/agents/<name>.md\`. Not approved: leave them.
-
-**TASKS.md** (root), in build order. Group work into sprints of 3-6 tasks, each with a one-line goal. Put what is
-already built under \`## Done\` as \`- [x]\` (titles only). Every open task has these indented lines:
-
-\`\`\`markdown
-## Sprint 1: Users can sign in
-- [ ] Add email login form
-  Goal: a user signs in with email and password
-  Files: src/auth/login.tsx, src/api/session.ts
-  Done when:
-  - a wrong password shows an error message
-  - npm test passes
-
-## Backlog
-- [ ] Password reset by email
-  Goal: ...
-\`\`\`
-
-Rules for a task: one change that can be built, reviewed and merged on its own; an imperative title under 60
-characters; "Done when" has 1-4 checks a reviewer can verify (a behavior, a test, a command), never "works well".
-
-## 4. Sync
-
-Preview: \`${node} sync --dry-run\`. Then apply: \`${node} sync\`
-
-\`## Sprint N: goal\` headings create that sprint on the board if it does not exist. \`- [ ]\` is todo, \`- [~]\`
-doing, \`- [x]\` done. Items removed from TASKS.md are archived. Tasks made on the board are never touched.
-
-Finish with at most 8 lines: the files you wrote, and what the sync added, moved, archived and which sprints it made.
+Finish with at most 5 lines: the files you wrote.
 `;
 }
 
-// The skill's instructions without frontmatter. The setup task gets them in its first message: tasks load only the
-// project's Claude setup, so a skill in ~/.claude/skills is not visible to them.
-export const syncSkillBody = (cli: string) => syncSkill(cli).replace(/^---[\s\S]*?---\s*/, '');
+// The skill's instructions without frontmatter, for the setup task's first message.
+export const setupSkillBody = () => setupSkill().replace(/^---[\s\S]*?---\s*/, '');
 
 // .claude/skills/design-from-artifact/SKILL.md: supplied to every session by the JustCode plugin, so plan chats, sprint
 // edits and tasks (which load only the project's Claude setup) build UI from a pasted claude.ai design link. It only
@@ -217,8 +132,8 @@ Read only: never change files. Keep it cheap: Grep and Glob before Read, read pa
 
 ## 1. Know the project
 
-- The project root is the first path \`git worktree list\` prints. Read its \`CLAUDE.md\`, \`docs/project.md\` (or the
-  README) and \`TASKS.md\`, and the last entries of \`.justcode/progress.md\` (what merged recently).
+- The project root is the first path \`git worktree list\` prints. Read its \`CLAUDE.md\`, \`.justcode/project.md\` (or the
+  README), and the last entries of \`.justcode/progress.md\` (what merged recently).
 - Code exists (anything besides docs and config)? Map only what the goal touches: the routes, models, pages and tests
   around it, by Glob and Grep. Note what is already built, so no task rebuilds it. Name real files.
 - No code yet? The first task is the scaffold the CLAUDE.md stack describes; plan from the spec.
@@ -273,7 +188,7 @@ ${CHEAP}
 `;
 export const plannerAgent = () => `---
 name: planner
-description: Turns a goal into small tasks in the TASKS.md format, naming real files. Use for planning only.
+description: Turns a goal into small tasks as small tasks, naming real files. Use for planning only.
 tools: Read, Grep, Glob
 model: sonnet
 ---

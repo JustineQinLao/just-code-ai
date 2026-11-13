@@ -90,13 +90,13 @@ export function discoverSkills(root: string, personal: boolean): SkillDef[] {
   };
   const all = [...read(root, 'project'), ...(personal ? read(os.homedir(), 'user') : [])];
   const seen = new Set<string>();
-  return all.filter(k => !/^lex-?code|^just-code-ai-sync$/i.test(k.name) && !seen.has(k.name) && (seen.add(k.name), true));
+  return all.filter(k => !/^lex-?code|^just-code-setup$/i.test(k.name) && !seen.has(k.name) && (seen.add(k.name), true));
 }
 
 // Everything a session here can run with /: built-in commands, bundled skills, plugins, project and (with personal
 // setup) your own skills. Asks the CLI itself; no prompt is sent, so it costs no tokens.
 export function usableCommands(all: { name: string; description?: string }[]) {
-  return all.filter(c => !/^__|^lex-?code|^just-code-ai-sync$/i.test(c.name)).map(c => ({ name: c.name, description: c.description ?? '' }));
+  return all.filter(c => !/^__|^lex-?code|^just-code-setup$/i.test(c.name)).map(c => ({ name: c.name, description: c.description ?? '' }));
 }
 export async function slashCommands(o: { bin: string; cwd: string; env: Record<string, string | undefined>; personal: boolean; plugins?: string[] }) {
   const { query } = await sdk();
@@ -517,7 +517,7 @@ export function plannerFirst(tasks: { id: string; title: string; description?: s
   return `${sp}${target}${list}${started}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
 }
 
-// A task's details as stored on the board and in TASKS.md: the reviewer checks the work against "Done when".
+// A task's details as stored on the board: the reviewer checks the work against "Done when".
 export function taskText(t: { goal?: string; files?: string[]; done?: string[]; description?: string }) {
   const parts = [t.goal?.trim() && `Goal: ${t.goal.trim()}`, t.files?.length && `Files: ${t.files.join(', ')}`,
     t.done?.length && `Done when:\n${t.done.map(d => `- ${d}`).join('\n')}`, t.description?.trim()].filter(Boolean);

@@ -27,7 +27,6 @@ export interface Task {
   worktree?: string;          // <project>/.justcode/worktrees/<id>
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
-  src?: 'TASKS.md';           // created by TASKS.md sync; only these are updated or archived by it
   review?: Review;            // AI review of the task's branch
   limited?: boolean;          // a usage limit stopped this task; it continues by itself after the reset
   init?: boolean;             // the project's initialization run

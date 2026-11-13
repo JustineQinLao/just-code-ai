@@ -38,10 +38,6 @@
         "title": "JustCode: Use an Anthropic API Key (optional)"
       },
       {
-        "command": "justCode.installSyncSkill",
-        "title": "JustCode: Install the TASKS.md Sync Skill"
-      },
-      {
         "command": "justCode.phoneLink",
         "title": "JustCode: Phone Link (QR for the Android app)"
       },
