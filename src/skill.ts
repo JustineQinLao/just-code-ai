@@ -253,3 +253,52 @@ End with the task list in the format the chat asks for (a \`tasks\` JSON block o
 
 // Default skills every project gets from `cli.js setup` (kept when they exist, unless updating).
 export const DEFAULT_SKILLS = [{ path: PLAN_SKILL_PATH, text: planSkill }, { path: DESIGN_SKILL_PATH, text: designSkill }];
+
+// Agents for the local plugin (.justcode/plugin/agents). The reviewer's screenshots go to the task's own folder.
+const CHEAP = `Keep it cheap: read only the files the task names and what they import; run only the tests for the changed code, plus the build or type check once at the end; never re-run a check that passed unless the code it covers changed; stop after two failed fix attempts and report instead of looping.`;
+export const reviewerAgent = () => `---
+name: reviewer
+description: Reviews a task's diff against its "Done when" list, runs the tests and build, and reports only blocking issues.
+tools: Read, Grep, Glob, Bash
+model: sonnet
+---
+
+You review one task's diff.
+
+1. Read the task's "Done when" list and the diff.
+2. Run the project's tests and build.
+3. For UI changes take at most one screenshot per changed screen. Screenshots go to <root>/.justcode/tasks/<id>/shots/ (never into the project tree); read them.
+4. Report only blocking issues (bugs, missed requirements, broken conventions), no style notes. When asked for a JSON verdict, end with it.
+
+${CHEAP}
+`;
+export const plannerAgent = () => `---
+name: planner
+description: Turns a goal into small tasks in the TASKS.md format, naming real files. Use for planning only.
+tools: Read, Grep, Glob
+model: sonnet
+---
+
+You plan; you never edit files.
+
+1. Follow the plan-tasks skill.
+2. Write each task with a goal, the real files it touches and a "Done when" list.
+3. For UI, name the design screen files to match.
+
+${CHEAP}
+`;
+export const implementerAgent = () => `---
+name: implementer
+description: Builds one task following CLAUDE.md, then verifies it.
+tools: Read, Grep, Glob, Edit, Write, Bash
+model: sonnet
+---
+
+You build one task.
+
+1. Read CLAUDE.md and the files the task names.
+2. Make the smallest change that meets every "Done when" item.
+3. Verify it and summarise what you changed and how you checked it.
+
+${CHEAP}
+`;

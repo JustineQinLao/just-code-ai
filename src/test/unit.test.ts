@@ -11,6 +11,7 @@ import { Store } from '../store';
 import { parseTasks, syncTasks } from '../tasksmd';
 import { Session } from '../session';
 import { cliCommand, syncSkill, DESIGN_SKILL_PATH } from '../skill';
+import { writePlugin } from '../plugin';
 import * as g from '../git';
 import * as A from '../artifacts';
 
@@ -892,4 +893,16 @@ test('a subagent\'s saved transcript: steps, model, final answer, tokens and tim
     assert.deepEqual(log.steps.map(s => s.kind), ['user', 'info', 'say']);
     assert.equal(agentLog(cwd, sid, '../x'), undefined);
   } finally { if (old === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = old; }
+});
+
+test('writePlugin writes the plugin folder once and keeps unchanged files', () => {
+  const root = tmp(), dir = path.join(root, '.justcode', 'plugin');
+  const a = writePlugin(root);
+  for (const f of ['.claude-plugin/plugin.json', 'skills/plan-tasks/SKILL.md', 'skills/design-from-artifact/SKILL.md', 'agents/reviewer.md', 'agents/planner.md', 'agents/implementer.md'])
+    assert.ok(fs.existsSync(path.join(dir, f)), f);
+  assert.match(fs.readFileSync(path.join(dir, 'agents', 'reviewer.md'), 'utf8'), /<root>\/\.justcode\/tasks\/<id>\/shots\//);
+  assert.deepEqual(fs.readdirSync(root), ['.justcode']);
+  const b = writePlugin(root);
+  assert.equal(b.written.length, 0);
+  assert.equal(b.kept.length, a.written.length);
 });
