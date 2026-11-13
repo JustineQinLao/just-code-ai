@@ -53,6 +53,11 @@ What is wrong, in order of damage:
    by heading text. Two sources of truth for one thing. Decision: remove sync (see Decisions).
 9. **Skill text lives in TypeScript template strings** (`skill.ts`). Fine for bundling, but `setup` writes those
    strings into the repo and `--update` overwrites them. With the plugin approach they never leave `.justcode/`.
+10. **Dead-end cards.** When an automatic loop gives up, the card offers one button that restarts the same loop and
+    no explanation. Example: "Review still finds 4 issue(s) after 3 rounds" with only **Send to Claude**. The user
+    cannot tell what the issues are, whether they matter, why Claude could not fix them, or what else they may do
+    (accept, merge anyway, edit by hand, discard). Same pattern for "Checks still fail", "Review could not run",
+    "Stopped: <error>". The stuck task also blocks Run all ("waits for X, which still has review issues"). See 2.8.
 
 Decisions taken with the owner (2026-11-13), binding for the plan:
 - Direct tasks: **Finish commits** the task's files on the current branch. No setting for "leave uncommitted".
@@ -284,6 +289,61 @@ Files: `docs/GUIDE.md`.
 1. Rewrite section 3 "Runs in" and section 8 for direct tasks. Explain the default rule and the two finish modes.
 Done when: the guide has no mention of "Project folder" mode.
 
+### 2.8 Every stuck card has a way out
+Files: `media/board.js` (`status()` near "Review still finds", the task panel's Review tab), `src/runner.ts`
+(`review`, `sendIssues`, `check`, `pump`), `src/store.ts`, `src/claude.ts` (`runReview` prompt), `src/extension.ts`,
+`src/test/unit.test.ts`, `docs/GUIDE.md`.
+
+Rule: when JustCode stops an automatic loop, the card says (a) what happened in plain words, (b) why it stopped,
+(c) every action the user can take, each labeled with what it does. Never a single button that only repeats the loop
+that just gave up.
+
+The stuck states (all of them; each gets the treatment below):
+
+| State | Today | Card text after this task | Actions |
+|---|---|---|---|
+| Review fails after max rounds | "Review still finds N issue(s) after 3 rounds" + Send to Claude | "Review: N issues left after 3 fix rounds. K are the same issue every round (Claude may disagree)." | **See issues** (primary), **Try 1 more round**, **Accept issues and merge/finish**, **Discard** |
+| Checks fail after max rounds | "Checks still fail: test" + Send to Claude | "`npm test` still fails after 3 fix rounds: <first failing line>" | **See log**, **Try 1 more round**, **Merge/finish anyway** (blocked if `requireChecksPass`), **Discard** |
+| Review could not run | "Review could not run: <err>" + Retry | same + one-line cause hint (auth, timeout, rate limit) | **Retry review**, **Merge/finish without review**, **Discard** |
+| Stopped with error | "Stopped: <err>" + Resume | same + cause hint | **Resume**, **Open task**, **Discard** |
+| Conflicts | "Conflicts with main in N file(s)" | lists the first 3 files | **Resolve with Claude**, **Open in editor**, **Discard** |
+| Replied without changes | "Claude replied without changing files" | same | **Reply**, **Mark done (no changes)**, **Discard** |
+
+Steps:
+1. **Issue tracking across rounds.** `Task.review.issues[]` gains `key` (sha256 of file + normalized title, 8 hex),
+   `rounds` (how many consecutive rounds it appeared) and `accepted?: boolean`. `review()` computes them by matching
+   the new issue list to the previous one by `key`. Keep Claude's last reply to each fix round in
+   `review.fixNotes` (the final assistant text of the fix turn, capped 1,000 chars) so the user sees *why* an issue
+   persists ("I left X because Y").
+2. **Reviewer stays on the diff.** `runReview` prompt: "Report only problems introduced or touched by this diff.
+   Pass issues listed under `## Accepted by the user` without re-reporting them. If an issue from the previous round
+   is unchanged and the builder explained why, judge the explanation: drop the issue if it is reasonable." Pass
+   accepted issues and `fixNotes` into the prompt. This stops moving goalposts (new nit-level issues every round).
+3. **See issues** opens the task panel on the Review tab. Each issue shows: severity, file:line (click → open in
+   editor), the reviewer's text, "seen in N rounds", Claude's fix note, and two buttons: **Accept** (sets
+   `accepted`, audit `review.accept`) and **Ask Claude to fix this one** (sends only that issue).
+4. **Try 1 more round** = today's `sendIssues` with the remaining non-accepted issues, and it raises this task's
+   own limit by one (`review.extraRounds`). Label says "1 more round", not "Send to Claude".
+5. **Accept issues and merge** (branch) / **Accept issues and finish** (direct): confirm dialog lists the issues;
+   on OK marks all accepted, sets `review.state = 'accepted'`, merges or finishes, audit `review.override` with the
+   issue titles. The done card then reads "Merged with N accepted review issues" (warn tone, like `unreviewed`).
+   Policy `requireHumanReviewFor` does not block this: it *is* the human decision.
+6. When every remaining issue is accepted from the panel, the card moves to "Review passed (N accepted). Ready to
+   merge." without another review round.
+7. **Run all does not stall.** `pump()`: a task stuck in any state above is skipped, not a blocker; the queue goes on
+   with tasks that do not depend on it (5.5). The toolbar line becomes "Run all: 5 done, 1 needs you" and clicking
+   "needs you" scrolls to the card. Only a true dependency (5.5) or the direct-task rule (2.6) waits.
+8. **Guard test.** Export `status()` from board.js for tests (or move it to a shared `media/status.js` that tests
+   import). Test: for every fixture task in each stuck state of the table, `status()` returns tone `err`/`warn`, an
+   `action`, and at least one more action that is not the same loop (`extra` or a second entry). Change the return
+   shape to `actions: [label, fn][]` (one field; delete `action` and `extra`, no alias).
+9. Notifications use the same text as the card and carry the same primary action button.
+10. Guide: new section "When a card needs you" with the table above and what each action does.
+
+Done when: a task whose review fails 3 rounds shows the issues with their round counts and Claude's notes, the user
+can accept one issue and send the rest, can accept all and merge, the done card says it was merged with accepted
+issues, an audit line exists, and Run all continued with the other tasks meanwhile.
+
 ---
 
 ## Phase 3: tool and plugin readiness (frontend-design + DESIGN.md, Playwright MCP, superpowers)
@@ -480,7 +540,8 @@ Files: new `src/audit.ts`, `src/runner.ts`, `src/extension.ts`, `src/phone.ts`, 
    One developer per machine: no user identity field.
    Events: `task.create`, `task.run`, `task.stop`, `task.message`, `permission.allow`, `permission.always`
    (with rules), `permission.deny`, `mode.switch`, `review.pass`, `review.fail`, `checks.fail`, `merge`, `finish`,
-   `discard`, `publish`, `policy.deny`, `budget.stop`, `phone.pair`, `phone.action`.
+   `discard`, `publish`, `policy.deny`, `budget.stop`, `phone.pair`, `phone.action`, `review.accept`,
+   `review.override`.
 2. `audit.ts`: `log(root, event)` (append, never throws), `read(root, { since?, taskId? })`.
 3. Call sites: every `store.updateTask` that changes status, every `permission` resolution in `session.ts`, the
    phone server's write endpoints (actor `phone`, include the token's last 4 chars), `publishArtifact`, `merge`,
@@ -581,6 +642,8 @@ Manual verification after Phases 1 to 3, in a throwaway project:
 - `git status --ignored` shows only `.justcode/` as new; no `.claude/`, `CLAUDE.md`, `TASKS.md`, `docs/`.
 - A backlog task runs as a direct task, is reviewed, and finishes with one commit on the current branch.
 - A sprint task runs in a worktree as before.
+- Force a review failure (`maxReviews: 1`, a task with a deliberate bug): the card offers See issues, 1 more round,
+  Accept and merge, Discard; Run all keeps going with the other tasks.
 - The setup checklist shows the four recommended rows; each fix button works.
 - A UI task takes a Playwright MCP screenshot into `.justcode/tasks/<id>/shots/`.
 - An artifact task publishes, and the Artifacts panel lists it with its task.
