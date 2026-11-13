@@ -4,7 +4,7 @@ import * as path from 'path';
 // the board. Written only when the user asks (Set up project in the board's Plan dialog, or JustCode: Install the
 // TASKS.md Sync Skill). It changes files and the board, so Claude never starts it on its own
 // (disable-model-invocation, as the Claude Code docs advise for skills with side effects).
-// The exact command prefix the skill tells Claude to run. The setup task's allow rules are built from the same string,
+// The exact command prefix the skill tells Claude to run. The init task's allow rules are built from the same string,
 // so each command matches its rule and runs without asking.
 export const cliCommand = (cli: string) => `node "${cli}"`;
 
@@ -51,29 +51,29 @@ wants changes, apply them and ask again. Write nothing before the user approves.
 test, type check and lint; the folder layout in a few lines; conventions and no-go areas from the interview; the
 definition of done. No generic advice ("write clean code"), nothing Claude can read from the code itself.
 
-**Agents** are drafted under \`.justcode/setup/agents/\` (Claude Code asks before every write into \`.claude/\`; the
-CLI installs them). Frontmatter per the Claude Code docs: \`name\`, \`description\` (what it does and when to use it,
+**Agents**: JustCode already supplies \`reviewer\`, \`planner\` and \`implementer\` and the default skills from its own
+plugin (\`.justcode/plugin/\`, rewritten by JustCode: never edit it). Write an agent to \`.claude/agents/<name>.md\` only
+to tailor one to this project; a project agent shadows the plugin's of the same name. Frontmatter per the Claude Code docs: \`name\`, \`description\` (what it does and when to use it,
 one or two sentences), \`tools\` as a least-privilege allowlist, \`model\`. Body: a short role, numbered steps, and the
 exact output format.
-- \`reviewer.md\` (always): reviews a task's diff against its "Done when" list, runs the project's tests and build,
+- \`reviewer.md\`: reviews a task's diff against its "Done when" list, runs the project's tests and build,
   reports only blocking issues (bugs, missed requirements, broken conventions), no style notes. For UI changes it takes
   screenshots (\`${node} screenshot <file>.png\` with an Android device, else
   \`npx playwright screenshot <url> <file>.png\`) and reads them. When asked for a JSON verdict it ends with it.
   \`tools: Read, Grep, Glob, Bash\`, \`model: sonnet\`.
-- \`planner.md\` (always): follows the \`plan-tasks\` skill and writes tasks in the TASKS.md format below, naming real
+- \`planner.md\`: follows the \`plan-tasks\` skill and writes tasks in the TASKS.md format below, naming real
   files and, for UI, the design screen files to match. Read only: \`tools: Read, Grep, Glob\`, \`model: sonnet\`.
-- \`implementer.md\` (always): builds one task following CLAUDE.md, then verifies it. \`tools\` per what the stack
+- \`implementer.md\`: builds one task following CLAUDE.md, then verifies it. \`tools\` per what the stack
   needs, \`model: sonnet\`.
 - Keep every agent cheap. Write into each body: read only the files the task names and what they import; run only
   the tests for the changed code, plus the build or type check once at the end; never re-run a check that passed
   unless the code it covers changed; at most one screenshot per changed screen; stop after two failed fix attempts
   and report instead of looping.
 - The \`plan-tasks\` and \`design-from-artifact\` skills (planning, and UI from a claude.ai design link) are installed
-  by the setup command below: do not draft them.
-- \`.justcode/setup/skills/<name>/SKILL.md\` only for a multi-step workflow the project clearly has (release, deploy,
+  come from the JustCode plugin: do not draft them.
+- \`.claude/skills/<name>/SKILL.md\` only for a multi-step workflow the project clearly has (release, deploy,
   migrations). Give it \`disable-model-invocation: true\` when it has side effects.
 
-Install the drafts and the default skills (existing files are kept): \`${node} setup\`
 
 ## 3b. Update what exists (a project already set up)
 
@@ -92,8 +92,7 @@ name are still true. Each agent must have these rules, in the project's own word
 
 Nothing to change? Say so and go to step 4. Else ask once with AskUserQuestion: "Update these agents?" with
 "Update them (Recommended)" and "Leave as they are", the changes per file in the first option's preview. Approved:
-write each changed agent whole to \`.justcode/setup/agents/<name>.md\`, then run \`${node} setup --update\` (it also
-refreshes the default skills). Not approved: run \`${node} setup\`, which only adds what is missing.
+write each changed agent whole to \`.claude/agents/<name>.md\`. Not approved: leave them.
 
 **TASKS.md** (root), in build order. Group work into sprints of 3-6 tasks, each with a one-line goal. Put what is
 already built under \`## Done\` as \`- [x]\` (titles only). Every open task has these indented lines:
@@ -130,7 +129,7 @@ Finish with at most 8 lines: the files you wrote, and what the sync added, moved
 // project's Claude setup, so a skill in ~/.claude/skills is not visible to them.
 export const syncSkillBody = (cli: string) => syncSkill(cli).replace(/^---[\s\S]*?---\s*/, '');
 
-// .claude/skills/design-from-artifact/SKILL.md: installed into every project by `cli.js setup`, so plan chats, sprint
+// .claude/skills/design-from-artifact/SKILL.md: supplied to every session by the JustCode plugin, so plan chats, sprint
 // edits and tasks (which load only the project's Claude setup) build UI from a pasted claude.ai design link. It only
 // reads the design and the code, so Claude may start it on its own when a link is pasted.
 export const DESIGN_SKILL_PATH = path.join('skills', 'design-from-artifact', 'SKILL.md');
@@ -204,7 +203,7 @@ there today.
 `;
 
 // .claude/skills/plan-tasks/SKILL.md: how a plan chat (✦ Plan, ✦ Edit sprint) or the planner agent turns a goal into
-// board tasks. Installed into every project by `cli.js setup`, like the design skill. Read only, so model-invocable.
+// board tasks. Supplied by the JustCode plugin, like the design skill. Read only, so model-invocable.
 export const PLAN_SKILL_PATH = path.join('skills', 'plan-tasks', 'SKILL.md');
 export const planSkill = () => `---
 name: plan-tasks
@@ -251,7 +250,7 @@ design folder (\`project/canvas.json\`): follow the \`design-from-artifact\` ski
 End with the task list in the format the chat asks for (a \`tasks\` JSON block on the board).
 `;
 
-// Default skills every project gets from `cli.js setup` (kept when they exist, unless updating).
+// Default skills every session gets from the JustCode plugin (written by writePlugin).
 export const DEFAULT_SKILLS = [{ path: PLAN_SKILL_PATH, text: planSkill }, { path: DESIGN_SKILL_PATH, text: designSkill }];
 
 // Agents for the local plugin (.justcode/plugin/agents). The reviewer's screenshots go to the task's own folder.

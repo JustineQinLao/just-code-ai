@@ -57,7 +57,8 @@ function readAgents(dir: string, scope: AgentDef['scope']): AgentDef[] {
 
 // Project agents shadow user agents of the same name, as in Claude Code.
 export function discoverAgents(root: string): AgentDef[] {
-  const project = readAgents(path.join(root, '.claude', 'agents'), 'project');
+  const seenP = new Set<string>();
+  const project = [...readAgents(path.join(root, '.justcode', 'plugin', 'agents'), 'project'), ...readAgents(path.join(root, '.claude', 'agents'), 'project')].filter(a => !seenP.has(a.name) && (seenP.add(a.name), true));
   const names = new Set(project.map(a => a.name));
   return [...project, ...readAgents(path.join(os.homedir(), '.claude', 'agents'), 'user').filter(a => !names.has(a.name))];
 }
@@ -97,10 +98,10 @@ export function discoverSkills(root: string, personal: boolean): SkillDef[] {
 export function usableCommands(all: { name: string; description?: string }[]) {
   return all.filter(c => !/^__|^lex-?code|^just-code-ai-sync$/i.test(c.name)).map(c => ({ name: c.name, description: c.description ?? '' }));
 }
-export async function slashCommands(o: { bin: string; cwd: string; env: Record<string, string | undefined>; personal: boolean }) {
+export async function slashCommands(o: { bin: string; cwd: string; env: Record<string, string | undefined>; personal: boolean; plugins?: string[] }) {
   const { query } = await sdk();
   async function* never(): AsyncGenerator<never> { await new Promise(() => {}); }
-  const q = query({ prompt: never(), options: { cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: o.env, settingSources: settingSources(o.personal) } });
+  const q = query({ prompt: never(), options: { cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: o.env, settingSources: settingSources(o.personal), ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}) } });
   try {
     const timeout = new Promise<never>((_, no) => setTimeout(() => no(new Error('timed out')), 15_000).unref());
     return usableCommands(await Promise.race([q.supportedCommands(), timeout]));
@@ -121,8 +122,6 @@ export function carryOver(root: string, worktree: string) {
       ...(a.tools && { tools: a.tools.split(',').map(t => t.trim()).filter(Boolean) }), ...(a.model && { model: a.model }),
     }]));
   }
-  // Claude Code loads .claude/skills from an added directory (the project folder itself, for uncommitted skills).
-  if (fs.existsSync(path.join(root, '.claude', 'skills')) && !fs.existsSync(path.join(worktree, '.claude', 'skills'))) out.addDirs.push(root);
   const local = path.join(root, '.claude', 'settings.local.json');
   if (fs.existsSync(local) && !fs.existsSync(path.join(worktree, '.claude', 'settings.local.json'))) out.settingsFile = local;
   return out;
@@ -382,7 +381,7 @@ export const addUsage = (a: Usage | undefined, u: any): Usage => ({
   cacheRead: (a?.cacheRead ?? 0) + (u?.cache_read_input_tokens ?? 0), cacheWrite: (a?.cacheWrite ?? 0) + (u?.cache_creation_input_tokens ?? 0),
 });
 
-export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; onRate?: (info: any) => void }
+export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; plugins?: string[]; onRate?: (info: any) => void }
 interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage }
 
 // One unattended turn through the SDK: never asks (dontAsk denies anything not allowed), stops at the timeout or
@@ -397,6 +396,7 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   try {
     for await (const m of query({ prompt, options: {
       cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal), settings: sessionSettings() as any,
+      plugins: (o.plugins ?? [path.join(o.cwd, '.justcode', 'plugin')]).map(p => ({ type: 'local' as const, path: p })),
       ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
       if (m.type === 'rate_limit_event') o.onRate?.((m as any).rate_limit_info);

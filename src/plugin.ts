@@ -4,10 +4,19 @@ import { DEFAULT_SKILLS, reviewerAgent, plannerAgent, implementerAgent } from '.
 
 // <root>/.justcode/plugin: a local Claude Code plugin with JustCode's skills and agents. Files are rewritten only
 // when their content changed. Nothing outside this folder is touched.
-export function writePlugin(root: string): { written: string[]; kept: string[] } {
-  const dir = path.join(root, '.justcode', 'plugin');
+export const pluginDir = (root: string) => path.join(root, '.justcode', 'plugin');
+
+// Rewrites the plugin when it is missing or its plugin.json version differs from the extension's.
+export function ensurePlugin(root: string, version: string) {
+  let have = '';
+  try { have = JSON.parse(fs.readFileSync(path.join(pluginDir(root), '.claude-plugin', 'plugin.json'), 'utf8')).version; } catch { /* missing */ }
+  if (have !== version) writePlugin(root, version);
+}
+
+export function writePlugin(root: string, version = '1.0.0'): { written: string[]; kept: string[] } {
+  const dir = pluginDir(root);
   const files: Array<[string, string]> = [
-    [path.join('.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'justcode', description: 'JustCode skills and agents', version: '1.0.0' }, null, 2) + '\n'],
+    [path.join('.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'justcode', description: 'JustCode skills and agents', version }, null, 2) + '\n'],
     ...DEFAULT_SKILLS.map((s): [string, string] => [s.path, s.text()]),
     [path.join('agents', 'reviewer.md'), reviewerAgent()],
     [path.join('agents', 'planner.md'), plannerAgent()],
