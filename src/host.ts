@@ -193,7 +193,7 @@ export const open = (focusTask?: string, restored?: vscode.WebviewPanel) => {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${w.cspSource} data:; style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${u('board.css')}"></head>
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
-<script nonce="${nonce}" src="${u('status.js')}"></script><script nonce="${nonce}" src="${u('board.js')}"></script></body></html>`;
+${['status.js', 'board.js', 'drawer.js', 'dialogs.js'].map(f => `<script nonce="${nonce}" src="${u(f)}"></script>`).join('')}</body></html>`;
     const sink: Sink = m => void w.postMessage(m);
     sinks.add(sink);
     w.onDidReceiveMessage(m => handle(m).catch(e => vscode.window.showErrorMessage(e.message)));

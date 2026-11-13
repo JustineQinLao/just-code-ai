@@ -86,7 +86,7 @@
   /* ---------- lanes and what each card says ---------- */
   // Column and next step live in status.js (shared with the tests).
   const lane = t => window.JCStatus.lane(t, S.settings);
-  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: openTask, dur, lastTool });
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, dur, lastTool });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */
@@ -97,8 +97,8 @@
       h('div', { id: 'projects', class: 'projects' }),
       h('div', { class: 'spacer' }),
       h('div', { id: 'meter', class: 'meter' }),
-      btn('⚙', () => settings(), 'ghost icon', 'Settings'),
-      btn('?', () => guide(), 'ghost icon', 'Guide')),
+      btn('⚙', () => JC.settings(), 'ghost icon', 'Settings'),
+      btn('?', () => JC.guide(), 'ghost icon', 'Guide')),
     h('div', { id: 'banners' }),
     h('section', { class: 'add' },
       h('div', { class: 'addrow' },
@@ -263,7 +263,7 @@
         btn('+ Add a project folder', () => post('addProject'), 'primary')));
       return;
     }
-    renderProjects(); renderMeter(); renderBanners(); renderAddOptions(); renderToolbar(); renderProgress(); renderLanes(); renderDrawer();
+    renderProjects(); renderMeter(); renderBanners(); renderAddOptions(); renderToolbar(); renderProgress(); renderLanes(); JC.renderDrawer();
   }
 
   function renderProjects() {
@@ -278,7 +278,7 @@
   function setupPill() {
     const st = initState(), pr = S.project || {};
     const has = [['project.md', pr.projectMd], ['DESIGN.md', pr.designMd]].map(([n, ok]) => `${ok ? '✓' : '✗'} ${n}`).join('\n');
-    if (st.running) return h('span', { class: 'pill run', title: 'Claude is setting up this project. Open the task to answer its questions.', onclick: () => openTask(st.running.id) }, '◌ Setting up…');
+    if (st.running) return h('span', { class: 'pill run', title: 'Claude is setting up this project. Open the task to answer its questions.', onclick: () => JC.openTask(st.running.id) }, '◌ Setting up…');
     if (st.done) return h('span', { class: 'pill ok', title: `Set up for Claude\n${has}` }, '✓ Set up');
     return h('span', { class: 'pill warn', title: `Not set up for Claude\n${has}\n\nClick to set it up.`, onclick: () => post('initialize') }, '● Not set up');
   }
@@ -314,12 +314,12 @@
     }
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
-      btn('Answer', () => openTask(init.running.id), 'primary')));
+      btn('Answer', () => JC.openTask(init.running.id), 'primary')));
     else if (st?.ready && !init.done && !init.running && !initLater[S.root]) out.push(h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'This project is not set up for Claude yet. '),
       `It is missing ${andList(init.missing)}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. Tasks then follow your conventions and come with a "Done when" checklist.`),
       btn('Set up project', () => post('initialize'), 'primary'), btn('Not now', () => { initLater[S.root] = true; remember(); render(); }, 'ghost', 'Hide for this project. The "Not set up" label at the top still sets it up.')));
     if (st?.ready && !S.guideSeen) out.push(h('div', { class: 'banner info' }, h('b', {}, 'New here? '), 'Add a task above and press ⌘/Ctrl+Enter. Claude works on its own branch; you answer on the card and merge when it passes review.',
-      btn('2-minute guide', () => guide(), 'ghost'), btn('Got it', () => { S.guideSeen = true; post('guideSeen'); render(); }, 'ghost')));
+      btn('2-minute guide', () => JC.guide(), 'ghost'), btn('Got it', () => { S.guideSeen = true; post('guideSeen'); render(); }, 'ghost')));
     $('#banners').replaceChildren(...out);
   }
 
@@ -357,71 +357,29 @@
       h('select', { onchange: e => { view = e.target.value; remember(); render(); } },
         h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
         ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
-      btn('+ Sprint', () => newSprint(), 'ghost'),
+      btn('+ Sprint', () => JC.newSprint(), 'ghost'),
       sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
       sprint?.branch ? h('span', { class: 'muted small', title: `Tasks in ${sprint.name} merge into ${sprint.branch}. When the last one merges, it merges into ${sprint.target}.` }, `⎇ ${sprint.branch} → ${sprint.target}`) : '',
       sprint?.branch && tasks.length && tasks.every(t => t.status === 'done') ? btn(`Merge sprint into ${sprint.target}`, () => post('mergeSprint', { sprintId: sprint.id }), 'ghost') : '',
       view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') ? btn('Clear backlog…', () => post('clearBacklog'), 'ghost', 'Archive every idle backlog task (asks first; undo with Show archived tasks)') : '',
       sprint ? btn('Delete sprint…', () => post('deleteSprint', { sprintId: sprint.id }), 'ghost', 'Remove this sprint (asks first). Its tasks move to the Backlog') : '',
-      btn('✦ Plan', () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
-      sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
-      btn('🎨 Design', () => designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
-      btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
-      (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
+      btn('✦ Plan', () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
+      sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
+      btn('🎨 Design', () => JC.designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
+      btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => JC.artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
+      (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       h('div', { class: 'spacer' }),
-      q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
-        (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
+      q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); JC.openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
+        (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
       ready.length ? btn(`✓ Merge ready (${ready.length})`, () => post('mergeReady', { ids: ready.map(t => t.id) })) : '',
       btn(`▶ Run all${todo.length ? ` (${todo.length})` : ''}`, () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
-      btn('🕘', () => historyDialog(), 'ghost icon', 'Prompt history: every prompt you sent, and each session'),
-      btn('⋯', () => moreMenu(), 'ghost icon', 'Agent map, report, history, archived tasks'));
+      btn('🕘', () => JC.historyDialog(), 'ghost icon', 'Prompt history: every prompt you sent, and each session'),
+      btn('⋯', () => JC.moreMenu(), 'ghost icon', 'Agent map, report, history, archived tasks'));
   }
 
-  /* ---------- prompt history ---------- */
-  // Every prompt you sent (new task, message to a task, planning request), newest first, with each session's
-  // conversation one click away. Kept after a task is merged or deleted.
-  let history, historyFor, historyQuery = '', sessionView;
-  function historyDialog(taskId) {
-    historyFor = taskId; sessionView = undefined; history = undefined;
-    post('history');
-    drawHistory();
-  }
-  function drawHistory() {
-    if (sessionView) {
-      const { title, steps: list } = sessionView;
-      dialog(`Session · ${title}`, btn('← Back to history', () => { sessionView = undefined; drawHistory(); }, 'ghost'),
-        list ? (list.length ? logEl(list) : h('p', { class: 'muted' }, 'This session\'s transcript is no longer on this computer.')) : h('p', { class: 'muted' }, 'Loading…'));
-      return;
-    }
-    const kinds = { task: 'New task', message: 'Message', plan: 'Plan' };
-    const q = historyQuery.toLowerCase();
-    const items = (history || []).filter(p => (!historyFor || p.taskId === historyFor) && (!q || `${p.title || ''}\n${p.text}`.toLowerCase().includes(q)));
-    let search;
-    const d = dialog(historyFor ? `History · ${(S.board.tasks.find(t => t.id === historyFor) || {}).title || 'task'}` : 'Prompt history',
-      h('div', { class: 'row' }, search = h('input', { class: 'grow', placeholder: 'Search your prompts', value: historyQuery, 'aria-label': 'Search your prompts',
-        oninput: e => { historyQuery = e.target.value; drawHistory(); } }),
-        historyFor ? btn('All tasks', () => { historyFor = undefined; drawHistory(); }, 'ghost') : ''),
-      !history ? h('p', { class: 'muted' }, 'Loading…') : !items.length ? h('p', { class: 'muted' }, q ? 'No prompt matches.' : 'No prompts yet.') :
-        h('div', { class: 'hist' }, items.slice(0, 300).map(p => h('div', { class: 'hitem' },
-          h('div', { class: 'row small' }, h('span', { class: `tag k-${p.kind}` }, kinds[p.kind] || p.kind),
-            p.kind !== 'task' && p.title ? h('b', {}, p.title) : '',
-            h('span', { class: 'muted' }, new Date(p.time).toLocaleString()),
-            p.taskId && !p.exists ? h('span', { class: 'muted' }, '· task deleted') : p.status === 'done' ? h('span', { class: 'muted' }, '· done') : ''),
-          h('div', { class: 'htext', title: 'Click to show all', onclick: e => e.currentTarget.classList.toggle('full') }, p.text),
-          h('div', { class: 'acts' },
-            p.exists ? btn('Open task', () => { $('#dlg').close(); openTask(p.taskId); }, 'ghost') : '',
-            ...p.sessions.map((sid, i) => btn(p.sessions.length > 1 ? `Conversation ${i + 1}` : 'Conversation', () => {
-              sessionView = { id: sid, title: p.title || kinds[p.kind] }; post('sessionLog', { sessionId: sid }); drawHistory();
-            }, 'ghost', `Session ${sid.slice(0, 8)}`)),
-            btn('Copy', () => post('copy', { text: p.text }), 'ghost'),
-            btn('Use again', () => { $('#dlg').close(); const [first, ...rest] = p.text.split('\n\n'); $('#title').value = first; $('#desc').value = rest.join('\n\n'); if (rest.length) toggleMore(true); $('#title').focus(); }, 'ghost', 'Put it in the add box to send again'))))));
-    if (document.activeElement !== search && d.open) { search.focus(); search.setSelectionRange(search.value.length, search.value.length); }
-  }
-
-  // Sprint progress: the sprint on screen (or the active one in All tasks), as a bar split by lane, plus its goal.
   const costOf = l => l.reduce((n, t) => n + (t.costUsd || 0), 0);
   const sprintBudget = id => { const spent = costOf(S.board.tasks.filter(t => t.sprintId === id)); return spent || S.policy ? { spent, max: S.policy?.policy.maxCostUsd.sprint || 0 } : undefined; };
   function renderProgress() {
@@ -463,8 +421,8 @@
     const nx = next(t);
     const el = h('article', { class: `card tone-${nx.tone}${open === t.id ? ' sel' : ''}`, draggable: t.status === 'todo' ? 'true' : undefined, 'data-id': t.id,
       tabindex: '0', role: 'button', 'aria-label': `${t.title}: ${nx.text}`,
-      onkeydown: e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); openTask(t.id); } },
-      onclick: () => openTask(t.id), ondragstart: () => { dragId = t.id; }, ondragend: () => { dragId = undefined; },
+      onkeydown: e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); JC.openTask(t.id); } },
+      onclick: () => JC.openTask(t.id), ondragstart: () => { dragId = t.id; }, ondragend: () => { dragId = undefined; },
       ondragover: e => { if (dragId && dragId !== t.id && t.status === 'todo') e.preventDefault(); },
       ondrop: e => { if (dragId && dragId !== t.id && t.status === 'todo') { e.stopPropagation(); post('reorder', { id: dragId, before: t.id }); } } },
       h('div', { class: 'ctop' }, n ? h('span', { class: 'num' }, n) : '', h('span', { class: 'ttl' }, t.title)),
@@ -477,664 +435,104 @@
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
-      ...(t.asks || []).map(a => askBox(t, a)),
+      ...(t.asks || []).map(a => JC.askBox(t, a)),
       nx.actions.length ? h('div', { class: 'acts' }, nx.actions.map(([l, fn, style], i) => btn(l, fn, i === 0 ? 'primary' : style || 'ghost'))) : '');
     return el;
   }
 
-  /* ---------- approvals and questions ---------- */
-  function askBox(t, a) {
-    if (a.kind === 'question') return questionBox(t, a);
-    if (a.kind === 'plan') return planBox(t, a);
-    let reason;
-    const box = h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      h('div', { class: 'askhead' }, h('b', {}, a.tool), a.reason ? h('span', { class: 'muted small' }, ` · ${a.reason}`) : ''),
-      a.detail ? h('pre', { class: 'askdetail' }, a.detail) : '',
-      h('div', { class: 'acts' },
-        btn('Allow', () => post('answer', { id: t.id, ask: a.id, choice: 'allow' }), 'primary'),
-        a.always ? btn(a.always, () => post('answer', { id: t.id, ask: a.id, choice: 'always' }), '', 'Remembered for every task in this project (⚙ Settings lists them)') : '',
-        btn('Deny…', () => { reason.hidden = !reason.hidden; reason.querySelector('input').focus(); }, 'danger')),
-      reason = h('div', { class: 'row', hidden: true },
-        h('input', { class: 'grow', placeholder: 'Tell Claude why, or what to do instead (optional)', onkeydown: e => { if (e.key === 'Enter') send(); } }),
-        btn('Deny', () => send(), 'danger')));
-    function send() { post('answer', { id: t.id, ask: a.id, choice: 'deny', message: reason.querySelector('input').value }); }
-    return box;
-  }
-
-  // Plan mode: Claude's plan, to build as is or send back with changes.
-  function planBox(t, a) {
-    let note;
-    const build = S.settings.defaultMode === 'plan' ? 'auto' : S.settings.defaultMode;
-    return h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      h('div', { class: 'askhead' }, h('b', {}, 'Plan ready'), h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
-      h('pre', { class: 'askdetail plan' }, a.plan || '(empty plan)'),
-      h('div', { class: 'acts' },
-        btn(`Build it (${modeName(build)})`, () => { post('answer', { id: t.id, ask: a.id, choice: 'allow' }); post('setMode', { id: t.id, mode: build }); }, 'primary'),
-        btn('Revise…', () => { note.hidden = !note.hidden; note.querySelector('input').focus(); })),
-      note = h('div', { class: 'row', hidden: true },
-        h('input', { class: 'grow', placeholder: 'What should change in the plan?', onkeydown: e => { if (e.key === 'Enter') send(); } }), btn('Send', () => send())));
-    function send() { post('answer', { id: t.id, ask: a.id, choice: 'deny', message: `Revise the plan: ${note.querySelector('input').value || 'keep planning'}` }); }
-  }
-
-  function questionBox(t, a) {
-    const reply = x => t.id === '__planner' ? post('plannerAnswer', x) : post('answer', { id: t.id, ...x });
-    const picked = a.questions.map(() => new Set());
-    const other = a.questions.map(() => '');
-    const box = h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      a.questions.map((q, i) => h('div', { class: 'q' },
-        h('div', {}, q.header ? h('span', { class: 'tag' }, q.header) : '', ' ', h('b', {}, q.question)),
-        h('div', { class: 'opts' }, q.options.map(o => h('label', { class: 'opt' },
-          h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, onchange: e => {
-            if (!q.multiSelect) picked[i].clear();
-            e.target.checked ? picked[i].add(o.label) : picked[i].delete(o.label);
-          } }),
-          h('span', { class: 'otext' }, h('span', { class: 'olabel' }, o.label), o.description ? h('span', { class: 'odesc' }, o.description) : '',
-            o.preview ? h('pre', { class: 'opreview' }, o.preview) : '')))),
-        h('input', { class: 'other', placeholder: 'Or type your own answer', oninput: e => { other[i] = e.target.value; } }))),
-      h('div', { class: 'acts' },
-        btn('Answer', () => {
-          const answers = {};
-          a.questions.forEach((q, i) => { answers[q.question] = other[i].trim() || [...picked[i]].join(', '); });
-          if (Object.values(answers).some(v => !v)) return;
-          reply({ ask: a.id, choice: 'allow', answers });
-        }, 'primary'),
-        btn('Skip', () => reply({ ask: a.id, choice: 'deny', message: 'The user skipped the question. Use your best judgement.' }), 'ghost')));
-    return box;
-  }
-
-  /* ---------- task drawer ---------- */
-  function openTask(id, t2) {
-    open = id; if (t2) tab = t2;
-    agentView = undefined; delete agentsSaved[id];
-    remember();
-    post('watch', { id });
-    if (tab === 'changes') post('changes', { id });
-    render();
-  }
-  function closeTask() { open = undefined; remember(); post('watch', { id: undefined }); render(); }
-
-  const drawer = $('#drawer');
-  const msgImages = [], msgThumbs = h('div', { class: 'imgs' }), msgPaste = imagePaste(msgImages, msgThumbs);
-  const msg = complete(h('textarea', { id: 'msg', rows: 2, placeholder: 'Message Claude…  / skills · @ files · Enter sends · Shift+Enter new line · paste screenshots', onpaste: msgPaste.onpaste, onkeydown: e => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMsg(); }
-  } }));
-  function sendMsg() {
-    const text = msg.value.trim() || (msgImages.length ? 'See the screenshot(s).' : '');
-    if (!text || !open) return;
-    const images = msgImages.splice(0);
-    post(open === '__planner' ? 'plannerSay' : 'say', open === '__planner' ? { text, images } : { id: open, text, images });
-    msg.value = ''; msgPaste.draw();
-  }
-  const body = h('div', { class: 'dbody' });
-  const head = h('div', { class: 'dhead' });
-  drawer.append(head, body, h('div', { class: 'dfoot' }, h('div', { class: 'col grow' }, msgThumbs, msg), h('div', { class: 'col' }, btn('Send', sendMsg, 'primary'), btn('Stop step', () => post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !$('#dlg').open) closeTask(); });
-
-  function renderDrawer() {
-    if (open === '__planner') return renderPlanner();
-    const t = open && S.board.tasks.find(x => x.id === open);
-    drawer.classList.toggle('on', !!t);
-    document.body.classList.toggle('drawer-open', !!t);
-    if (!t) return;
-    const nx = next(t);
-    const live = t.run && t.run !== 'idle';
-    const menu = [
-      t.status === 'todo' && ['▶ Run', () => post('run', { id: t.id })],
-      live && ['■ Stop', () => post('stop', { id: t.id })],
-      t.sessionId && !t.remote && ['📱 Continue on phone', () => post('remote', { id: t.id })],
-      t.sessionId && !t.remote && ['⌨ Open in terminal', () => post('claudeCode', { id: t.id })],
-      t.worktree && ['Changes', () => { tab = 'changes'; post('changes', { id: t.id }); render(); }],
-      t.worktree && t.status !== 'done' && ['✓ Merge', () => post('merge', { id: t.id })],
-      t.worktree && !t.reviewing && t.status === 'review' && ['Review again', () => post('review', { id: t.id })],
-      t.reviewing && ['Cancel review', () => post('cancelReview', { id: t.id })],
-      t.conflicts?.length && ['Mark resolved', () => post('resolved', { id: t.id })],
-      t.worktree && ['Open its folder', () => post('openFolder', { id: t.id })],
-      t.worktree && !t.pr && ['Push PR', () => post('remotePr', { id: t.id })],
-      t.pr && ['Open PR', () => post('openUrl', { url: t.pr })],
-      (t.worktree || (t.where === 'direct' && !t.init && t.status !== 'done' && t.directFiles?.length)) && ['Discard work', () => post('discard', { id: t.id }), 'danger'],
-      [t.archived ? 'Unarchive' : 'Archive', () => post('archive', { id: t.id })],
-      ['Delete', () => post('delete', { id: t.id }), 'danger'],
-    ].filter(Boolean);
-    head.replaceChildren(
-      h('div', { class: 'row' }, h('h3', { class: 'grow' }, t.title), btn('×', closeTask, 'ghost icon', 'Close (Esc)')),
-      h('div', { class: `next ${nx.tone}` }, nx.text, ...nx.actions.slice(0, 2).map(([l, fn], i) => btn(l, fn, i === 0 ? 'primary' : 'ghost'))),
-      h('div', { class: 'row small' },
-        h('label', {}, 'Permissions ', h('select', { onchange: e => post('setMode', { id: t.id, mode: e.target.value }), disabled: !!S.settings?.bypassAll, title: S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
-          MODES.map(([v, l, d]) => h('option', { value: v, title: d, selected: (S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, l)))),
-        t.modeNote ? h('span', { class: 'warn' }, t.modeNote) : '',
-        t.branch ? h('span', { class: 'muted' }, `⎇ ${t.branch}`) : '',
-        t.modelUsed ? h('span', { class: 'muted', title: t.modelUsed }, modelName(t.modelUsed)) : '',
-        t.output ? h('span', { class: 'muted' }, `${tok(t.context + t.output)}`) : ''),
-      h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => btn(l, f, c || 'ghost'))),
-      ...(t.asks || []).map(a => askBox(t, a)),
-      h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['agents', `Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]
-        .map(([k, l]) => h('a', { class: tab === k ? 'on' : '', onclick: () => { tab = k; if (k === 'changes') post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) post('shots', { id: t.id }); render(); } }, l))));
-    body.replaceChildren(...drawerBody(t));
-    msg.placeholder = t.status === 'todo' ? 'Run the task first, or edit it under Details' : t.remote ? 'This task is in Remote Control' : 'Message Claude…  Enter sends · Shift+Enter new line';
-  }
-
-  function drawerBody(t) {
-    if (tab === 'agents') {
-      if (agentView?.task === t.id) return agentDetail(t);
-      const live = (t.agents || []).filter(n => n.id !== 'main');
-      if (!agentsSaved[t.id]) post('savedAgents', { id: t.id });
-      const extra = (agentsSaved[t.id] || []).filter(a => !live.some(n => n.toolUseId && n.toolUseId === a.toolUseId))
-        .map(a => ({ id: `saved-${a.id}`, parent: 'main', name: a.name, description: a.description, status: a.finished ? 'completed' : 'stopped', key: a.id, sessionId: a.sessionId }));
-      return [agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
-        h('p', { class: 'muted small' }, 'Click an agent for its whole conversation.')];
-    }
-    if (tab === 'changes') {
-      const files = changes[t.id];
-      const merged = t.status === 'done' && !t.worktree && t.branch && t.where !== 'direct';
-      if (!t.worktree && !merged) return [h('p', { class: 'muted' }, t.where === 'direct' ? 'This task runs in the project folder: its changes are in your working tree.' : 'No changes yet.')];
-      if (!files) return [h('p', { class: 'muted' }, 'Loading…')];
-      if (!files.length) return [h('p', { class: 'muted' }, merged ? 'Could not find this task\'s merge in git history.' : 'No changes on this branch yet.')];
-      return [merged ? h('p', { class: 'muted small' }, 'What the merge changed. Click a file for its diff; Open shows it from the project folder.') : '',
-        h('ul', { class: 'files' }, files.map(f => h('li', { onclick: () => post('diff', { id: t.id, file: f.file }), title: 'Open side-by-side diff (PDFs and other documents open in their app)' },
-          h('span', { class: `st st-${f.status}` }, f.status), h('span', { class: 'grow' }, f.file),
-          f.status !== 'D' ? btn('Open', e => { e.stopPropagation(); post('openFile', { id: t.id, file: f.file }); }, 'ghost small', 'Open the file') : '')))];
-    }
-    if (tab === 'review') {
-      const r = t.review;
-      if (!r) return [h('p', { class: 'muted' }, t.reviewing ? 'The AI reviewer is testing this change…' : S.settings.review.auto ? 'Reviewed automatically when Claude finishes.' : 'AI review is off (⚙ Settings).'), t.worktree && !t.reviewing ? btn('Review now', () => post('review', { id: t.id })) : ''];
-      return [
-        h('p', {}, h('b', {}, { pass: '✓ Passed', fail: '✗ Issues found', error: 'Review could not run', running: 'Reviewing…' }[r.state]), r.risk === 'critical' ? h('span', { class: 'warn' }, ' · flagged critical') : '', h('span', { class: 'muted' }, ` · round ${r.attempts || 1}`)),
-        r.level ? h('p', { class: 'muted small' }, r.level === 'none' ? `No AI review needed: ${r.why}.` : `${r.level === 'light' ? 'Light review (lighter model)' : 'Full review'}${r.why ? `: ${r.why}` : ''}.`) : '',
-        r.error ? h('pre', { class: 'err' }, r.error) : '',
-        r.fixNote ? h('details', { class: 'fixnote' }, h('summary', {}, 'Claude\'s reply to the last round'), h('p', { class: 'small' }, r.fixNote)) : '',
-        r.issues?.length ? h('ol', { class: 'issues' }, r.issues.map(i => h('li', { class: i.accepted ? 'accepted' : '' },
-          h('div', {}, i.text),
-          h('div', { class: 'row small' },
-            h('span', { class: 'muted' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Seen in ${i.rounds} rounds` : 'New this round'),
-            !i.accepted && r.state === 'fail' && !REMOTE ? btn('Accept', () => post('acceptIssues', { id: t.id, keys: [i.key] }), 'ghost small', 'Does not block the merge: the reviewer stops reporting it') : '',
-            !i.accepted && r.state === 'fail' ? btn('Ask Claude to fix this one', () => post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
-        r.tested?.length ? h('p', { class: 'muted small' }, 'Tested: ', r.tested.join(' · ')) : '',
-        r.state === 'fail' ? h('div', { class: 'row' },
-          btn('Send open issues to Claude', () => post('sendIssues', { id: t.id }), 'primary'),
-          !REMOTE ? btn(`Accept all and ${t.where === 'direct' && !t.init ? 'finish' : 'merge'}`, () => post('acceptIssues', { id: t.id, merge: true }), 'ghost') : '') : '',
-        h('div', { class: 'shots' }, (shots[t.id] || []).map(s => h('img', { src: s.data, title: s.name }))),
-      ];
-    }
-    if (tab === 'details') {
-      const editable = t.status === 'todo';
-      let title, desc;
-      return [
-        h('label', { class: 'blk' }, 'Title', title = h('input', { value: t.title, disabled: !editable })),
-        h('label', { class: 'blk' }, 'Details', desc = h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
-        editable ? (() => {
-          const others = S.board.tasks.filter(o => o.id !== t.id && !o.archived && o.status !== 'done' || (t.dependsOn || []).includes(o.id));
-          return others.length ? h('details', { class: 'adv', open: !!t.dependsOn?.length }, h('summary', {}, `After${t.dependsOn?.length ? ` (${t.dependsOn.length})` : ''}: Run all starts this task only when these are done`),
-            h('div', { class: 'deps' }, others.map(o => h('label', { class: 'chip' }, h('input', { type: 'checkbox', checked: (t.dependsOn || []).includes(o.id),
-              onchange: e => { const cur = new Set(t.dependsOn || []); e.target.checked ? cur.add(o.id) : cur.delete(o.id); post('editTask', { id: t.id, patch: { dependsOn: [...cur] } }); } }), ' ', o.title.slice(0, 60))))) : '';
-        })() : '',
-        editable ? h('div', { class: 'row' }, btn('Save', () => post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary'),
-          h('span', { class: 'muted small' }, 'To rework it with Claude, use ✦ Plan.')) : h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
-        t.images?.length ? h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
-        t.checks?.results?.length ? h('div', {}, h('h4', {}, `Checks · ${t.checks.state === 'pass' ? 'pass' : 'fail'}${t.checks.rounds ? ` · fix round ${t.checks.rounds}` : ''}`),
-          h('ul', { class: 'checks' }, t.checks.results.map(r => h('li', { class: r.ok ? 'ok' : r.preexisting ? 'pre' : 'bad' },
-            h('span', { class: 'dot' }, r.ok ? '✓' : r.preexisting ? '○' : '✗'), h('code', {}, r.cmd), h('span', { class: 'muted small' }, ` ${Math.round(r.ms / 1000)}s${r.preexisting ? ' · fails on the base branch too: ignored' : ''}${r.timedOut ? ' · timed out' : ''}`)))),
-          btn('Open log', () => post('openArtifact', { id: t.id, which: 'checks' }), 'ghost')) : '',
-        t.output === 'artifact' ? h('div', { class: 'row small' }, h('b', {}, 'Artifact '), t.artifactUrl
-          ? [h('a', { onclick: () => post('openUrl', { url: t.artifactUrl }), title: 'Open in your browser' }, t.artifactUrl), btn('Copy link', () => post('copy', { text: t.artifactUrl }), 'ghost')]
-          : h('span', { class: 'muted' }, t.publishing ? 'publishing…' : 'not published yet'),
-          t.status !== 'todo' ? btn(t.artifactUrl ? 'Publish again' : 'Publish', () => post('publishArtifact', { id: t.id }), 'ghost') : '') : '',
-        t.files?.length ? h('p', { class: 'small' }, 'Attached: ', t.files.map(base).join(', ')) : '',
-        (arts => arts.length ? h('p', { class: 'small' }, 'Artifacts: ', ...arts.map((e, i) => [i ? ', ' : '', h('a', { onclick: () => post('openUrl', { url: e.url }), title: e.url }, `${e.title || e.url.replace(/^https?:\/\//, '')} (${e.kind === 'output' ? 'published' : 'used'})`)])) : '')((S.registry || []).filter(e => e.taskIds.includes(t.id))),
-        t.sources ? h('p', { class: 'small' }, 'Based on: ', (S.sources || []).filter(s => t.sources.includes(s.id)).map(srcLabel).join(', ') || 'no project sources') : '',
-        h('details', { class: 'adv' }, h('summary', {}, 'Files Claude wrote, logs and tokens'),
-          h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => btn(l, () => post('openArtifact', { id: t.id, which: k }), 'ghost')),
-            t.worktree ? btn('Setup log', () => post('openArtifact', { id: t.id, which: 'setup' }), 'ghost') : ''),
-          usageTotal(t) ? h('pre', { class: 'small' }, usageTitle(t) + '\nCached re-reads are context re-sent at every step and cost about a tenth.') : ''),
-        btn('🕘 Prompts and sessions', () => historyDialog(t.id), 'ghost', 'Every prompt you sent this task, and each session\'s conversation'),
-        h('p', { class: 'muted small' }, `Created ${new Date(t.created).toLocaleString()}${t.sessionId ? ` · session ${t.sessionId.slice(0, 8)}` : ''}${t.costUsd ? ` · ~$${t.costUsd.toFixed(2)} at API prices` : ''}`),
-      ];
-    }
-    const list = steps[t.id] || [];
-    if (!list.length) return [h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
-    return [logEl(list)];
-  }
-
-  function logEl(list) {
-    const el = h('div', { class: 'log' }, list.map(s => h('div', { class: `step ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` },
-      h('span', { class: 'k' }, { user: 'you', say: 'claude', tool: s.agent ? `↳ ${s.agent}` : 'tool', result: '', error: 'error', info: 'note' }[s.kind]),
-      s.kind === 'say' || s.kind === 'user' ? h('div', { class: 'txt' }, s.text) : h('code', {}, s.text))));
-    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
-    return el;
-  }
-
-  /* ---------- planner / editor chat ---------- */
-  // What the planner is doing this turn: a moving bar while it works, then where the plan stands.
-  function planProgress(p, running) {
-    const since = p.turnAt || 0;
-    const turn = (p.steps || []).filter(x => x.time && Date.parse(x.time) >= since);
-    const tools = turn.filter(x => x.kind === 'tool');
-    const reads = tools.filter(x => /^(Read|Grep|Glob)\b/.test(x.text)).length;
-    const stage = p.asks?.length ? 'Waiting for your answer' : !running ? (p.proposals ? 'Plan ready: review and apply below' : p.note ? 'Applied' : 'Your turn')
-      : turn.some(x => x.kind === 'say') ? 'Writing the proposal' : tools.length ? 'Reading the code' : 'Starting';
-    const steps = ['Reading the code', 'Writing the proposal', 'Plan ready: review and apply below'];
-    const at = steps.indexOf(stage);
-    return h('div', { class: 'planprog' },
-      h('div', { class: `bar${running && !p.asks?.length ? ' busy' : ''}`, role: 'progressbar', 'aria-label': 'Planning progress', 'aria-valuetext': stage },
-        h('i', { class: 'seg run', style: `width:${running ? Math.max(15, (at + 1) * 33) : p.proposals ? 100 : 0}%` })),
-      h('div', { class: 'small muted' }, stage, running ? ` · ${ago(since || Date.now())}` : '', tools.length ? ` · ${reads} file reads, ${tools.length} tool uses` : '',
-        running && tools.length ? ` · now: ${tools[tools.length - 1].text.slice(0, 60)}` : ''));
-  }
-
-  const pKeep = {}; // which proposals the user has unticked
-  function renderPlanner() {
-    const p = S.planner;
-    drawer.classList.add('on');
-    document.body.classList.add('drawer-open');
-    if (!p) {
-      head.replaceChildren(h('div', { class: 'row' }, h('h3', { class: 'grow' }, 'Planning'), btn('×', closeTask, 'ghost icon', 'Close')));
-      body.replaceChildren(h('p', { class: 'muted' }, S.plannerPhase || 'Starting the planning chat…'),
-        S.plannerPhase ? btn('Show terminal', () => post('showSaveTerminal', {}), 'ghost', 'Open the terminal saving it, e.g. if it asks for approval') : '');
-      return;
-    }
-    const running = p.run && p.run !== 'idle';
-    head.replaceChildren(
-      h('div', { class: 'row' }, h('h3', { class: 'grow' }, p.sprint ? `Editing ${p.sprint}` : p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
-        btn('×', closeTask, 'ghost icon', 'Close (the chat keeps running)')),
-      h('div', { class: `next ${p.asks?.length ? 'warn' : running ? 'run' : 'muted'}` }, p.asks?.length ? 'Claude has a question for you (below).' : running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
-        p.model ? h('span', { class: 'muted small', title: p.model }, ` · ${modelName(p.model)}`) : '',
-        p.context ? h('span', { class: 'muted small' }, ` · ${tok(p.context)}`) : ''),
-      planProgress(p, running));
-    const prop = p.proposals;
-    const panel = [];
-    if (p.note) panel.push(h('div', { class: 'applied' }, '✓ ', p.note));
-    for (const a of p.asks || []) panel.push(questionBox({ id: '__planner' }, a));
-    if (prop) {
-      const cur = id => S.board.tasks.find(t => t.id === id);
-      const targets = (p.targets || []).map(cur).filter(Boolean);
-      const refs = new Set(prop.map(x => x.ref).filter(Boolean));
-      const others = new Set(p.others || []);
-      const changes = prop.map((c, i) => {
-        const was = c.ref ? cur(c.ref) : undefined;
-        const same = was && was.title === c.title && (was.description || '') === (c.description || '');
-        // A started or done task of the sprint: a done one goes back to To do, a started one gets the change as a message.
-        const kind = !was ? 'add' : same ? 'same' : others.has(was.id) && was.status !== 'todo' ? (was.status === 'done' ? 'reopen' : 'amend') : 'edit';
-        return { ...c, kind, key: `c${i}`, before: was?.title };
-      });
-      const removes = targets.filter(t => !refs.has(t.id)).map((t, i) => ({ id: t.id, title: t.title, description: t.description, kind: 'remove', key: `r${i}` }));
-      const all = [...changes, ...removes];
-      all.forEach(c => { if (!(c.key in pKeep)) pKeep[c.key] = c.kind !== 'same'; });
-      const nChange = all.filter(c => c.kind !== 'same').length;
-      panel.push(h('div', { class: 'proppanel' },
-        h('div', { class: 'row' }, h('h4', { class: 'grow' }, `Proposed tasks (${prop.length})`), nChange ? h('span', { class: 'muted small' }, `${nChange} change${nChange === 1 ? '' : 's'}`) : ''),
-        h('div', { class: 'reflist' }, all.map(c => h('label', { class: `refrow ${c.kind}` },
-          c.kind === 'same' ? h('span', { class: 'rspace' }) : h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; } }),
-          h('div', { class: 'rbody' }, h('div', {}, h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', h('b', {}, c.title), c.sprint ? h('span', { class: 'tag' }, ` ${c.sprint}`) : ''),
-            c.kind === 'reopen' ? h('div', { class: 'small warn' }, 'Done, but must change: goes back to To do and is built again on top of the merged work.') : '',
-            c.kind === 'amend' ? h('div', { class: 'small warn' }, 'Already started: the new text is saved and sent to its Claude as a message.') : '',
-            c.before && c.before !== c.title ? h('div', { class: 'small muted strike' }, c.before) : '',
-            c.description ? h('div', { class: 'small muted' }, c.description) : '')))),
-        h('div', { class: 'acts' },
-          nChange ? btn('Apply the ticked tasks', () => {
-            post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
-            for (const k in pKeep) delete pKeep[k];
-          }, 'primary') : h('span', { class: 'muted small' }, 'No changes to apply yet.'))));
-    }
-    body.replaceChildren(logEl(p.steps || []), ...panel);
-    msg.placeholder = 'Message Claude to refine the tasks…  Enter sends';
-  }
-
-  /* ---------- agent map ---------- */
-  // One agent's details and conversation, like Claude Code's agent map: status, type, model, who spawned it, time,
-  // tokens, its final answer, then every step.
-  function agentDetail(t) {
-    const v = agentView, n = v.node, log = v.log;
-    const ms = log?.ms || n.ms || (n.started ? Date.now() - n.started : 0), tokens = log?.tokens || n.tokens;
-    return [
-      h('div', { class: 'row' }, btn('←', () => { agentView = undefined; renderDrawer(); }, 'ghost icon', 'Back to the agents'), h('span', { class: `sdot s-${n.status}` }), h('b', {}, n.main ? 'Task session' : n.description || n.name)),
-      h('p', { class: 'muted small' }, [{ running: 'Running', completed: 'Finished', failed: 'Failed', stopped: 'Stopped', waiting: 'Needs you', idle: 'Idle' }[n.status] || n.status,
-        n.main ? '' : n.name, log?.model ? modelName(log.model) : t.modelUsed ? modelName(t.modelUsed) : ''].filter(Boolean).join(' · ')),
-      n.main ? '' : h('p', { class: 'muted small' }, 'Spawned by the main agent'),
-      h('p', { class: 'muted small' }, [ms ? ago(Date.now() - ms) : '', tokens ? tok(tokens) : ''].filter(Boolean).join(' · ')),
-      !log ? h('p', { class: 'muted' }, 'Loading…') : '',
-      log?.result ? h('div', { class: 'aresult' }, log.result) : '',
-      log && !log.steps?.length ? h('p', { class: 'muted' }, n.status === 'running' ? 'Its transcript appears as it works.' : 'No saved transcript for this agent.') : '',
-      log?.steps?.length ? h('details', { open: !log.result }, h('summary', {}, `Transcript · ${log.steps.length} steps`), logEl(log.steps)) : ''];
-  }
-  function openAgent(t, n) {
-    agentView = { task: t.id, node: n };
-    post('agentLog', { id: t.id, sessionId: n.sessionId || t.sessionId, agent: n.main ? 'main' : n.key || n.toolUseId || n.id });
-    renderDrawer();
-  }
-
-  function agentTree(groups, single) {
-    const row = (n, depth, extra = '', t) => h('div', { class: `node d${Math.min(depth, 4)} s-${n.status}${single && t ? ' click' : ''}`, onclick: single && t ? () => openAgent(t, n) : undefined, title: single && t ? 'Show its conversation' : undefined },
-      h('span', { class: 'sdot' }), h('div', { class: 'ninfo' }, h('b', {}, n.name), n.description && n.description !== n.name ? h('span', { class: 'muted' }, ` · ${n.description.slice(0, 90)}`) : '',
-        h('div', { class: 'muted small' }, [n.ms || n.started ? (n.status === 'running' ? ago(n.started) : ago(Date.now() - (n.ms || 0))) : '', n.tokens ? tok(n.tokens) : '', n.tools ? `${n.tools} tool uses` : '', n.last && n.status === 'running' ? `now: ${n.last}` : '', extra].filter(Boolean).join(' · ')),
-        n.summary ? h('div', { class: 'small' }, n.summary) : ''));
-    const out = [];
-    for (const g of groups) {
-      if (!single) out.push(h('h4', {}, g.name));
-      for (const t of g.tasks) {
-        const nodes = t.agents || [];
-        const kids = p => nodes.filter(n => n.parent === p);
-        const walk = (p, d) => kids(p).flatMap(n => [row(n, d, '', t), ...walk(n.id, d + 1)]);
-        const main = nodes.find(n => n.id === 'main');
-        const status = t.asks?.length ? 'waiting' : t.run === 'running' || t.run === 'starting' ? 'running' : main ? 'completed' : 'idle';
-        out.push(h('div', { class: 'tree', onclick: single ? undefined : () => { $('#dlg').close(); if (g.root !== S.root) post('root', { root: g.root }); openTask(t.id, 'agents'); } },
-          row({ ...(main || {}), main: true, name: single ? 'Task session' : t.title, description: single ? '' : t.status, status, started: main?.started }, 0, t.asks?.length ? 'needs you' : '', t),
-          walk('main', 1),
-          t.reviewing ? row({ name: 'AI reviewer', description: 'tests and reviews the diff', status: 'running', started: t.reviewing }, 1) : ''));
-      }
-    }
-    if (!out.length) out.push(h('p', { class: 'muted' }, 'No agents at work right now.'));
-    return h('div', { class: 'agentmap' }, out);
-  }
-
-  function agentMap() {
-    const groups = (S.all || []).filter(g => g.tasks.length);
-    const n = groups.reduce((a, g) => a + g.tasks.reduce((b, t) => b + Math.max(1, t.agents?.length || 0) + (t.reviewing ? 1 : 0), 0), 0);
-    dialog('Agent map', h('p', { class: 'muted' }, `${n} agent${n === 1 ? '' : 's'} across ${groups.length} project${groups.length === 1 ? '' : 's'} · click a task for details`), agentTree(groups, false));
-  }
-
-  /* ---------- dialogs ---------- */
-  function toast(text) {
-    const t = h('div', { class: 'toast', role: 'status', style: 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#333;color:#fff;padding:10px 16px;border-radius:8px;z-index:9999' }, text);
-    document.body.append(t); setTimeout(() => t.remove(), 2500);
-  }
-  // A dialog the host asked for (merge, bypass, discard, pick files, text input). Closing it any other way is a decline.
-  function bridged(m) {
-    const d = $('#dlg');
-    let done = false;
-    const reply = (extra) => { if (done) return; done = true; post('dialogReply', { id: m.id, ...extra }); };
-    const field = m.input ? h(m.input.multiline ? 'textarea' : 'input', { 'aria-label': m.input.label, rows: 4, style: 'width:100%;box-sizing:border-box' }) : null;
-    const finish = (extra) => { reply(extra); d.close(); };
-    dialog(m.title, h('p', {}, m.text || ''), field || '',
-      h('div', { class: 'acts' }, btn('Cancel', () => finish({ cancelled: true }), 'ghost'),
-        ...(m.buttons || ['OK']).map(b => btn(b, () => finish({ button: b, value: field ? field.value : undefined }), 'primary'))));
-    d.addEventListener('close', () => reply({ cancelled: true }), { once: true });
-  }
-  function dialog(title, ...content) {
-    const d = $('#dlg');
-    delete d.dataset.kind;
-    d.replaceChildren(h('div', { class: 'dlghead' }, h('h3', {}, title), btn('×', () => d.close(), 'ghost icon', 'Close')), h('div', { class: 'dlgbody' }, content));
-    if (!d.open) d.showModal();
-    return d;
-  }
-
-  function newSprint() {
-    let name, goal;
-    dialog('New sprint', name = h('input', { placeholder: 'Sprint name', value: `Sprint ${S.board.sprints.length + 1}` }), goal = h('input', { placeholder: 'Goal (optional)' }),
-      h('div', { class: 'acts' }, btn('Create', () => { if (name.value.trim()) { post('addSprint', { name: name.value.trim(), goal: goal.value }); $('#dlg').close(); } }, 'primary')));
-    name.select();
-  }
-
-  function openPlanner() { open = '__planner'; remember(); render(); }
-
-  // The one way to plan with Claude: new tasks from a goal, or rework To do tasks. With a sprint (✦ Edit sprint, or
-  // ✦ Plan while a sprint is shown), one prompt edits every not-started task in that sprint. Offers project setup
-  // first when the project has no Claude setup yet.
-  function planDialog(todoIds, sprint, editSprint = false) {
-    const pr = S.project || {};
-    const missing = [!pr.projectMd && 'a project description'].filter(Boolean);
-    const started = sprint ? S.board.tasks.filter(t => t.sprintId === sprint.id && !t.archived && !(t.status === 'todo' && !t.worktree)).length : 0;
-    const where = sprint ? ` in ${sprint.name}` : '';
-    let goal, rework, chips;
-    const shots = [], thumbs = h('div', { class: 'imgs' }), paste = imagePaste(shots, thumbs);
-    const presets = ['Add a "Done when" checklist to each', 'Split anything too big', 'Merge duplicates', 'Order by dependency', sprint ? 'Make them fit the sprint goal' : 'Group into sprints'];
-    dialog(editSprint ? `Edit ${sprint.name} with Claude` : 'Plan with Claude',
-      missing.length && !editSprint ? h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'Set up this project first? '),
-        `It is missing ${andList(missing)}. Claude reads the code, asks you a few questions, shows what it will write, and saves it to .justcode/project.md after you approve.`),
-        btn('Set up project', () => { post('initialize'); $('#dlg').close(); }, 'primary')) : '',
-      h('p', { class: 'muted' }, editSprint
-        ? `One prompt edits all ${todoIds.length} not-started task${todoIds.length === 1 ? '' : 's'}${where}: reword, split, merge, add, remove or reorder.${sprint.goal ? ` Sprint goal: ${sprint.goal}.` : ''}${started ? ` Claude also checks the ${started} started or done task${started === 1 ? '' : 's'}: a done one that must change goes back to To do, a started one gets the change as a message.` : ''} You review every change before it is applied.`
-        : 'Claude reads the code (read-only) and may ask you a few questions. It proposes tasks with a goal, likely files and a "Done when" checklist, grouped into sprints. Keep chatting to refine, then apply the ones you want.'),
-      goal = complete(h('textarea', { rows: 4, onpaste: paste.onpaste, 'aria-label': 'What you want; paste screenshots here', placeholder: editSprint ? `What should change in all of them? e.g. "add Done when to each and split anything too big"` : todoIds.length ? 'What do you want? e.g. "Add password reset by email" or "split anything too big"' : 'What do you want to build or change? e.g. Add password reset by email, with tests' })),
-      todoIds.length && !editSprint ? h('label', { class: 'row' }, rework = h('input', { type: 'checkbox', onchange: () => { chips.hidden = !rework.checked; } }), ` Also rework the ${todoIds.length} To do task${todoIds.length === 1 ? '' : 's'}${where}${started ? `, and check the ${started} started or done` : ''}`) : '',
-      thumbs, h('p', { class: 'muted small' }, 'Type / for skills and @ for files. Paste screenshots or designs into the box: Claude looks at them first.'),
-      chips = h('div', { class: 'chips', hidden: !editSprint }, presets.map(p => h('span', { class: 'chip', onclick: () => { goal.value = goal.value ? `${goal.value}; ${p}` : p; } }, p))),
-      h('div', { class: 'acts' }, btn(editSprint ? '✦ Edit the sprint' : '✦ Start planning', () => {
-        if (!goal.value.trim()) return goal.focus();
-        const ids = editSprint || rework?.checked ? todoIds : [];
-        post('planner', { instruction: goal.value.trim(), ids, sprint: ids.length && sprint ? { name: sprint.name, goal: sprint.goal } : undefined, images: shots,
-          into: (sprint ?? S.board.sprints.find(s => s.active && !s.closed))?.name });
-        $('#dlg').close();
-        openPlanner();
-      }, 'primary')));
-    goal.focus();
-  }
-
-  function moreMenu() {
-    const item = (label, help, fn) => h('button', { class: 'menuitem', onclick: () => { $('#dlg').close(); fn(); } }, h('b', {}, label), h('span', { class: 'muted small' }, help));
-    dialog('More',
-      h('div', { class: 'menu' },
-        item('Agent map', 'Every Claude session, subagent and reviewer at work', () => agentMap()),
-        item('Report', 'Tokens, rounds and time per task', () => report()),
-        item('Prompt history', 'Every prompt you sent and each session\'s conversation', () => historyDialog()),
-        item('Project history', 'What merged tasks changed', () => post('openArtifact', { which: 'progress' })),
-        item(showArchived ? 'Hide archived tasks' : 'Show archived tasks', 'Archived tasks stay out of the lanes', () => { showArchived = !showArchived; render(); }),
-        item('Set up project with Claude', 'Interview, then .justcode/project.md', () => post('initialize'))));
-  }
-
-  function settings() {
-    const s = S.settings;
-    const f = {};
-    const field = (key, label, input, help) => h('label', { class: 'blk' }, h('span', {}, label), f[key] = input, help ? h('span', { class: 'muted small' }, help) : '');
-    const sel = (v, opts) => h('select', {}, opts.map(([k, l]) => h('option', { value: k, selected: String(v) === String(k) }, l)));
-    const effort = v => sel(v, [['low', 'Low (fewest tokens)'], ['medium', 'Medium'], ['high', 'High'], ['', 'Model default']]);
-    // Every model in one dropdown (aliases follow the newest version); "Other…" takes any model id. Reads like an input: .value.
-    const MODEL_LIST = [['', 'Your Claude default'], ['opus', 'Opus (latest)'], ['sonnet', 'Sonnet (latest)'], ['haiku', 'Haiku (latest)'],
-      ['claude-fable-5-1', 'Fable 5.1'], ['claude-opus-5-5', 'Opus 5.5'], ['claude-sonnet-5-5', 'Sonnet 5.5'], ['claude-haiku-5-5', 'Haiku 5.5']];
-    const models = v => {
-      const known = MODEL_LIST.some(m => m[0] === v);
-      const sel = h('select', { onchange: () => { other.hidden = sel.value !== '__other'; if (!other.hidden) other.focus(); } },
-        MODEL_LIST.map(([k, l]) => h('option', { value: k, selected: known && k === v }, l)), h('option', { value: '__other', selected: !known }, 'Other model id…'));
-      const other = h('input', { value: known ? '' : v, placeholder: 'e.g. claude-opus-4-8', hidden: known });
-      const box = h('div', { class: 'modelpick' }, sel, other);
-      Object.defineProperty(box, 'value', { get: () => sel.value === '__other' ? other.value.trim() : sel.value });
-      return box;
-    };
-    let rules;
-    dialog('Settings',
-      h('div', { class: 'grid' },
-        field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
-        field('notifications', 'Notifications', sel(s.notifications || 'actionable', [['actionable', 'When a task needs me, is ready or failed'], ['errors', 'Only errors'], ['off', 'Off']]), 'The board and the JustCode output log always show everything.'),
-        field('maxParallel', 'Tasks running at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
-        field('taskModel', 'Task model', models(s.taskModel)),
-        field('taskEffort', 'Task thinking', effort(s.taskEffort)),
-        field('reviewModel', 'Reviewer model', models(s.review.model)),
-        field('reviewEffort', 'Reviewer thinking', effort(s.review.effort)),
-        field('plannerModel', 'Planner model', models(s.plannerModel)),
-        field('plannerEffort', 'Planner thinking', effort(s.plannerEffort)),
-        field('allowSubagents', 'Subagents in tasks', sel(s.subagents, [[false, 'Off (saves the most tokens)'], [true, 'On (they run on Haiku)']])),
-        field('maxReviews', 'Review rounds before it waits for you', sel(s.review.maxAttempts, [1, 2, 3, 4, 5].map(n => [n, String(n)]))),
-        field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
-        field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
-        field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
-        field('idleMinutes', 'Close idle Claude processes after (minutes)', h('input', { type: 'number', min: 1, value: s.idleMinutes })),
-        field('checks', 'Checks after each turn (no tokens)', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${S.detectedChecks?.length ? `: ${S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
-          'Failures go back to Claude before the AI review.'),
-        field('checksCustom', 'My check commands (one per line)', h('textarea', { rows: 2, placeholder: 'npm test\nnpx tsc --noEmit' }, s.checks !== 'auto' ? s.checks : '')),
-        field('folderSetup', 'Task folder setup', sel(s.setup === '' ? 'off' : s.setup === 'auto' ? 'auto' : 'custom', [['auto', 'Auto: link node_modules, use .venv'], ['off', 'Off'], ['custom', 'My command (below)']])),
-        field('setupCustom', 'My setup command', h('input', { value: s.setup !== 'auto' ? s.setup : '', placeholder: 'pnpm install' })),
-        field('reviewTriage', 'Review size', sel(s.review.triage, [[true, 'Fit to the change (saves tokens)'], [false, 'Always the full reviewer']]), 'Docs-only: no review. Small, non-sensitive: lighter model.'),
-        field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
-        field('superpowers', 'superpowers plugin in sessions', sel(s.superpowers, [[true, 'On (when installed)'], [false, 'Off: saves tokens on every step']])),
-        field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
-        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
-      h('label', { class: 'blk' }, h('span', {}, `Always allowed in ${S.roots.find(r => r.path === S.root)?.name ?? 'this project'}`),
-        rules = h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (S.board.rules || []).join('\n')),
-        h('span', { class: 'muted small' }, 'Added when you press "Always allow…" on a card. Every task in this project gets them.')),
-      f.allowedTools = h('textarea', { rows: 3, placeholder: 'One rule per line, for every project' }, (s.allowedTools || []).join('\n')),
-      h('span', { class: 'muted small' }, 'Always allowed in every project.'),
-      policySection(),
-      phoneSection(),
-      h('div', { class: 'row' }, btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => post('apiKey'), 'ghost'), btn('Setup checklist', () => { showSetup = true; $('#dlg').close(); render(); }, 'ghost')),
-      h('div', { class: 'acts' }, btn('Save', () => {
-        const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
-        post('settings', { values: {
-          defaultMode: f.defaultMode.value, notifications: f.notifications.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
-          plannerModel: f.plannerModel.value.trim(), taskEffort: f.taskEffort.value, reviewEffort: f.reviewEffort.value, plannerEffort: f.plannerEffort.value, allowSubagents: f.allowSubagents.value === 'true', maxReviews: +f.maxReviews.value, autoReview: f.autoReview.value === 'true', autoMerge: f.autoMerge.value === 'true', mergeIfReviewCannotRun: f.mergeIfReviewCannotRun.value === 'true',
-          idleMinutes: Math.max(1, +f.idleMinutes.value || 10), allowedTools: lines(f.allowedTools),
-          checks: f.checks.value === 'auto' ? 'auto' : f.checks.value === 'off' ? '' : f.checksCustom.value.trim(),
-          folderSetup: f.folderSetup.value === 'auto' ? 'auto' : f.folderSetup.value === 'off' ? '' : f.setupCustom.value.trim(),
-          reviewTriage: f.reviewTriage.value === 'true', reviewLightModel: f.reviewLightModel.value.trim(), personalSetup: f.personalSetup.value === 'true', superpowers: f.superpowers.value === 'true',
-          freshSessionTokens: Math.max(0, +f.freshSessionTokens.value || 0),
-        } });
-        post('rules', { rules: lines(rules) });
-        $('#mode').dataset.set = '';
-        $('#dlg').close();
-      }, 'primary')));
-  }
-
-  // Per task: tokens (build/review), check and review rounds, first-try pass, time. Totals for the current view.
-  function report() {
-    const tasks = visible().filter(t => t.startedAt || usageTotal(t));
-    const mins = t => t.startedAt ? Math.round(((t.doneAt || Date.now()) - t.startedAt) / 60000) : 0;
-    const rows = tasks.map(t => ({ t, build: fresh(t.usage?.build), review: fresh(t.usage?.review), cached: cachedTotal(t), checks: t.checks?.rounds || 0,
-      reviews: t.review ? (t.review.state === 'pass' ? t.review.attempts + 1 : t.review.attempts) : 0, first: t.review?.state === 'pass' && !t.review.attempts && !(t.checks?.rounds), mins: mins(t) }));
-    const tot = k => rows.reduce((a, r) => a + r[k], 0);
-    const reviewed = rows.filter(r => r.t.review?.state === 'pass');
-    const viewName = view === 'all' ? 'All tasks' : view === 'backlog' ? 'Backlog' : S.board.sprints.find(s => s.id === view)?.name;
-    const md = [`# JustCode report · ${viewName}`, '', `Tasks: ${rows.length} · new tokens: ${tokShort(tot('build') + tot('review'))} (build ${tokShort(tot('build'))}, review ${tokShort(tot('review'))}) + ${tokShort(tot('cached'))} cached · ` +
-      `first-try passes: ${reviewed.filter(r => r.first).length}/${reviewed.length} · time: ${tot('mins')} min`, '',
-      '| Task | Status | Build | Review | Check rounds | Review rounds | Minutes |', '|---|---|---|---|---|---|---|',
-      ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${tokShort(r.build)} | ${tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
-    dialog('Report',
-      h('div', { class: 'kpis' }, [['Tasks', rows.length], ['New tokens', tokShort(tot('build') + tot('review'))], ['Cached re-reads', tokShort(tot('cached'))], ['Build / review', `${tokShort(tot('build'))} / ${tokShort(tot('review'))}`],
-        ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')],
-        ['Project cost (est.)', `$${(costOf(S.board.tasks) + (S.board.plannerCostUsd || 0)).toFixed(2)}${S.policy?.policy.maxCostUsd.project ? ` / $${S.policy.policy.maxCostUsd.project}` : ''}`]]
-        .map(([k, v]) => h('div', { class: 'kpi' }, h('b', {}, v), h('span', { class: 'muted small' }, k)))),
-      rows.length ? h('table', { class: 'rep' }, h('tr', {}, ['Task', 'Status', 'Build', 'Review', 'Checks', 'Reviews', 'Min'].map(x => h('th', {}, x))),
-        rows.sort((a, b) => (b.build + b.review) - (a.build + a.review)).map(r => h('tr', { onclick: () => { $('#dlg').close(); openTask(r.t.id, 'details'); } },
-          h('td', {}, r.t.title), h('td', {}, r.t.status), h('td', {}, tokShort(r.build)), h('td', {}, tokShort(r.review)), h('td', {}, r.checks), h('td', {}, r.reviews), h('td', {}, r.mins)))) : h('p', { class: 'muted' }, 'No task has run in this view yet.'),
-      h('p', { class: 'muted small' }, 'New tokens = written plus input not already cached. Cached re-reads are context re-sent at each step (about a tenth of the cost). First-try pass: passed checks and review without a fix round.'),
-      h('div', { class: 'acts' }, btn('Copy as Markdown', () => post('copy', { text: md }))));
-  }
-
-  // In a sprint view: the sources that sprint uses, then the rest of the project's library to pick from.
-  // In All tasks or Backlog: the whole library, with the sprints using each one.
-  function sourcesDialog() {
-    const all = S.sources || [], sprint = sprintOf(view), used = sprint ? sprintSrcs(sprint.id) : all;
-    const others = sprint ? all.filter(s => !used.includes(s)) : [];
-    const usedBy = s => S.board.sprints.filter(sp => !sp.closed && (!sp.sources || sp.sources.includes(s.id))).map(sp => sp.name);
-    const status = s => !s.artifact ? '' : s.saving
-      ? h('span', { class: 'spill warn', title: 'Claude is saving the artifact\'s files' }, s.asking ? 'Approve in the terminal' : 'Saving…')
-      : s.copy
-      ? h('span', { class: 'spill ok', title: 'Tasks read this saved copy (the link needs a claude.ai sign-in)' }, `✓ Saved${s.savedAt ? ` ${savedAgo(s.savedAt)}` : ''}`)
-      : h('span', { class: 'spill warn', title: 'Tasks cannot open claude.ai links: save a copy first' }, 'Not saved');
-    const row = (s, inSprint) => h('li', { class: 'src' },
-      h('div', { class: 'srchead' },
-        h('span', { class: 'tag' }, s.kind), h('a', { onclick: () => post('openSource', { sourceId: s.id }), title: s.ref }, srcLabel(s)), status(s), h('div', { class: 'spacer' }),
-        s.saving ? btn('Show terminal', () => post('showSaveTerminal', { sourceId: s.id }), 'ghost', 'Open the terminal saving it, e.g. if it asks for approval')
-          : s.artifact && inSprint !== false ? btn(s.copy ? 'Refresh' : 'Save copy', () => post('saveSourceCopy', { sourceId: s.id }), s.copy ? 'ghost' : 'primary', 'Save the artifact\'s files so tasks can read them') : '',
-        inSprint === false ? btn('+ Use in sprint', () => post('sprintSource', { sprintId: sprint.id, sourceId: s.id, on: true }), 'ghost')
-          : sprint ? btn('Remove from sprint', () => post('sprintSource', { sprintId: sprint.id, sourceId: s.id, on: false }), 'ghost', 'Kept in the project; other sprints are unaffected')
-          : btn('Delete…', () => post('removeSource', { sourceId: s.id }), 'ghost', 'Delete from the whole project (asks first)')),
-      inSprint === false ? (s.note ? h('p', { class: 'muted small' }, s.note) : '')
-        : h('input', { class: 'grow', value: s.note || '', placeholder: 'What is it? Claude reads this note first', onchange: e => post('editSource', { sourceId: s.id, note: e.target.value }) }),
-      !sprint ? h('p', { class: 'muted small' }, usedBy(s).length ? `Used in: ${usedBy(s).join(', ')}` : 'Not used in any open sprint') : '');
-    const d = dialog(sprint ? `Sources · ${sprint.name}` : 'Project sources',
-      h('p', { class: 'muted' }, sprint
-        ? `What ${sprint.name}'s plans and tasks are built on. Claude reads each note and opens only what it needs. A claude.ai link pasted in this sprint's prompts is added here.`
-        : 'Every source in this project. Each sprint picks the ones it uses: open a sprint in the view menu to choose.'),
-      sprint ? h('h4', {}, `In this sprint (${used.length})`) : '',
-      used.length ? h('ul', { class: 'srclist' }, used.map(s => row(s, sprint ? true : undefined)))
-        : h('p', { class: 'muted empty' }, sprint ? 'Nothing yet. Add a file or link, or use one from the project below.' : 'No sources yet.'),
-      others.length ? h('details', { class: 'srcmore', open: !used.length }, h('summary', {}, `Other project sources (${others.length})`),
-        h('ul', { class: 'srclist' }, others.map(s => row(s, false)))) : '',
-      h('div', { class: 'acts' }, btn('+ Files or folders', () => post('addSource', { kind: 'file', sprintId: sprint?.id }), 'primary'), btn('+ Link', () => post('addSource', { kind: 'url', sprintId: sprint?.id })),
-        btn('Project history', () => post('openArtifact', { which: 'progress' }), 'ghost', 'What merged tasks changed; later tasks read it instead of digging through git')));
-    d.dataset.kind = 'sources';
-  }
-
-  // ⚙ → Phone: paired phones, how long each stays signed in, and Revoke.
-  function phoneSection() {
-    const P = S.phone;
-    if (!P || REMOTE) return '';
-    const day = ms => new Date(ms).toLocaleDateString();
-    return h('details', { class: 'adv' }, h('summary', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
-      h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code from JustCode: Show Phone Pairing.` : 'Turn on justCode.phoneServer to use the phone page or the Android app.'),
-      P.devices.length ? h('ul', { class: 'small' }, P.devices.map(d => h('li', { class: 'row' },
-        h('span', { class: 'grow' }, `Device …${d.id} · paired ${day(d.created)} · ${d.lastUsed ? `last used ${savedAgo(d.lastUsed)}` : 'not used yet'} · expires ${day(d.expires)}`),
-        btn('Revoke', () => post('phoneRevoke', { id: d.id }), 'ghost small')))) : '',
-      P.devices.length > 1 ? btn('Revoke all', () => post('phoneRevoke', { id: 'all' }), 'ghost') : '');
-  }
-
-  // ⚙ → Policy: what .justcode/policy.json enforces in this project, and what it denied today.
-  function policySection() {
-    const P = S.policy;
-    if (!P) return '';
-    const p = P.policy, list = a => a.length ? a.join(', ') : 'none';
-    const cost = k => p.maxCostUsd[k] ? `$${p.maxCostUsd[k]}` : 'no limit';
-    return h('details', { class: 'adv', open: !!P.errors.length },
-      h('summary', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
-      h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Edit the file to change them; they apply at once.'),
-      ...P.errors.map(e => h('p', { class: 'err small' }, e)),
-      h('ul', { class: 'small' },
-        h('li', {}, 'Protected paths (no edits): ', list(p.protectedPaths)),
-        h('li', {}, 'Denied tools: ', list(p.denyTools)),
-        h('li', {}, 'Forbidden modes: ', list(p.forbidModes)),
-        h('li', {}, 'Needs your approval before merging when a path contains: ', list(p.requireHumanReviewFor)),
-        h('li', {}, `Budgets: task ${cost('task')}, sprint ${cost('sprint')}, project ${cost('project')}`),
-        h('li', {}, 'Models: ', p.allowedModels.length ? p.allowedModels.join(', ') : 'any'),
-        h('li', {}, `Checks must pass to merge: ${p.requireChecksPass ? 'yes' : 'no'} · Secret scan before commits: ${p.secretScan ? 'on' : 'off'}`)),
-      P.denials.length ? h('div', {}, h('h4', {}, 'Denied today'), h('ul', { class: 'small' }, P.denials.slice().reverse().map(d => h('li', {},
-        h('span', { class: 'muted' }, d.time.slice(11, 16), ' '), d.taskId ? h('a', { onclick: () => { $('#dlg').close(); openTask(d.taskId, 'activity'); } }, S.board.tasks.find(t => t.id === d.taskId)?.title || d.taskId) : '', ' ', d.detail || '')))) : '',
-      !REMOTE ? h('div', { class: 'row' }, btn('Open policy.json', () => post('openPolicy'), 'ghost'), btn('Export audit log', () => post('exportAudit'), 'ghost')) : '');
-  }
-
-  // Every artifact the project typed, saved or published, with the tasks that used or produced it.
-  function artifactsDialog() {
-    const list = [...(S.registry || [])].sort((a, b) => b.lastSeen - a.lastSeen);
-    const title = id => S.board.tasks.find(t => t.id === id)?.title;
-    const isSource = e => (S.sources || []).some(s => s.kind === 'url' && artKey(s.ref) === e.url);
-    const src = e => (S.sources || []).find(s => s.kind === 'url' && artKey(s.ref) === e.url);
-    const row = e => h('li', { class: 'src' },
-      h('div', { class: 'srchead' },
-        h('span', { class: `tag${e.kind === 'output' ? ' ok' : ''}` }, e.kind === 'output' ? 'published' : 'input'),
-        h('a', { onclick: () => post('openUrl', { url: e.url }), title: e.url }, e.title || e.url.replace(/^https?:\/\//, '')),
-        e.changedAt ? h('span', { class: 'spill warn', title: 'The last refresh found different content' }, `changed ${savedAgo(e.changedAt)}`) : '',
-        e.kind === 'input' && src(e)?.copy ? h('span', { class: 'spill ok' }, `✓ Saved${src(e).savedAt ? ` ${savedAgo(src(e).savedAt)}` : ''}`) : '',
-        h('div', { class: 'spacer' }),
-        btn('Copy link', () => post('copy', { text: e.url }), 'ghost'),
-        e.kind === 'input' && isSource(e) ? btn('Refresh copy', () => post('refreshArtifact', { url: e.url }), 'ghost', 'Save the artifact\'s files again') : '',
-        !REMOTE ? btn('Use as source', () => post('useArtifact', { url: e.url, sprintId: sprintOf(view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
-      e.taskIds.length ? h('p', { class: 'small' }, e.kind === 'output' ? 'Produced by: ' : 'Used by: ',
-        ...e.taskIds.filter(title).map((id, i) => [i ? ', ' : '', h('a', { onclick: () => { $('#dlg').close(); openTask(id, 'details'); } }, title(id))])) : '',
-      h('input', { class: 'grow', value: e.note || '', placeholder: 'Note (Claude reads it in briefs)', onchange: ev => post('artifactNote', { url: e.url, note: ev.target.value }) }));
-    const d = dialog('Artifacts',
-      h('p', { class: 'muted' }, 'Every claude.ai artifact this project used as input or published as a result. Briefs list them, so a later task can build on or update one instead of starting over.'),
-      list.length ? h('ul', { class: 'srclist' }, list.map(row)) : h('p', { class: 'muted empty' }, 'None yet. Paste a claude.ai artifact link in a task or prompt, or run an artifact task.'));
-    d.dataset.kind = 'artifacts';
-    const newest = Math.max(0, ...list.map(e => e.changedAt || 0));
-    if (newest > artSeen) { artSeen = newest; remember(); }
-  }
-
-  function designDialog() {
-    const has = !!(S.project || {}).designMd;
-    const d = dialog('Design', h('p', { class: 'muted' }, has ? 'DESIGN.md is set. UI and artifact tasks are told to follow it.' : 'Pick a design from VoltAgent/awesome-design-md, or use your own file. UI and artifact tasks are told to follow it.'),
-      h('div', { class: 'acts' }, btn(has ? 'Change' : 'Pick a design', () => { d.close(); post('designPick'); }, 'primary'),
-        has ? btn('Remove', () => { d.close(); post('designRemove'); }, 'ghost') : ''));
-  }
-
-  function guide() {
-    const sec = (n, title, ...p) => h('section', { class: 'gsec' }, h('h4', {}, h('span', { class: 'gn' }, n), title), ...p.map(x => typeof x === 'string' ? h('p', {}, x) : x));
-    dialog('JustCode in 2 minutes',
-      sec(1, 'Set up once', 'The checklist at the top checks Claude Code, your sign-in and git, and fixes what is missing. Any folder works: an existing project, or an empty one (JustCode asks before creating a git repository).'),
-      sec(2, 'Add a task', 'Type what you want. Enter adds it, ⌘/Ctrl+Enter adds and runs it. "Details" adds the goal, a "Done when" checklist the reviewer checks against, screenshots (paste them), files and the sprint. Agent and permissions are under Advanced.'),
-      sec('✦', 'Plan with Claude', '✦ Plan turns a goal into small tasks, or reworks the To do list. Claude reads the code, may ask you a few questions, and proposes tasks with a goal, likely files and "Done when", grouped into sprints. In a new project it offers to set it up first: it interviews you, then writes .justcode/project.md after you approve.'),
-      sec(3, 'Claude works on its own branch', 'Every task gets its own copy of the project and its own branch, so your files and other tasks are never touched. Click a card to watch its activity, message Claude, or see its agents.'),
-      sec(4, 'Approvals without babysitting', h('p', {}, h('b', {}, 'Auto'), ' (the default) lets Claude approve what is safe and ask only when unsure. A question or approval turns the card yellow under ', h('b', {}, 'Needs you'), ' with buttons: Allow, Always allow (remembered for the whole project), or Deny with a reason.'),
-        'Other modes: Edit automatically (edits approved, commands ask), Manual (everything asks), Plan, Bypass permissions (no approvals; only for trusted work).'),
-      sec(5, 'Review and merge', 'When Claude finishes, its work is committed and an AI reviewer runs the tests and checks the diff. Issues go back to Claude automatically. When the review passes, press ✓ Merge (or turn on automatic merging in ⚙). Conflicts stay on the task\'s branch until you or Claude resolve them.'),
-      sec('▮', 'Sprints and progress', 'A sprint groups tasks under a goal. Pick it in the view menu: a bar under the toolbar shows how many are done, in review, working, need you or are still to do. ✦ Edit sprint reworks all its not-started tasks with one prompt. The planning panel has its own bar: reading the code, writing the proposal, waiting for you, ready.'),
-      sec(6, 'Run a whole list', '▶ Run all runs every To do task in board order (drag cards to reorder), one at a time by default so each builds on the last merged one. Turn on automatic merging and a sprint runs unattended.'),
-      sec(7, 'Continue on your phone', '📱 Continue on phone (in a task) moves its session to Claude Code Remote Control: open the Claude app or claude.ai/code to watch, answer and steer it. Close its terminal to bring the task back to the board. Needs a Claude account login.'),
-      sec(8, 'More (⋯)', 'The ⋯ button next to Run all opens the agent map (every Claude session and reviewer at work), the report (tokens and rounds per task), the project history and archived tasks. Notifications appear only when something needs you or is ready to merge; everything else is in the JustCode output log.'),
-      sec(9, 'Sources and artifacts', 'Add specs, designs, docs and links under 📎 Sources, or attach files to one task. Each task gets a brief (task + sources), Claude writes a handoff (what changed, how it verified it), and the reviewer reads both instead of re-exploring. Merged tasks add a line to the project history. Open them under Details.'),
-      sec(10, 'Spending fewer tokens', 'Tasks load only the project\'s Claude setup, share a cached system prompt, and keep command output short. Reviews fit the change (docs: none, small: lighter model) and continue their own session for follow-ups. Long fix rounds restart from the artifacts. Each card shows its tokens; Details splits build and review.'),
-      sec(11, 'Good to know', h('ul', {},
-        h('li', {}, 'Closing the board never stops work. Closing VS Code pauses it; tasks that were mid-step continue when VS Code opens again.'),
-        h('li', {}, 'Usage meter (top right) shows your 5-hour and weekly Claude limits. At the limit, tasks pause and continue after the reset.'),
-        h('li', {}, '.env files are copied into each task\'s copy for tests, never committed. Keys, credentials and node_modules are kept out of git.'),
-        h('li', {}, 'Everything is in .justcode/ in your project (board, task copies). Details: README.'))),
-      h('div', { class: 'acts' }, btn('Got it', () => { post('guideSeen'); S.guideSeen = true; $('#dlg').close(); render(); }, 'primary')));
-  }
+  // What drawer.js and dialogs.js use from here; `let` values through getters and setters, so they stay live.
+  window.JC = {
+    REMOTE,
+    vscode,
+    post,
+    saved,
+    get S() { return S; }, set S(v) { S = v; },
+    get view() { return view; }, set view(v) { view = v; },
+    get showArchived() { return showArchived; }, set showArchived(v) { showArchived = v; },
+    get open() { return open; }, set open(v) { open = v; },
+    get tab() { return tab; }, set tab(v) { tab = v; },
+    get steps() { return steps; }, set steps(v) { steps = v; },
+    get changes() { return changes; }, set changes(v) { changes = v; },
+    get shots() { return shots; }, set shots(v) { shots = v; },
+    get agentView() { return agentView; }, set agentView(v) { agentView = v; },
+    get agentsSaved() { return agentsSaved; }, set agentsSaved(v) { agentsSaved = v; },
+    get showSetup() { return showSetup; }, set showSetup(v) { showSetup = v; },
+    HEALTH,
+    get more() { return more; }, set more(v) { more = v; },
+    get images() { return images; }, set images(v) { images = v; },
+    get files() { return files; }, set files(v) { files = v; },
+    get srcOff() { return srcOff; }, set srcOff(v) { srcOff = v; },
+    get dragId() { return dragId; }, set dragId(v) { dragId = v; },
+    get initLater() { return initLater; }, set initLater(v) { initLater = v; },
+    get artSeen() { return artSeen; }, set artSeen(v) { artSeen = v; },
+    remember,
+    initState,
+    h,
+    $,
+    andList,
+    btn,
+    ago,
+    dur,
+    tok,
+    tokShort,
+    fresh,
+    sum,
+    usageTotal,
+    cachedTotal,
+    usageTitle,
+    sprintOf,
+    sprintSrcs,
+    savedAgo,
+    artKey,
+    taskArtUrls,
+    regEntry,
+    srcLabel,
+    MODES,
+    modeName,
+    modelName,
+    lane,
+    next,
+    lastTool,
+    app,
+    toggleMore,
+    get acData() { return acData; }, set acData(v) { acData = v; },
+    get acLoaded() { return acLoaded; }, set acLoaded(v) { acLoaded = v; },
+    get acField() { return acField; }, set acField(v) { acField = v; },
+    get acItems() { return acItems; }, set acItems(v) { acItems = v; },
+    get acSel() { return acSel; }, set acSel(v) { acSel = v; },
+    get acDismissed() { return acDismissed; }, set acDismissed(v) { acDismissed = v; },
+    get acRooted() { return acRooted; }, set acRooted(v) { acRooted = v; },
+    acMenu,
+    acToken,
+    acScore,
+    acMatches,
+    acHide,
+    acDraw,
+    acUpdate,
+    acPick,
+    complete,
+    imagePaste,
+    pasteImages,
+    drawImages,
+    base,
+    drawFiles,
+    addTask,
+    render,
+    renderProjects,
+    setupPill,
+    renderMeter,
+    renderBanners,
+    renderAddOptions,
+    visible,
+    renderToolbar,
+    costOf,
+    sprintBudget,
+    renderProgress,
+    LANES,
+    renderLanes,
+    hint,
+    card,
+  };
 
   /* ---------- messages from the extension ---------- */
   window.addEventListener('message', ({ data: m }) => {
@@ -1142,33 +540,33 @@
       S = m;
       if (view !== 'all' && view !== 'backlog' && !S.board?.sprints.some(s => s.id === view)) { view = 'all'; remember(); } // its sprint was deleted if (open && open !== '__planner' && !S.board?.tasks.some(t => t.id === open)) open = undefined;
       render();
-      if ($('#dlg').open && $('#dlg').dataset.kind === 'sources') sourcesDialog();
-      if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') artifactsDialog();
+      if ($('#dlg').open && $('#dlg').dataset.kind === 'sources') JC.sourcesDialog();
+      if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') JC.artifactsDialog();
     }
     else if (m.type === 'completions') { acData = m; acLoaded = true; if (acField) acDraw(); }
-    else if (m.type === 'history') { history = m.items; if ($('#dlg').open && !sessionView) drawHistory(); }
-    else if (m.type === 'sessionLog') { if (sessionView?.id === m.sessionId) { sessionView.steps = m.steps; drawHistory(); } }
-    else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') renderDrawer(); }
-    else if (m.type === 'savedAgents') { agentsSaved[m.id] = m.nodes; if (m.id === open && tab === 'agents' && !agentView) renderDrawer(); }
-    else if (m.type === 'agentLog') { if (agentView?.task === m.id) { agentView.log = m; if (m.id === open && tab === 'agents') renderDrawer(); } }
-    else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) renderDrawer(); }
-    else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) renderDrawer(); }
-    else if (m.type === 'focus') openTask(m.id);
+    else if (m.type === 'history') { history = m.items; if ($('#dlg').open && !JC.sessionView) JC.drawHistory(); }
+    else if (m.type === 'sessionLog') { if (JC.sessionView?.id === m.sessionId) { JC.sessionView.steps = m.steps; JC.drawHistory(); } }
+    else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') JC.renderDrawer(); }
+    else if (m.type === 'savedAgents') { agentsSaved[m.id] = m.nodes; if (m.id === open && tab === 'agents' && !agentView) JC.renderDrawer(); }
+    else if (m.type === 'agentLog') { if (agentView?.task === m.id) { agentView.log = m; if (m.id === open && tab === 'agents') JC.renderDrawer(); } }
+    else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) JC.renderDrawer(); }
+    else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) JC.renderDrawer(); }
+    else if (m.type === 'focus') JC.openTask(m.id);
     else if (m.type === 'usedSource') { srcOff.delete(m.sourceId); renderAddOptions(); }
     else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); toggleMore(true); drawFiles(); }
-    else if (m.type === 'dialog') bridged(m);
-    else if (m.type === 'toast') toast(m.text);
+    else if (m.type === 'dialog') JC.bridged(m);
+    else if (m.type === 'toast') JC.toast(m.text);
     else if (m.type === 'open') window.open(m.url, '_blank', 'noopener');
-    else if (m.type === 'copy') { (navigator.clipboard?.writeText(m.text) ?? Promise.reject()).then(() => toast('Copied.'), () => toast('Could not copy.')); }
+    else if (m.type === 'copy') { (navigator.clipboard?.writeText(m.text) ?? Promise.reject()).then(() => JC.toast('Copied.'), () => JC.toast('Could not copy.')); }
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.
   setInterval(() => {
     if (!S || S.empty) return;
-    if (S.board.tasks.some(t => t.run === 'running' || t.reviewing)) { renderLanes(); if (open && tab === 'agents') renderDrawer(); }
-    if (agentView && agentView.task === open && tab === 'agents' && S.board.tasks.find(t => t.id === open)?.run === 'running') openAgent(S.board.tasks.find(t => t.id === open), agentView.node);
+    if (S.board.tasks.some(t => t.run === 'running' || t.reviewing)) { renderLanes(); if (open && tab === 'agents') JC.renderDrawer(); }
+    if (agentView && agentView.task === open && tab === 'agents' && S.board.tasks.find(t => t.id === open)?.run === 'running') JC.openAgent(S.board.tasks.find(t => t.id === open), agentView.node);
     const pp = open === '__planner' && S.planner?.run && S.planner.run !== 'idle' && document.querySelector('#drawer .planprog');
-    if (pp) pp.replaceWith(planProgress(S.planner, true));
+    if (pp) pp.replaceWith(JC.planProgress(S.planner, true));
   }, 5000);
   post('ready');
   if (open && open !== '__planner') post('watch', { id: open });
