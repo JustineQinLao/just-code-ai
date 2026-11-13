@@ -58,8 +58,8 @@
           "type": "string",
           "enum": ["auto", "direct", "branch"],
           "enumDescriptions": [
-            "Backlog tasks run in the project folder; sprint tasks get their own branch.",
-            "New tasks run in the project folder (no review or merge).",
+            "Backlog tasks run in the workspace; sprint tasks get their own branch.",
+            "New tasks run in the workspace (direct, reviewed).",
             "New tasks get their own branch (reviewed, merged)."
           ],
           "default": "auto",

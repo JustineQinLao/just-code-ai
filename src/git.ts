@@ -187,6 +187,32 @@ export async function commitAll(dir: string, message: string) {
   return true;
 }
 
+// One commit with exactly these files; other staged or dirty files stay as they are. A stale entry (gone, never
+// tracked, or ignored) is skipped so it cannot block the rest. Returns false when nothing changed.
+export async function commitFiles(repo: string, message: string, files: string[]) {
+  const use: string[] = [];
+  for (const f of files) {
+    if (await ok(repo, ['add', '-A', '--', f])) use.push(f);
+  }
+  const staged = (await git(repo, ['diff', '--cached', '--name-only', '-z', '--', ...(use.length ? use : ['.'])])).split('\0').filter(Boolean);
+  if (!use.length || !staged.length) return false;
+  await git(repo, ['commit', '-q', '-m', message, '--only', '--', ...staged]);
+  return true;
+}
+
+// Puts exactly these files back to HEAD: tracked ones restored, files not in HEAD (new, staged or not) deleted.
+export async function revertFiles(repo: string, files: string[]) {
+  for (const f of files) {
+    if (path.isAbsolute(f) || f.split(/[\\/]/).includes('..')) continue;
+    if (await ok(repo, ['cat-file', '-e', `HEAD:${f}`])) {
+      await git(repo, ['checkout', 'HEAD', '--', f]);
+      continue;
+    }
+    await ok(repo, ['rm', '-r', '-f', '-q', '--cached', '--ignore-unmatch', '--', f]);
+    fs.rmSync(path.join(repo, f), { recursive: true, force: true });
+  }
+}
+
 export interface Change { status: string; file: string }
 
 // What the PR changes: base...branch, like a PR view, plus anything not committed yet.

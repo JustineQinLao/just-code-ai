@@ -108,10 +108,10 @@
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Fixing review issues (round ${r.attempts} of ${max})`, tone: 'run' } : { text: 'Paused', tone: 'muted', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
     if (t.output === 'artifact') {
       if (t.publishing) return { text: 'Publishing the page to claude.ai…', tone: 'run' };
-      if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', action: ['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], extra: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
+      if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', action: ['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], extra: ['Finish', () => post('move', { id: t.id, status: 'done' })] };
       if (t.status !== 'todo') return { text: 'Finished without a published page.', tone: 'warn', action: ['Publish', () => post('publishArtifact', { id: t.id })], extra: ['Reply', () => openTask(t.id, 'activity')] };
     }
-    if (t.where === 'direct') return { text: 'Finished. Check the result, then mark it done.', tone: 'ok', action: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
+    if (t.where === 'direct') return { text: 'Finished. Check the result, then Finish to commit it or Discard to revert it.', tone: 'ok', action: ['Finish', () => post('move', { id: t.id, status: 'done' })] };
     if (r?.state === 'pass') return { text: r.risk === 'critical' ? 'Review passed, flagged critical: look before merging' : 'Review passed. Ready to merge.', tone: r.risk === 'critical' ? 'warn' : 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
     if (r?.state === 'fail' && r.attempts >= max) return { text: `Review still finds ${r.issues?.length ?? 0} issue(s) after ${r.attempts} rounds`, tone: 'err', action: ['Send to Claude', () => post('sendIssues', { id: t.id })] };
     if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}`, tone: 'err', action: ['↻ Retry review', () => post('review', { id: t.id })], extra: t.worktree ? ['✓ Merge anyway', () => post('merge', { id: t.id })] : undefined };
@@ -156,8 +156,8 @@
             h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
             h('label', { title: 'Code change: Claude edits the project. Artifact page: Claude designs one web page (with the frontend-design skill) and JustCode publishes it to claude.ai and puts the link on the card. Tasks that say "artifact" pick this by themselves.' }, 'Result ',
               h('select', { id: 'output' }, h('option', { value: '' }, 'Code change'), h('option', { value: 'artifact' }, 'Artifact page (link)'))),
-            h('label', { title: 'Own branch: an isolated copy you review and merge. Project folder: runs in the project itself (deploys, syncs, releases).' }, 'Runs in ',
-              h('select', { id: 'where' }, h('option', { value: '' }, 'Automatic (backlog: project folder, sprint: own branch)'), h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'direct' }, 'Project folder (no review or merge)'))))))),
+            h('label', { title: 'Own branch: an isolated copy you review and merge. Workspace: runs in your checkout, reviewed, then Finish commits its files.' }, 'Runs in ',
+              h('select', { id: 'where' }, h('option', { value: '' }, 'Automatic (backlog: workspace, sprint: own branch)'), h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'direct' }, 'Workspace (direct, reviewed)'))))))),
     h('div', { id: 'toolbar', class: 'toolbar' }),
     h('div', { id: 'progress' }),
     h('main', { id: 'lanes', class: 'lanes' }));
@@ -354,6 +354,7 @@
     const ag = $('#agent'), cur = ag.value;
     ag.replaceChildren(h('option', { value: '' }, 'Default'), ...S.agents.map(a => h('option', { value: a.name, title: a.description }, `${a.name}${a.scope === 'user' ? ' (yours)' : ''}`)));
     ag.value = S.agents.some(a => a.name === cur) ? cur : '';
+    if (!$('#where').dataset.set) { $('#where').value = ['direct', 'branch'].includes(S.settings.defaultWhere) ? S.settings.defaultWhere : ''; $('#where').dataset.set = '1'; }
     if (!$('#mode').dataset.set) { $('#mode').value = S.settings.defaultMode; $('#mode').dataset.set = '1'; }
     const sp = $('#sprintSel'), sc = sp.value, active = S.board.sprints.find(s => s.active && !s.closed);
     sp.replaceChildren(h('option', { value: '' }, 'Backlog'), ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id }, s.name)));
@@ -490,7 +491,7 @@
       h('div', { class: 'meta' },
         t.agent ? h('span', { class: 'tag' }, t.agent) : '',
         h('span', { class: `tag mode-${S.settings?.bypassAll ? 'bypassPermissions' : t.mode}` }, modeName(S.settings?.bypassAll ? 'bypassPermissions' : t.mode)),
-        t.output === 'artifact' ? h('span', { class: 'tag', title: 'Result: a page published as a claude.ai artifact' }, '⧉ artifact') : t.where === 'direct' ? h('span', { class: 'tag' }, 'project folder') : '',
+        t.output === 'artifact' ? h('span', { class: 'tag', title: 'Result: a page published as a claude.ai artifact' }, '⧉ artifact') : t.where === 'direct' ? h('span', { class: 'tag' }, 'workspace') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
@@ -609,7 +610,7 @@
       t.worktree && ['Open its folder', () => post('openFolder', { id: t.id })],
       t.worktree && !t.pr && ['Push PR', () => post('remotePr', { id: t.id })],
       t.pr && ['Open PR', () => post('openUrl', { url: t.pr })],
-      t.worktree && ['Discard work', () => post('discard', { id: t.id }), 'danger'],
+      (t.worktree || (t.where === 'direct' && !t.init && t.status !== 'done' && t.directFiles?.length)) && ['Discard work', () => post('discard', { id: t.id }), 'danger'],
       [t.archived ? 'Unarchive' : 'Archive', () => post('archive', { id: t.id })],
       ['Delete', () => post('delete', { id: t.id }), 'danger'],
     ].filter(Boolean);
