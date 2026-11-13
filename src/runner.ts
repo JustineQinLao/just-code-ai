@@ -345,8 +345,36 @@ export class Runner {
     } catch { /* the registry is a convenience */ }
   }
 
+  // Spent against the policy's budgets: this task, its sprint, the whole project (tasks, reviews and planning).
+  spent(t?: Task) {
+    const tasks = this.store.data.tasks, sum = (l: Task[]) => l.reduce((n, x) => n + (x.costUsd ?? 0), 0);
+    return { task: t?.costUsd ?? 0, sprint: t?.sprintId ? sum(tasks.filter(x => x.sprintId === t.sprintId)) : 0, project: sum(tasks) + (this.store.data.plannerCostUsd ?? 0) };
+  }
+  // "Budget reached: $5.12 of $5 (task)" when a budget is used up (0 = no budget), else undefined.
+  overBudget(t: Task) {
+    const max = loadPolicy(this.root).policy.maxCostUsd, s = this.spent(t);
+    for (const k of ['task', 'sprint', 'project'] as const) {
+      if (k === 'sprint' && !t.sprintId) continue;
+      if (max[k] > 0 && s[k] >= max[k]) return `Budget reached: $${s[k].toFixed(2)} of $${max[k]} (${k}). Raise maxCostUsd.${k} in .justcode/policy.json, then press Resume.`;
+    }
+  }
+  // After a turn or review adds cost: a used-up budget stops the task.
+  private checkBudget(id: string) {
+    const t = this.store.task(id);
+    const why = t && this.overBudget(t);
+    if (!why) return false;
+    this.stop(id);
+    this.cancelReview(id);
+    this.store.updateTask(id, { error: why, live: undefined });
+    this.audit('budget.stop', id, why, 'policy');
+    this.d.notify('warn', `"${t!.title}" stopped: ${why}`, id, true);
+    return true;
+  }
+
   // What the project policy forbids about running this task now, or undefined.
   policyBlock(t: Task) {
+    const over = this.overBudget(t);
+    if (over) return over;
     const p = loadPolicy(this.root).policy, set = this.d.settings();
     if (p.forbidModes.includes(t.mode)) return `The project policy forbids the "${t.mode}" permission mode (.justcode/policy.json, forbidModes). Pick another mode for this task.`;
     if (p.allowedModels.length && !p.allowedModels.includes(set.taskModel))
@@ -541,6 +569,7 @@ export class Runner {
     const reply = turn.text.trim().slice(-4000) || undefined;
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
     else this.store.updateTask(id, { status: t.status === 'done' ? 'done' : 'review', live: undefined, reply, costUsd: cost });
+    if (!t.init && this.checkBudget(id)) return;
     this.emptyAt.delete(id);
     if (!committed && t.worktree && !(await this.hasWork(id))) this.emptyAt.add(id); // Claude only answered: nothing to review
     this.changed();
@@ -943,6 +972,7 @@ export class Runner {
       const exec = async (p: string, resume?: string) => {
         const r = await runReview(p, { bin, cwd, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(),
           timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, web: UI_FILE.test(diff) && !device?.devices.length, adbBin: device?.bin, cli: this.d.cli, resume });
+        if (r.costUsd) { const cur = this.store.task(id); if (cur) this.store.updateTask(id, { costUsd: (cur.costUsd ?? 0) + r.costUsd }); }
         if (r.usage) {
           usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });
           const cur = this.store.task(id);
@@ -1256,6 +1286,7 @@ export class Runner {
   }
 
   private onPlannerTurn(turn: TurnEnd) {
+    this.store.addPlannerCost(turn.costUsd ?? 0);
     if (turn.limit) { this.d.limits.setReached('usage'); return; }
     if (!turn.ok) { this.d.notify('error', `Planner stopped: ${String(turn.error).slice(0, 200)}`); return; }
     const ids = new Set([...this.plannerTargets, ...this.plannerOthers]);

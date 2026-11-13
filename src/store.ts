@@ -47,7 +47,7 @@ export interface Task {
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
   error?: string;             // the last run failed to start or ended on an error
   noWait?: boolean;           // Run all goes on without it (it waits for you to merge or fix it); cleared when it runs again
-  costUsd?: number;           // estimated cost of the task's sessions so far (API pricing; plans are not billed per task)
+  costUsd?: number;           // estimated cost of the task's sessions and reviews so far (API pricing; plans are not billed per task)
   output?: 'artifact';        // the result is a page published as a claude.ai artifact (not a code change)
   artifactUrl?: string;       // its link, once published
   publishing?: boolean;       // JustCode is publishing the page now (interactive claude in a terminal)
@@ -68,7 +68,8 @@ export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreview
 
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.
-export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[] }
+// plannerCostUsd: planning chats' estimated cost, which counts toward the project budget.
+export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[]; plannerCostUsd?: number }
 
 // One board per project folder, kept in the project at .justcode/board.json.
 export class Store {
@@ -191,6 +192,13 @@ export class Store {
   }
 
   get queue() { return this.board.queue ?? []; }
+  addPlannerCost(usd: number) {
+    if (!(usd > 0)) return;
+    this.fresh();
+    this.board.plannerCostUsd = (this.board.plannerCostUsd ?? 0) + usd;
+    this.save();
+  }
+
   setQueue(ids: string[]) {
     this.fresh();
     if (JSON.stringify(ids) === JSON.stringify(this.board.queue ?? [])) return;

@@ -413,7 +413,7 @@ export const addUsage = (a: Usage | undefined, u: any): Usage => ({
 });
 
 export interface HeadlessOpts { bin: string; cwd: string; env: Record<string, string>; model?: string; agent?: string; effort?: string; signal: AbortSignal; timeoutMs: number; personal?: boolean; plugins?: string[]; onRate?: (info: any) => void; mcpServers?: Record<string, unknown> }
-interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage }
+interface HeadlessResult { text: string; structured?: unknown; sessionId?: string; usage?: Usage; costUsd: number }
 
 // One unattended turn through the SDK: never asks (dontAsk denies anything not allowed), stops at the timeout or
 // when `signal` aborts. `resume` continues an earlier headless session, whose context is still cached.
@@ -443,10 +443,10 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   }
   if (!result) throw new Error('Claude ended without a reply');
   if (result.subtype !== 'success' || result.is_error) throw new Error(String(result.errors?.join('; ') || result.result || result.subtype));
-  return { text: String(result.result ?? ''), structured: result.structured_output, sessionId: result.session_id, usage: addUsage(undefined, result.usage) };
+  return { text: String(result.result ?? ''), structured: result.structured_output, sessionId: result.session_id, usage: addUsage(undefined, result.usage), costUsd: Number(result.total_cost_usd ?? 0) };
 }
 
-export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage }
+export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage; costUsd?: number }
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
 export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
@@ -460,18 +460,19 @@ export async function runReview(prompt: string, o: HeadlessOpts & { shots: strin
   };
   o = { ...o, mcpServers: w.mcpServers };
   let r = await headless(prompt, o, { ...base, ...(o.resume ? { resume: o.resume } : {}) });
-  let usage = r.usage, sessionId = r.sessionId;
+  let usage = r.usage, sessionId = r.sessionId, costUsd = r.costUsd;
   const read = (x: typeof r) => x.structured !== undefined ? toVerdict(x.structured) : parseVerdict(x.text);
   // The reviewer sometimes ends without a clean verdict (it wrote prose, or the JSON was malformed). Rather than fail
   // the whole review, ask the same session (its context is cached, so this is cheap) for just the verdict, twice.
   for (let i = 0; ; i++) {
-    try { return { verdict: read(r), sessionId, usage }; }
+    try { return { verdict: read(r), sessionId, usage, costUsd }; }
     catch (e) {
       if (i >= 2 || !sessionId) throw e;
       r = await headless('Reply with ONLY the JSON verdict, nothing else: {"pass": <true|false>, "issues": [<strings>], "risk": "minor"|"critical", "tested": [<commands you ran>]}. A failing verdict must list at least one issue.',
         o, { ...base, resume: sessionId });
       usage = addUsage(usage, { input_tokens: r.usage?.input, output_tokens: r.usage?.output, cache_read_input_tokens: r.usage?.cacheRead, cache_creation_input_tokens: r.usage?.cacheWrite });
       sessionId = r.sessionId ?? sessionId;
+      costUsd += r.costUsd;
     }
   }
 }

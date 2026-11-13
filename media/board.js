@@ -416,6 +416,8 @@
   }
 
   // Sprint progress: the sprint on screen (or the active one in All tasks), as a bar split by lane, plus its goal.
+  const costOf = l => l.reduce((n, t) => n + (t.costUsd || 0), 0);
+  const sprintBudget = id => { const spent = costOf(S.board.tasks.filter(t => t.sprintId === id)); return spent || S.policy ? { spent, max: S.policy?.policy.maxCostUsd.sprint || 0 } : undefined; };
   function renderProgress() {
     const sp = S.board.sprints.find(s => s.id === view) ?? (view === 'all' ? S.board.sprints.find(s => s.active && !s.closed) : undefined);
     if (!sp) return $('#progress').replaceChildren();
@@ -427,7 +429,8 @@
     const done = n('done'), pct = Math.round(done / tasks.length * 100);
     $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') },
       h('div', { class: 'row' }, h('b', {}, sp.name), sp.goal ? h('span', { class: 'muted grow' }, sp.goal) : h('span', { class: 'grow' }),
-        h('span', { class: 'small' }, `${done} of ${tasks.length} done · ${pct}%`)),
+        h('span', { class: 'small' }, `${done} of ${tasks.length} done · ${pct}%`),
+        (b => b ? h('span', { class: `small${b.max && b.spent >= b.max ? ' err' : ''}`, title: 'Estimated cost of this sprint\'s tasks and reviews, against maxCostUsd.sprint in .justcode/policy.json' }, ` · $${b.spent.toFixed(2)}${b.max ? ` / $${b.max}` : ''}`) : '')(sprintBudget(sp.id))),
       h('div', { class: 'bar', role: 'progressbar', 'aria-label': `${sp.name} progress`, 'aria-valuemin': '0', 'aria-valuemax': String(tasks.length), 'aria-valuenow': String(done) },
         parts.filter(([, , c]) => c).map(([id, , c]) => h('i', { class: `seg ${id}`, style: `flex:${c}` }))),
       h('div', { class: 'legend small muted' }, parts.filter(([, , c]) => c).map(([id, l, c]) => h('span', {}, h('i', { class: `dot ${id}` }), ` ${c} ${l}`)),
@@ -979,7 +982,8 @@
       ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${tokShort(r.build)} | ${tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
     dialog('Report',
       h('div', { class: 'kpis' }, [['Tasks', rows.length], ['New tokens', tokShort(tot('build') + tot('review'))], ['Cached re-reads', tokShort(tot('cached'))], ['Build / review', `${tokShort(tot('build'))} / ${tokShort(tot('review'))}`],
-        ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')]]
+        ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')],
+        ['Project cost (est.)', `$${(costOf(S.board.tasks) + (S.board.plannerCostUsd || 0)).toFixed(2)}${S.policy?.policy.maxCostUsd.project ? ` / $${S.policy.policy.maxCostUsd.project}` : ''}`]]
         .map(([k, v]) => h('div', { class: 'kpi' }, h('b', {}, v), h('span', { class: 'muted small' }, k)))),
       rows.length ? h('table', { class: 'rep' }, h('tr', {}, ['Task', 'Status', 'Build', 'Review', 'Checks', 'Reviews', 'Min'].map(x => h('th', {}, x))),
         rows.sort((a, b) => (b.build + b.review) - (a.build + a.review)).map(r => h('tr', { onclick: () => { $('#dlg').close(); openTask(r.t.id, 'details'); } },

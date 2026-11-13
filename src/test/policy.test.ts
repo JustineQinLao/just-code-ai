@@ -78,3 +78,22 @@ test('status: a policy hold asks for your approval and checks-fail hides "anyway
   assert.ok(status.nextStep(failing, c()).actions.some((a: any) => /anyway/.test(a[0])));
   assert.ok(!status.nextStep(failing, c({ requireChecksPass: true })).actions.some((a: any) => /anyway/.test(a[0])));
 });
+
+test('budgets: a task over its budget is stopped after its turn with a clear card message', async () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'policy.json'), JSON.stringify({ maxCostUsd: { task: 0.01, sprint: 0, project: 0 } }));
+  const store = new Store(root);
+  const notes: string[] = [];
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => ({ review: { auto: false } } as any), limits: new Limits(), notify: (_l: string, m: string) => notes.push(m), choose: async () => 'x', cli: '' });
+  r.check = async () => 'pass';
+  const t = store.addTask({ title: 'A', mode: 'auto' });
+  store.updateTask(t.id, { status: 'doing', sessionId: 's' });
+  await r.turnEnded(t.id, { ok: true, text: 'done', costUsd: 0.02 });
+  assert.match(store.task(t.id)!.error!, /^Budget reached: \$0\.02 of \$0\.01 \(task\)/);
+  assert.equal(Audit.read(root, { event: 'budget.stop' }).length, 1);
+  assert.match(r.policyBlock(store.task(t.id)), /Budget reached/);
+  store.addPlannerCost(1.5);
+  assert.equal(r.spent(store.task(t.id)).project, 1.52);
+  r.dispose();
+});
