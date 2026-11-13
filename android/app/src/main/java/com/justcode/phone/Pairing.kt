@@ -55,7 +55,9 @@ object Pairing {
     sealed class Check { object Ok : Check(); object Unauthorized : Check(); class Unreachable(val why: String) : Check() }
 
     /** Call off the main thread. */
-    fun check(link: String): Check = try {
+    fun check(link: String): Check = try { checkOrThrow(link) } catch (e: Exception) { Check.Unreachable(e.message ?: e.javaClass.simpleName) }
+
+    private fun checkOrThrow(link: String): Check {
         val u = URI(link)
         val q = u.rawQuery ?: ""
         val token = Regex("(^|&)token=([^&]+)").find(q)?.groupValues?.get(2)
@@ -70,10 +72,10 @@ object Pairing {
         if (token != null) c.setRequestProperty("x-token", token)
         else if (!isPair) android.webkit.CookieManager.getInstance().getCookie(base)?.let { c.setRequestProperty("Cookie", it) }
         // A pair= code is single use, so it is never sent here (the WebView redeems it); a 401 just proves the server is up.
-        when (val code = c.responseCode) {
+        return when (val code = c.responseCode) {
             200 -> Check.Ok
             401 -> if (isPair) Check.Ok else Check.Unauthorized
             else -> Check.Unreachable("Server answered $code")
         }
-    } catch (e: Exception) { Check.Unreachable(e.message ?: e.javaClass.simpleName) }
+    }
 }
