@@ -14,6 +14,7 @@ import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
 import * as C from './checks';
+import * as D from './design';
 import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
@@ -655,6 +656,24 @@ export function activate(context: vscode.ExtensionContext) {
         for (const a of add) if (a.kind === 'url' && A.isArtifactLink(a.ref)) void saveArtifactSource(r.root, a);
         return push();
       }
+      case 'designPick': {
+        try {
+          const list = await D.listDesigns();
+          const items: (vscode.QuickPickItem & { own?: boolean })[] = [{ label: '$(file) Use my own file…', own: true }, ...list.map(d => ({ label: d.name }))];
+          const pick = await vscode.window.showQuickPick(items, { title: 'Pick a design (VoltAgent/awesome-design-md)', matchOnDescription: true });
+          if (!pick) return;
+          if (pick.own) {
+            const f = (await pickPaths(r.root, 'Use as DESIGN.md', remote))[0];
+            if (!f) return;
+            D.installDesign(r.root, fs.readFileSync(f, 'utf8'), { source: 'file', url: f });
+          } else D.installDesign(r.root, await D.fetchDesign(pick.label), { source: 'awesome-design-md', name: pick.label, url: D.rawUrl(pick.label) });
+          say('DESIGN.md saved. UI and artifact tasks will follow it.');
+        } catch (e: any) { void vscode.window.showErrorMessage(`Could not load designs: ${e.message}`); }
+        return push();
+      }
+      case 'designRemove':
+        if (await confirm('Remove .justcode/design/DESIGN.md?', 'Remove')) D.removeDesign(r.root);
+        return push();
       case 'showSaveTerminal': (m.sourceId ? savingTerms.get(m.sourceId) : [...savingTerms.values()][0])?.show(); return;
       case 'saveSourceCopy': {
         const src = A.loadSources(r.root).find(x => x.id === m.sourceId);

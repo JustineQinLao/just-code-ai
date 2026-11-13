@@ -393,6 +393,7 @@
       sprint ? btn('Delete sprint…', () => post('deleteSprint', { sprintId: sprint.id }), 'ghost', 'Remove this sprint (asks first). Its tasks move to the Backlog') : '',
       btn('✦ Plan', () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
       sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? openPlanner() : planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
+      btn('🎨 Design', () => designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
       (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
@@ -1040,6 +1041,13 @@
       h('div', { class: 'acts' }, btn('+ Files or folders', () => post('addSource', { kind: 'file', sprintId: sprint?.id }), 'primary'), btn('+ Link', () => post('addSource', { kind: 'url', sprintId: sprint?.id })),
         btn('Project history', () => post('openArtifact', { which: 'progress' }), 'ghost', 'What merged tasks changed; later tasks read it instead of digging through git')));
     d.dataset.kind = 'sources';
+  }
+
+  function designDialog() {
+    const has = !!(S.project || {}).designMd;
+    const d = dialog('Design', h('p', { class: 'muted' }, has ? 'DESIGN.md is set. UI and artifact tasks are told to follow it.' : 'Pick a design from VoltAgent/awesome-design-md, or use your own file. UI and artifact tasks are told to follow it.'),
+      h('div', { class: 'acts' }, btn(has ? 'Change' : 'Pick a design', () => { d.close(); post('designPick'); }, 'primary'),
+        has ? btn('Remove', () => { d.close(); post('designRemove'); }, 'ghost') : ''));
   }
 
   function guide() {

@@ -52,6 +52,12 @@ export const designMdFile = (root: string) => jc(root, 'design', 'DESIGN.md');
 // Points a session at the project description JustCode's setup skill wrote, when there is one.
 export const projectSection = (root: string) => fs.existsSync(projectFile(root)) ? `## Project\nRead ${projectFile(root)} first.` : '';
 
+// UI-ish work (or an artifact page) follows the project's DESIGN.md when one exists.
+const UI_WORDS = /\b(ui|ux|frontend|front-end|css|html|page|screen|layout|landing|dashboard|button|modal|dialog|form|component|style|styling|theme|navbar|sidebar|webview|responsive|visual)s?\b/i;
+export const isUiTask = (t: Task) => t.output === 'artifact' || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`);
+const designSection = (root: string, t: Task) => isUiTask(t) && fs.existsSync(designMdFile(root))
+  ? `## Design system\nFollow ${designMdFile(root)} as the style spec (colors, type, spacing, components) for any UI you build or change.` : '';
+
 export interface Prompt { time: number; kind: 'task' | 'message' | 'plan'; text: string; taskId?: string; title?: string; sessionId?: string }
 export const promptsFile = (root: string) => jc(root, 'prompts.jsonl');
 export function logPrompt(root: string, p: Omit<Prompt, 'time'>) {
@@ -120,6 +126,7 @@ export function writeBrief(root: string, t: Task, sources: Source[]) {
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
     `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo)`,
     projectSection(root),
+    designSection(root, t),
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
     fs.existsSync(progressFile(root)) ? `## Project history\nWhat earlier tasks changed: ${progressFile(root)} (read it if you need context on recent work).` : '',
     `## When you finish\nUpdate ${handoffFile(root, t.id)} (create it if missing), at most 30 lines:\n` +
