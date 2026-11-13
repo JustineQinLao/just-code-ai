@@ -1,3 +1,5 @@
+import { discoverAgents } from '../claude';
+import { ensurePlugin, pluginDir } from '../plugin';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
@@ -363,25 +365,18 @@ test('setup skill: its commands match the setup task\'s allow rules', () => {
   assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync && rm -rf x` }), false);
 });
 
-test('setup installs the design skill by default and keeps a project\'s own copy', () => {
-  const root = tmp(), cli = path.join(__dirname, '..', 'cli.js'), file = path.join(root, '.claude', DESIGN_SKILL_PATH);
-  execFileSync(process.execPath, [cli, 'setup', root]);
-  assert.match(fs.readFileSync(file, 'utf8'), /^---\nname: design-from-artifact\n[\s\S]*project\/canvas\.json/);
-  fs.writeFileSync(file, 'mine');
-  execFileSync(process.execPath, [cli, 'setup', root]);
-  assert.equal(fs.readFileSync(file, 'utf8'), 'mine');
-  assert.match(syncSkill('/x/cli.js'), /no description[\s\S]*docs\/project\.md/);
-  const plan = path.join(root, '.claude', 'skills', 'plan-tasks', 'SKILL.md');
-  assert.match(fs.readFileSync(plan, 'utf8'), /^---\nname: plan-tasks\n[\s\S]*LAST/);
-  // --update: an approved agent draft replaces the old one, and the default skills come back current.
-  fs.mkdirSync(path.join(root, '.claude', 'agents'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.claude', 'agents', 'planner.md'), 'old');
-  fs.mkdirSync(path.join(root, '.justcode', 'setup', 'agents'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.justcode', 'setup', 'agents', 'planner.md'), 'new');
-  execFileSync(process.execPath, [cli, 'setup', root, '--update']);
-  assert.equal(fs.readFileSync(path.join(root, '.claude', 'agents', 'planner.md'), 'utf8'), 'new');
-  assert.match(fs.readFileSync(file, 'utf8'), /^---\nname: design-from-artifact/);
-  assert.match(syncSkill('/x/cli.js'), /3b\. Update what exists[\s\S]*setup --update/);
+test('plugin: written once, rewritten when the version changes; agents are discovered from it', () => {
+  const root = tmp();
+  ensurePlugin(root, '1.2.3');
+  const pj = path.join(pluginDir(root), '.claude-plugin', 'plugin.json');
+  assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '1.2.3');
+  fs.writeFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'edited');
+  ensurePlugin(root, '1.2.3');
+  assert.equal(fs.readFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'utf8'), 'edited');
+  ensurePlugin(root, '1.2.4');
+  assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '1.2.4');
+  assert.notEqual(fs.readFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'utf8'), 'edited');
+  assert.ok(discoverAgents(root).some(a => a.name === 'reviewer'));
 });
 
 test('deleting a sprint keeps its tasks, in the backlog', () => {

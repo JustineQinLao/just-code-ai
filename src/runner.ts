@@ -9,6 +9,7 @@ import { syncSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, frontendDesignPlugin } from './claude';
 import * as A from './artifacts';
+import { ensurePlugin, pluginDir } from './plugin';
 import * as C from './checks';
 import { Limits, isLimitError } from './limits';
 
@@ -41,6 +42,7 @@ export interface RunnerSettings {
 }
 
 export interface RunnerDeps {
+  version?: string;   // the extension's version: the JustCode plugin is rewritten when its plugin.json differs
   bin(): string | undefined;
   env(): Record<string, string>;
   settings(): RunnerSettings;
@@ -85,7 +87,14 @@ export class Runner {
   private leading = false;
   private leaseTimer?: NodeJS.Timeout;
 
+  // The JustCode plugin (skills, agents) every session loads, rewritten first if it is missing or from another version.
+  private plugins(extra: Array<string | undefined> = []) {
+    try { ensurePlugin(this.root, this.d.version ?? '0.0.0'); } catch { /* a read-only folder: sessions still run */ }
+    return [pluginDir(this.root), ...extra.filter((p): p is string => !!p)];
+  }
+
   constructor(readonly store: Store, private d: RunnerDeps) {
+    this.plugins();
     // Finished or archived work has no running session, however it got there (Done, archive, sync, merge).
     this.unsub = store.onChange(() => {
       for (const [id] of this.sessions) {
@@ -307,7 +316,7 @@ export class Runner {
     const s = new Session({
       bin, cwd, sessionId, resume, mode: effectiveMode(task.mode, set.bypassAll), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
-      plugins: task.output === 'artifact' && !set.personalSetup ? [frontendDesignPlugin()].filter((p): p is string => !!p) : undefined,
+      plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [frontendDesignPlugin()] : []),
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
       allowed: [...new Set([...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
@@ -754,7 +763,7 @@ export class Runner {
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
-        const r = await runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup,
+        const r = await runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(),
           timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli, resume });
         if (r.usage) {
           usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });
@@ -1000,7 +1009,7 @@ export class Runner {
       // spent tokens on a refused Write. Default mode with the write tools removed keeps it read-only.
       bin, cwd: this.root, sessionId: this.plannerSession, resume: false, mode: 'default', model: set.plannerModel || undefined,
       append: PLANNER_APPEND, readOnly: true, effort: set.plannerEffort || undefined,
-      allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup,
+      allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup, plugins: this.plugins(),
     });
     this.planner = s;
     s.on('change', () => this.changed());

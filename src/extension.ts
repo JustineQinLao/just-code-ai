@@ -8,6 +8,7 @@ import { execFile } from 'child_process';
 import { Store, Task } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
+import { pluginDir } from './plugin';
 import { agentLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
@@ -64,7 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
     let r = runners.get(root);
     if (r) return r;
     r = new Runner(new Store(root), {
-      bin, env, settings: runnerSettings, limits, cli: path.join(context.extensionPath, 'out', 'cli.js'),
+      version: context.extension.packageJSON.version, bin, env, settings: runnerSettings, limits, cli: path.join(context.extensionPath, 'out', 'cli.js'),
       notify: (level, text, taskId, toast) => {
         out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] ${level}: ${text}`);
         // A toast only for what you can act on (a question, ready to merge, a failure); the rest is in the output log.
@@ -534,7 +535,7 @@ export function activate(context: vscode.ExtensionContext) {
         const b = bin(), personal = setting('personalSetup', false), key = `${r.root}|${personal}`;
         const known = commandCache.get(key);
         const commands = known && Date.now() - known.at < 60_000 ? known.list
-          : await (b ? slashCommands({ bin: b, cwd: r.root, env: env(), personal }) : Promise.reject()).catch(() => discoverSkills(r.root, personal));
+          : await (b ? slashCommands({ bin: b, cwd: r.root, env: env(), personal, plugins: [pluginDir(r.root)] }) : Promise.reject()).catch(() => discoverSkills(r.root, personal));
         if (commands !== known?.list) commandCache.set(key, { at: Date.now(), list: commands });
         emit({ type: 'completions', files: await g.projectFiles(r.root), commands }); return;
       }
@@ -921,7 +922,7 @@ export function activate(context: vscode.ExtensionContext) {
     const file = installSkill();
     if (!file) return;
     const task = r.store.addTask({ title: 'Set up this project for Claude', description: 'Set up this project: Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve. Then it syncs TASKS.md (with sprints) into the board.',
-      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/setup/**)', 'Bash(ls:*)', `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`, `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} setup:*)`] });
+      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/setup/**)', 'Bash(ls:*)', `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`] });
     await r.run(task.id);
     open(task.id);
   }
