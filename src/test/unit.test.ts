@@ -10,9 +10,9 @@ import { matches, alwaysChoice, parseRule } from '../policy';
 import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store } from '../store';
-import { parseTasks, syncTasks } from '../tasksmd';
+import { projectSetup } from '../setup';
 import { Session } from '../session';
-import { cliCommand, syncSkill, DESIGN_SKILL_PATH } from '../skill';
+import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
 import { writePlugin } from '../plugin';
 import * as g from '../git';
 import * as A from '../artifacts';
@@ -111,33 +111,6 @@ test('store: rules and queue persist, deleted tasks leave the queue', () => {
   assert.deepEqual(again.rules, ['Bash(npm test:*)']);
   assert.deepEqual(again.queue, [b.id]);
   s.dispose(); again.dispose();
-});
-
-test('TASKS.md parsing', () => {
-  const t = parseTasks('## Sprint 1\n- [ ] Login\n  with email\n- [x] Setup\n## Backlog\n- [~] Search');
-  assert.deepEqual(t.map(x => [x.title, x.status, x.sprint]), [['Login', 'todo', 'Sprint 1'], ['Setup', 'done', 'Sprint 1'], ['Search', 'doing', undefined]]);
-  assert.equal(t[0].description, 'with email');
-});
-
-test('TASKS.md: sprint goals, Done when checklists, sprints created on sync', () => {
-  const md = '## Sprint 1: Auth basics\n- [ ] Login\n  Goal: sign in with email\n  Done when:\n  - wrong password shows an error\n  - npm test passes\n## Sprint 2 — Search\n- [ ] Search\n## Backlog\n- [ ] Later';
-  const t = parseTasks(md);
-  assert.deepEqual(t.map(x => [x.title, x.sprint, x.sprintGoal]), [['Login', 'Sprint 1', 'Auth basics'], ['Search', 'Sprint 2', 'Search'], ['Later', undefined, undefined]]);
-  assert.equal(t[0].description, 'Goal: sign in with email\nDone when:\n- wrong password shows an error\n- npm test passes');
-  const root = tmp(), file = path.join(root, 'TASKS.md');
-  fs.writeFileSync(file, md);
-  const s = new Store(root);
-  const dry = syncTasks(s, file, true);
-  assert.deepEqual(dry.sprints, ['Sprint 1: Auth basics', 'Sprint 2: Search']);
-  assert.equal(s.data.sprints.length, 0);
-  syncTasks(s, file, false);
-  assert.deepEqual(s.data.sprints.map(x => [x.name, x.goal]), [['Sprint 1', 'Auth basics'], ['Sprint 2', 'Search']]);
-  const login = s.data.tasks.find(x => x.title === 'Login')!;
-  assert.equal(login.sprintId, s.data.sprints[0].id);
-  assert.equal(login.mode, 'auto');
-  assert.equal(s.data.tasks.find(x => x.title === 'Later')!.sprintId, undefined);
-  assert.deepEqual(syncTasks(s, file, false).sprints, []);  // existing sprints are reused
-  s.dispose();
 });
 
 test('planner proposals: goal, files, done-when and sprint', () => {
@@ -357,14 +330,23 @@ test('requestRun: honors the one-at-a-time limit, queues the rest', async () => 
   r.dispose();
 });
 
-test('setup skill: its commands match the setup task\'s allow rules', () => {
-  const cli = '/Users/me/.vscode/extensions/just code/out/cli.js';
-  const rule = `Bash(${cliCommand(cli)} sync:*)`;
-  const skill = syncSkill(cli);
-  assert.ok(skill.includes(`${cliCommand(cli)} sync --dry-run`));
-  assert.ok(skill.includes('disable-model-invocation: true'));
-  assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync --dry-run` }), true);
-  assert.equal(matches(rule, 'Bash', { command: `${cliCommand(cli)} sync && rm -rf x` }), false);
+test('setup skill: only writes under .justcode and runs no CLI command', () => {
+  const skill = setupSkill();
+  assert.ok(skill.includes('name: just-code-setup') && skill.includes('disable-model-invocation: true'));
+  assert.ok(skill.includes('.justcode/project.md') && skill.includes('.justcode/design/DESIGN.md'));
+  assert.doesNotMatch(skill, /node "/);
+});
+
+test('project.md: the brief and plan chats point at it when it exists; projectSetup reports it', () => {
+  const root = tmp();
+  const t = { id: 't1', title: 'x', mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.doesNotMatch(A.writeBrief(root, t, []), /## Project\n/);
+  assert.deepEqual(projectSetup(root), { projectMd: false, designMd: false });
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(A.projectFile(root), 'About');
+  assert.match(A.writeBrief(root, t, []), new RegExp(`## Project\\nRead ${A.projectFile(root).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} first\\.`));
+  assert.match(A.projectSection(root), /^## Project/);
+  assert.deepEqual(projectSetup(root), { projectMd: true, designMd: false });
 });
 
 test('plugin: written once, rewritten when the version changes; agents are discovered from it', () => {
@@ -793,7 +775,7 @@ test('the @ menu lists tracked and new files with their folders, not ignored one
 });
 
 test('the / menu hides internal commands and JustCode\'s own setup skill', () => {
-  assert.deepEqual(usableCommands([{ name: 'compact', description: 'Compact' }, { name: '__remote' }, { name: 'just-code-ai-sync' }, { name: 'lexcode-sync' }, { name: 'caveman:caveman' }]),
+  assert.deepEqual(usableCommands([{ name: 'compact', description: 'Compact' }, { name: '__remote' }, { name: 'just-code-setup' }, { name: 'lexcode-sync' }, { name: 'caveman:caveman' }]),
     [{ name: 'compact', description: 'Compact' }, { name: 'caveman:caveman', description: '' }]);
 });
 

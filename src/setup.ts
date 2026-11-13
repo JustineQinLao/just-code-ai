@@ -63,8 +63,7 @@ export const installCommand = () => process.platform === 'win32'
   ? 'irm https://claude.ai/install.ps1 | iex'
   : 'curl -fsSL https://claude.ai/install.sh | bash';
 
-// Has this project any Claude setup of its own (agents, skills, CLAUDE.md)? None is needed; the board says what it adds.
+// Has the project a description (.justcode/project.md) and, optionally, a design (.justcode/design/DESIGN.md)?
 export function projectSetup(root: string) {
-  const has = (p: string) => { try { return fs.readdirSync(path.join(root, p)).length > 0; } catch { return false; } };
-  return { agents: has('.claude/agents'), skills: has('.claude/skills'), claudeMd: fs.existsSync(path.join(root, 'CLAUDE.md')), tasksMd: fs.existsSync(path.join(root, 'TASKS.md')) };
+  return { projectMd: fs.existsSync(path.join(root, '.justcode', 'project.md')), designMd: fs.existsSync(path.join(root, '.justcode', 'design', 'DESIGN.md')) };
 }

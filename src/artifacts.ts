@@ -46,6 +46,10 @@ export const checksLog = (root: string, id: string) => path.join(taskDir(root, i
 export const planFile = (root: string, id: string) => path.join(taskDir(root, id), 'plan.md');
 export const writePlan = (root: string, id: string, plan: string) => write(planFile(root, id), plan.trim() + '\n');
 export const progressFile = (root: string) => jc(root, 'progress.md');
+export const projectFile = (root: string) => jc(root, 'project.md');
+export const designMdFile = (root: string) => jc(root, 'design', 'DESIGN.md');
+// Points a session at the project description JustCode's setup skill wrote, when there is one.
+export const projectSection = (root: string) => fs.existsSync(projectFile(root)) ? `## Project\nRead ${projectFile(root)} first.` : '';
 
 export interface Prompt { time: number; kind: 'task' | 'message' | 'plan'; text: string; taskId?: string; title?: string; sessionId?: string }
 export const promptsFile = (root: string) => jc(root, 'prompts.jsonl');
@@ -113,6 +117,7 @@ export function writeBrief(root: string, t: Task, sources: Source[]) {
     ...picked.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`),
     ...files.map(f => `- ${f}`),
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
+    projectSection(root),
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
     fs.existsSync(progressFile(root)) ? `## Project history\nWhat earlier tasks changed: ${progressFile(root)} (read it if you need context on recent work).` : '',
     `## When you finish\nUpdate ${handoffFile(root, t.id)} (create it if missing), at most 30 lines:\n` +

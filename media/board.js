@@ -26,11 +26,11 @@
   let initLater = saved.initLater || {};   // project root → the user chose "Not now" on the setup banner
   const remember = () => vscode.setState({ view, open, initLater });
 
-  // Is this project set up for Claude? Set up = CLAUDE.md, an agent in .claude/agents and TASKS.md all exist.
+  // Is this project described for JustCode? Set up = .justcode/project.md exists.
   // `running` is the setup task while it works.
   function initState() {
     const pr = S.project || {};
-    const missing = [!pr.claudeMd && 'CLAUDE.md', !pr.agents && 'a reviewer agent', !pr.tasksMd && 'TASKS.md'].filter(Boolean);
+    const missing = [!pr.projectMd && 'a project description'].filter(Boolean);
     const running = S.board.tasks.find(t => t.init && !t.archived && t.status !== 'done');
     return { done: !missing.length, missing, running };
   }
@@ -309,7 +309,7 @@
   // Next to the project name: whether it is set up for Claude, and what it has.
   function setupPill() {
     const st = initState(), pr = S.project || {};
-    const has = [['CLAUDE.md', pr.claudeMd], ['agents', pr.agents], ['skills', pr.skills], ['TASKS.md', pr.tasksMd]].map(([n, ok]) => `${ok ? '✓' : '✗'} ${n}`).join('\n');
+    const has = [['project.md', pr.projectMd], ['DESIGN.md', pr.designMd]].map(([n, ok]) => `${ok ? '✓' : '✗'} ${n}`).join('\n');
     if (st.running) return h('span', { class: 'pill run', title: 'Claude is setting up this project. Open the task to answer its questions.', onclick: () => openTask(st.running.id) }, '◌ Setting up…');
     if (st.done) return h('span', { class: 'pill ok', title: `Set up for Claude\n${has}` }, '✓ Set up');
     return h('span', { class: 'pill warn', title: `Not set up for Claude\n${has}\n\nClick to set it up.`, onclick: () => post('initialize') }, '● Not set up');
@@ -873,7 +873,7 @@
   // first when the project has no Claude setup yet.
   function planDialog(todoIds, sprint, editSprint = false) {
     const pr = S.project || {};
-    const missing = [!pr.claudeMd && 'CLAUDE.md', !pr.agents && 'a reviewer agent', !pr.tasksMd && 'TASKS.md'].filter(Boolean);
+    const missing = [!pr.projectMd && 'a project description'].filter(Boolean);
     const started = sprint ? S.board.tasks.filter(t => t.sprintId === sprint.id && !t.archived && !(t.status === 'todo' && !t.worktree)).length : 0;
     const where = sprint ? ` in ${sprint.name}` : '';
     let goal, rework, chips;
@@ -881,7 +881,7 @@
     const presets = ['Add a "Done when" checklist to each', 'Split anything too big', 'Merge duplicates', 'Order by dependency', sprint ? 'Make them fit the sprint goal' : 'Group into sprints'];
     dialog(editSprint ? `Edit ${sprint.name} with Claude` : 'Plan with Claude',
       missing.length && !editSprint ? h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'Set up this project first? '),
-        `It is missing ${andList(missing)}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. TASKS.md becomes sprints and tasks on the board.`),
+        `It is missing ${andList(missing)}. Claude reads the code, asks you a few questions, shows what it will write, and saves it to .justcode/project.md after you approve.`),
         btn('Set up project', () => { post('initialize'); $('#dlg').close(); }, 'primary')) : '',
       h('p', { class: 'muted' }, editSprint
         ? `One prompt edits all ${todoIds.length} not-started task${todoIds.length === 1 ? '' : 's'}${where}: reword, split, merge, add, remove or reorder.${sprint.goal ? ` Sprint goal: ${sprint.goal}.` : ''}${started ? ` Claude also checks the ${started} started or done task${started === 1 ? '' : 's'}: a done one that must change goes back to To do, a started one gets the change as a message.` : ''} You review every change before it is applied.`
@@ -910,7 +910,7 @@
         item('Prompt history', 'Every prompt you sent and each session\'s conversation', () => historyDialog()),
         item('Project history', 'What merged tasks changed', () => post('openArtifact', { which: 'progress' })),
         item(showArchived ? 'Hide archived tasks' : 'Show archived tasks', 'Archived tasks stay out of the lanes', () => { showArchived = !showArchived; render(); }),
-        item('Set up project with Claude', 'Interview, then CLAUDE.md, a reviewer agent and TASKS.md', () => post('initialize'))));
+        item('Set up project with Claude', 'Interview, then .justcode/project.md', () => post('initialize'))));
   }
 
   function settings() {
@@ -1046,7 +1046,7 @@
     dialog('JustCode in 2 minutes',
       sec(1, 'Set up once', 'The checklist at the top checks Claude Code, your sign-in and git, and fixes what is missing. Any folder works: an existing project, or an empty one (JustCode asks before creating a git repository).'),
       sec(2, 'Add a task', 'Type what you want. Enter adds it, ⌘/Ctrl+Enter adds and runs it. "Details" adds the goal, a "Done when" checklist the reviewer checks against, screenshots (paste them), files and the sprint. Agent and permissions are under Advanced.'),
-      sec('✦', 'Plan with Claude', '✦ Plan turns a goal into small tasks, or reworks the To do list. Claude reads the code, may ask you a few questions, and proposes tasks with a goal, likely files and "Done when", grouped into sprints. In a new project it offers to set it up first: it interviews you, then writes CLAUDE.md, a reviewer agent and TASKS.md after you approve.'),
+      sec('✦', 'Plan with Claude', '✦ Plan turns a goal into small tasks, or reworks the To do list. Claude reads the code, may ask you a few questions, and proposes tasks with a goal, likely files and "Done when", grouped into sprints. In a new project it offers to set it up first: it interviews you, then writes .justcode/project.md after you approve.'),
       sec(3, 'Claude works on its own branch', 'Every task gets its own copy of the project and its own branch, so your files and other tasks are never touched. Click a card to watch its activity, message Claude, or see its agents.'),
       sec(4, 'Approvals without babysitting', h('p', {}, h('b', {}, 'Auto'), ' (the default) lets Claude approve what is safe and ask only when unsure. A question or approval turns the card yellow under ', h('b', {}, 'Needs you'), ' with buttons: Allow, Always allow (remembered for the whole project), or Deny with a reason.'),
         'Other modes: Edit automatically (edits approved, commands ask), Manual (everything asks), Plan, Bypass permissions (no approvals; only for trusted work).'),

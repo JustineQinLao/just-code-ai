@@ -12,7 +12,6 @@ import { pluginDir } from './plugin';
 import { agentLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
 import { Limits } from './limits';
 import { checkSetup, installCommand, projectSetup, SetupState } from './setup';
-import { cliCommand, syncSkill } from './skill';
 import * as A from './artifacts';
 import * as C from './checks';
 import { startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
@@ -502,7 +501,7 @@ export function activate(context: vscode.ExtensionContext) {
         const sp = s.data.sprints.find(x => x.id === m.sprintId);
         if (!sp) return;
         const n = s.data.tasks.filter(t => t.sprintId === sp.id && !t.archived).length;
-        if (await confirm(`Delete the sprint "${sp.name}"?${n ? ` Its ${n} task${n === 1 ? '' : 's'} move to the Backlog; no task is deleted.` : ''} A "## ${sp.name}" heading left in TASKS.md brings it back on the next sync.`, 'Delete sprint')) s.deleteSprint(sp.id);
+        if (await confirm(`Delete the sprint "${sp.name}"?${n ? ` Its ${n} task${n === 1 ? '' : 's'} move to the Backlog; no task is deleted.` : ''}`, 'Delete sprint')) s.deleteSprint(sp.id);
         return;
       }
       case 'closeSprint':
@@ -915,29 +914,14 @@ export function activate(context: vscode.ExtensionContext) {
 
   /* ---------- planning and the optional Claude setup ---------- */
 
-  // Optional: Claude drafts agents, skills, CLAUDE.md and TASKS.md for this project, then syncs TASKS.md to the board.
+  // Optional: Claude interviews you and writes .justcode/project.md (and DESIGN.md when you name a design).
   async function initialize(r: Runner) {
     const running = r.store.data.tasks.find(t => t.init && !t.archived && t.status !== 'done');
     if (running) return open(running.id);
-    const file = installSkill();
-    if (!file) return;
-    const task = r.store.addTask({ title: 'Set up this project for Claude', description: 'Set up this project: Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve. Then it syncs TASKS.md (with sprints) into the board.',
-      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.claude/**)', 'Bash(ls:*)', `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`] });
+    const task = r.store.addTask({ title: 'Describe this project for JustCode', description: 'Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve: .justcode/project.md and, if you name a design, .justcode/design/DESIGN.md.',
+      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/**)', 'Bash(ls:*)'] });
     await r.run(task.id);
     open(task.id);
-  }
-
-  // The skill lives in ~/.claude/skills; written only when the user asks for it (Initialize, or the command).
-  function installSkill() {
-    const file = path.join(os.homedir(), '.claude', 'skills', 'just-code-ai-sync', 'SKILL.md');
-    try {
-      const text = syncSkill(path.join(context.extensionPath, 'out', 'cli.js'));
-      if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, text);
-      }
-      return file;
-    } catch (e: any) { vscode.window.showErrorMessage(`Could not write ${file}: ${e.message}`); }
   }
 
   context.subscriptions.push(
@@ -951,7 +935,6 @@ export function activate(context: vscode.ExtensionContext) {
       apiKey = key.trim() || undefined;
       void recheck();
     }),
-    vscode.commands.registerCommand('justCode.installSyncSkill', () => { const f = installSkill(); if (f) vscode.window.showInformationMessage(`Installed /just-code-ai-sync at ${f}`); }),
     vscode.commands.registerCommand('justCode.phoneLink', async () => {
       if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
       await syncPhone();

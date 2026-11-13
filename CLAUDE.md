@@ -3,7 +3,7 @@
 VS Code extension: a task board that runs Claude Code on each task in its own git branch, with approvals, AI review and one-click merge. Also serves a token-protected phone page and an Android WebView shell (`android/`).
 
 ## Layout
-- `src/extension.ts` entry; `runner.ts`/`session.ts`/`sdk.ts`/`claude.ts` run agents; `store.ts` board data (`.justcode/board.json`); `git.ts` branches/worktrees; `phone.ts` phone server; `tasksmd.ts` TASKS.md → board; `cli.ts` CLI (`sync`, `setup`).
+- `src/extension.ts` entry; `runner.ts`/`session.ts`/`sdk.ts`/`claude.ts` run agents; `store.ts` board data (`.justcode/board.json`); `git.ts` branches/worktrees; `phone.ts` phone server; `cli.ts` CLI (`screenshot`).
 - `src/test/*.test.ts` node:test suites. `media/` webview assets. `docs/` guide and follow-ups.
 
 ## Commands
