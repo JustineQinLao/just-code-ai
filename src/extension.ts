@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { Store, Task } from './store';
+import { Store, Task, resolveWhere } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
 import { pluginDir } from './plugin';
@@ -451,13 +451,12 @@ export function activate(context: vscode.ExtensionContext) {
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
     switch (m.type) {
       case 'addTask': {
-        const defaultWhere = (sprintId?: string): 'direct' | 'branch' => { const d = setting<string>('defaultWhere', 'auto'); return d === 'direct' || d === 'branch' ? d : sprintId ? 'branch' : 'direct'; };
         if (!String(m.title ?? '').trim()) return;
         if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return;
         const all = A.loadSources(r.root).map(x => x.id);
         const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
         const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'direct' || m.output === 'artifact' ? 'direct' : m.where === 'branch' ? 'branch' : defaultWhere(m.sprintId),
+          mode: m.mode || setting('defaultMode', 'auto'), where: resolveWhere({ where: m.where, artifact: m.output === 'artifact', setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote }),
           output: m.output === 'artifact' ? 'artifact' : undefined,
           files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
         A.logPrompt(r.root, { kind: 'task', text: [task.title, task.description].filter(Boolean).join('\n\n'), taskId: task.id, title: task.title });

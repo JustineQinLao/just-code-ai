@@ -224,6 +224,12 @@ export class Runner {
     if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. The task starts by itself after the reset.');
     const bin = this.d.bin();
     if (!bin) throw new Error('Claude Code is not installed or not found. Open JustCode: Check Setup.');
+    // One direct task at a time, decided before any await: the first claim wins, a second one is refused.
+    if (t.where === 'direct' && !t.init) {
+      if (this.store.data.tasks.some(o => o.id !== id && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done' && (this.starting.has(o.id) || this.sessions.get(o.id)?.open)))
+        throw new Error('Another task is already working in the project folder. Wait for it to finish, or run this one on its own branch.');
+      if (this.busy.size) throw new Error('A merge is running. Start this task in the project folder when it finishes.');
+    }
     this.starting.add(id); // claimed before the awaits, so Run all never double-starts a task
     this.changed();
     try {
@@ -234,9 +240,6 @@ export class Runner {
         this.useLinkedSources(t.sprintId, text);
       }
       if (t.where === 'direct') {
-        if (!t.init && this.store.data.tasks.some(o => o.id !== id && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done' && (this.starting.has(o.id) || this.sessions.get(o.id)?.open)))
-          throw new Error('Another task is already working in the project folder. Wait for it to finish, or run this one on its own branch.');
-        if (this.busy.size) throw new Error('A merge is running. Start this task in the project folder when it finishes.');
         const patch: Partial<Task> = {};
         if (!t.startHead) {
           patch.startHead = await g.git(this.root, ['rev-parse', 'HEAD']).catch(() => '');

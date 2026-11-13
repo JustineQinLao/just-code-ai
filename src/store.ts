@@ -225,3 +225,13 @@ export class Store {
     this.save();
   }
 }
+
+// Where a new task runs: an explicit choice wins; otherwise justCode.defaultWhere (auto: backlog direct, sprint branch).
+// A remote client (phone) always gets its own branch.
+export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean }): 'direct' | 'branch' {
+  if (o.remote) return 'branch';
+  if (o.where === 'direct' || o.artifact) return 'direct';
+  if (o.where === 'branch') return 'branch';
+  if (o.setting === 'direct' || o.setting === 'branch') return o.setting;
+  return o.sprintId ? 'branch' : 'direct';
+}
