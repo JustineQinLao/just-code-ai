@@ -916,8 +916,10 @@ export function activate(context: vscode.ExtensionContext) {
   const saving = new Map<string, Promise<boolean>>();
   async function saveSourceCopies(root: string, text: string) {
     A.addLinkSources(root, text);
-    // Missing, or older than a day: the artifact may have changed since. A failed refresh keeps the old copy.
-    const stale = (s: A.Source) => { try { return Date.now() - fs.statSync(path.join(A.sourceCopy(root, s.id), '.saved')).mtimeMs > 24 * 3600_000; } catch { return true; } };
+    // Missing, or older than justCode.artifactRefreshHours: the artifact may have changed since. A failed refresh keeps
+    // the old copy; a refresh with new content flags the To do tasks that rest on it (registry changedAt).
+    const hours = Math.max(0, setting<number>('artifactRefreshHours', 24));
+    const stale = (s: A.Source) => { try { return Date.now() - fs.statSync(path.join(A.sourceCopy(root, s.id), '.saved')).mtimeMs > hours * 3600_000; } catch { return true; } };
     const links = A.loadSources(root).filter(s => s.kind === 'url' && A.isArtifactLink(s.ref) && stale(s));
     for (const s of links.filter(s => A.hasCopy(root, s))) void saveArtifactSource(root, s);
     const missing = links.filter(s => !A.hasCopy(root, s));

@@ -288,6 +288,12 @@
           "minimum": 1,
           "description": "A task's Claude process that has been idle this long is closed to free memory. It resumes with its full history when needed."
         },
+        "justCode.artifactRefreshHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 0,
+          "description": "How old a saved copy of a claude.ai artifact source may be before a prompt that uses it saves it again. Lower: tasks see design changes sooner, at the cost of a save each time. 0: save again on every prompt."
+        },
         "justCode.superpowers": {
           "type": "boolean",
           "default": true,
