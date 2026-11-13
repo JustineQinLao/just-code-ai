@@ -101,7 +101,7 @@ export function makePhoneBoard<T extends { id: string; title: string; base?: str
  *  merge/delete, MCP/API keys, sources, artifacts, setup) stays desktop-only. */
 const MOBILE_TYPES = new Set(['dialogReply', 'ready', 'root', 'guideSeen', 'openUrl', 'settings', 'resumeNow', 'addTask', 'editTask', 'move', 'reorder',
   'addSprint', 'activateSprint', 'closeSprint', 'run', 'runAll', 'cancelQueue', 'stop', 'interrupt', 'say', 'answer', 'setMode', 'watch', 'changes',
-  'review', 'cancelReview', 'resolve', 'sendIssues', 'sendChecks', 'copy', 'shots', 'planner', 'plannerAnswer', 'plannerSay', 'stopPlanner']);
+  'review', 'cancelReview', 'resolve', 'sendIssues', 'moreRound', 'sendChecks', 'copy', 'shots', 'planner', 'plannerAnswer', 'plannerSay', 'stopPlanner']);
 /** Settings a LAN client may change: plain model/effort/limit choices. Never paths, tool allowlists, bypass, servers, auto-merge or commands. */
 const MOBILE_SETTINGS: Record<string, 'string' | 'number' | 'boolean'> = {
   notifications: 'string', taskModel: 'string', taskEffort: 'string', plannerModel: 'string', plannerEffort: 'string', reviewModel: 'string',

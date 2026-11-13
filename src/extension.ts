@@ -367,7 +367,7 @@ export function activate(context: vscode.ExtensionContext) {
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${w.cspSource} data:; style-src ${w.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <link rel="stylesheet" href="${u('board.css')}"></head>
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
-<script nonce="${nonce}" src="${u('board.js')}"></script></body></html>`;
+<script nonce="${nonce}" src="${u('status.js')}"></script><script nonce="${nonce}" src="${u('board.js')}"></script></body></html>`;
       const sink: Sink = m => void w.postMessage(m);
       sinks.add(sink);
       w.onDidReceiveMessage(m => handle(m).catch(e => vscode.window.showErrorMessage(e.message)));
@@ -586,6 +586,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'openFile': return openTaskFile(r, t, m.file);
       case 'openFolder': if (t?.worktree) void vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(t.worktree), { forceNewWindow: true }); return;
       case 'merge':
+        if (t && t.where === 'direct' && !t.init) { if (await confirm(`Finish "${t.title}"? Its ${t.directFiles?.length ?? 0} file(s) are committed on the current branch.`, 'Finish')) await r.merge(m.id); return; }
         if (t && await confirm(`Merge "${t.title}" (${t.branch}) into ${t.base}?`, 'Merge')) await r.merge(m.id);
         return;
       case 'mergeReady': {
@@ -598,7 +599,19 @@ export function activate(context: vscode.ExtensionContext) {
       case 'resolved': await r.markResolved(m.id); return;
       case 'review': await r.review(m.id, true); return;
       case 'cancelReview': r.cancelReview(m.id); return;
-      case 'sendIssues': await r.sendIssues(m.id); return;
+      case 'sendIssues': await r.sendIssues(m.id, typeof m.key === 'string' ? m.key : undefined); return;
+      case 'moreRound': await r.moreRound(m.id); return;
+      case 'acceptIssues': {
+        if (!t?.review?.issues?.length) return;
+        const keys: string[] | 'all' = Array.isArray(m.keys) ? m.keys.map(String) : 'all';
+        if (m.merge) {
+          const open = t.review.issues.filter(i => !i.accepted);
+          const verb = t.where === 'direct' && !t.init ? 'finish' : 'merge';
+          if (!await confirm(`Accept ${open.length} review issue(s) and ${verb} "${t.title}"?\n\n${open.map(i => `• ${i.text}`).join('\n')}`, verb === 'merge' ? 'Accept and merge' : 'Accept and finish')) return;
+        }
+        await r.acceptIssues(m.id, keys, !!m.merge);
+        return;
+      }
       case 'sendChecks': await r.sendChecks(m.id); return;
       case 'copy': if (remote) hub.emit({ type: 'copy', text: String(m.text ?? '') }); else { await vscode.env.clipboard.writeText(String(m.text ?? '')); say('Copied.'); } return;
       case 'discard':

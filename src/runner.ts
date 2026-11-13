@@ -7,6 +7,7 @@ import { Store, Task } from './store';
 import * as g from './git';
 import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
+import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -635,9 +636,20 @@ export class Runner {
       if (this.starting.has(t.id) || t.remote) return true;
       // Stopped on an error: nothing runs until you press Resume, so it must not hold the slot (a stopped task in
       // another sprint left ▶ Run only queueing, with nothing visible to wait for).
-      if (t.error || t.noWait) return false;
+      if (t.error || t.noWait || this.stuck(t)) return false;
       return t.where !== 'direct' && !!t.worktree && (t.status === 'doing' || t.status === 'review');
     });
+  }
+
+  // Waiting for you after an automatic loop gave up (review or check rounds used up, conflicts, a review that could not
+  // run): Run all goes on without it, and the card says what you can do.
+  stuck(t: Task) {
+    if (t.status !== 'review' || this.reviews.has(t.id) || this.checking.has(t.id) || this.isOpen(t.id)) return false;
+    const set = this.d.settings(), r = t.review;
+    return !!t.conflicts?.length
+      || (t.checks?.state === 'fail' && t.checks.rounds > set.maxCheckRounds)
+      || (r?.state === 'fail' && r.attempts >= roundLimit(r, set.review.maxAttempts))
+      || (r?.state === 'error' && !(set.review.autoMerge && set.review.mergeIfCannotRun));
   }
 
   // What Run all waits for, for the toolbar.
@@ -653,7 +665,7 @@ export class Runner {
       : this.reviews.has(b.id) ? 'is being reviewed'
       : r?.state === 'pass' && r.risk === 'critical' && this.d.settings().review.autoMerge ? 'passed review but is flagged critical, so it is not merged automatically: open it and merge it yourself'
       : r?.state === 'pass' ? 'is ready to merge'
-      : r?.state === 'fail' ? (r.attempts >= max ? 'still has review issues' : 'is fixing review issues')
+      : r?.state === 'fail' ? (r.attempts >= roundLimit(r, max) ? 'still has review issues' : 'is fixing review issues')
       : b.conflicts?.length ? 'has merge conflicts'
       : this.emptyAt.has(b.id) ? 'has a reply from Claude for you' : 'waits for review';
     return { queued: this.store.queue, blocker: { id: b.id, title: b.title, why } };
@@ -720,7 +732,7 @@ export class Runner {
           await this.review(t.id, true, 1);
           continue;
         }
-        if (t.review?.state === 'fail' && t.review.issues?.length && t.review.attempts < o.maxAttempts && t.status === 'doing' && !this.isOpen(t.id)) {
+        if (t.review?.state === 'fail' && openIssues(t.review).length && t.review.attempts < roundLimit(t.review, o.maxAttempts) && t.status === 'doing' && !this.isOpen(t.id)) {
           await this.sendIssues(t.id);
         }
       }
@@ -741,13 +753,18 @@ export class Runner {
 
   /* ---------- AI review ---------- */
 
-  async sendIssues(id: string) {
+  // Sends the open issues (or only the one with `key`) back to Claude for a fix round.
+  async sendIssues(id: string, key?: string) {
     const t = this.store.task(id);
-    if (!t?.review?.issues?.length) return;
-    const set = this.d.settings(), max = set.review.maxAttempts;
+    const open = openIssues(t?.review).filter(i => !key || i.key === key);
+    if (!t?.review || !open.length) return;
+    const set = this.d.settings(), max = roundLimit(t.review, set.review.maxAttempts);
     this.store.updateTask(id, { status: 'doing' });
-    const issues = `The code reviewer found these issues (review ${t.review.attempts} of ${max}). Fix them, verify, update your handoff, then finish your turn:\n` +
-      t.review.issues.map((x, i) => `${i + 1}. ${x}`).join('\n');
+    const accepted = acceptedIssues(t.review);
+    const issues = `The code reviewer found these issues (review ${t.review.attempts} of ${max}). Fix them, verify, update your handoff, then finish your turn. ` +
+      `If you leave one unfixed on purpose, say why in your final message: the reviewer reads it.\n` +
+      open.map((x, i) => `${i + 1}. ${x.text}`).join('\n') +
+      (accepted.length ? `\n\nThe user accepted these as they are; leave them:\n${accepted.map(a => `- ${a.text}`).join('\n')}` : '');
     // A long session re-sends its whole history on every step. Past the threshold, the fix round starts fresh from the
     // task's artifacts (brief, handoff, review) instead: same knowledge, a fraction of the context.
     const s = this.sessions.get(id);
@@ -761,6 +778,26 @@ export class Runner {
       return;
     }
     await this.say(id, issues);
+  }
+
+  // "1 more round" on a card whose review rounds are used up: this task gets one more, and the open issues go back.
+  async moreRound(id: string) {
+    const t = this.store.task(id);
+    if (!t?.review || t.review.state !== 'fail') return;
+    this.store.updateTask(id, { review: { ...t.review, extraRounds: (t.review.extraRounds ?? 0) + 1 } });
+    await this.sendIssues(id);
+  }
+
+  // You decided these issues do not block the merge. With every issue accepted the review counts as passed;
+  // `merge` then merges (branch task) or finishes (direct task) right away.
+  async acceptIssues(id: string, keys: string[] | 'all', merge = false) {
+    const t = this.store.task(id);
+    if (!t?.review?.issues?.length) return;
+    const issues = t.review.issues.map(i => keys === 'all' || keys.includes(i.key) ? { ...i, accepted: true } : i);
+    const done = !issues.some(i => !i.accepted) && t.review.state === 'fail';
+    this.store.updateTask(id, { review: { ...t.review, issues, ...(done ? { state: 'pass' as const } : {}) }, ...(done && t.status === 'doing' && !this.isOpen(id) ? { status: 'review' as const } : {}) });
+    this.changed();
+    if (merge && done) await this.merge(id);
   }
 
   // A read-only reviewer checks the branch. Fail: its issues go back to the task's Claude, and the new commit is
@@ -786,12 +823,15 @@ export class Runner {
       if (!force && t.review?.head === head && t.review.state !== 'error') return;
       if (!diff.trim()) { this.emptyAt.add(id); return; }
       const attempts = t.review?.state === 'fail' ? t.review.attempts : 0;
-      this.store.updateTask(id, { review: { state: 'running', attempts, head } });
+      // Accepted issues and extra rounds belong to the task, not to one review: every new review keeps them.
+      const keep = { extraRounds: t.review?.extraRounds, issues: t.review?.issues };
+      const fixNote = t.review?.state === 'fail' && t.reply ? t.reply.slice(-1000) : undefined;
+      this.store.updateTask(id, { review: { ...keep, state: 'running', attempts, head } });
       // Triage: docs-only diffs need no reviewer; small changes outside sensitive code get the lighter model.
       const tri = o.triage ? A.triage(diff) : { level: 'full' as const, why: '' };
       if (tri.level === 'none' && !force) {
         const v = { pass: true, issues: [], risk: 'minor' as const, tested: [] as string[] };
-        this.store.updateTask(id, { review: { state: 'pass', attempts, head, risk: 'minor', level: 'none', why: tri.why } });
+        this.store.updateTask(id, { review: { ...keep, state: 'pass', attempts, head, risk: 'minor', level: 'none', why: tri.why } });
         A.writeReview(this.root, id, v, attempts + 1);
         this.reviews.delete(id);
         if (o.autoMerge) { await this.merge(id, true); return; }
@@ -800,7 +840,7 @@ export class Runner {
       }
       const model = tri.level === 'light' && o.lightModel ? o.lightModel : o.model;
       const effort = tri.level === 'light' ? 'low' : o.effort;
-      this.store.updateTask(id, { review: { state: 'running', attempts, head, level: tri.level === 'none' ? 'full' : tri.level, why: tri.why } });
+      this.store.updateTask(id, { review: { ...keep, state: 'running', attempts, head, level: tri.level === 'none' ? 'full' : tri.level, why: tri.why } });
       const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
       fs.rmSync(shots, { recursive: true, force: true });
       fs.mkdirSync(shots, { recursive: true });
@@ -809,7 +849,8 @@ export class Runner {
       let brief = ''; try { brief = fs.readFileSync(A.briefFile(this.root, id), 'utf8').replace(/\n## When you finish[\s\S]*$/, '').trim(); } catch { /* none yet */ }
       try { brief += `\n\n## Approved plan\n${fs.readFileSync(A.planFile(this.root, id), 'utf8').slice(0, 6000)}`; } catch { /* no plan */ }
       const passed = this.store.task(id)?.checks?.state === 'pass' ? this.store.task(id)!.checks!.results!.filter(r => r.ok).map(r => r.cmd) : [];
-      const prompt = reviewPrompt(t, t.base ?? t.startHead ?? 'HEAD', diff, { shots, adb: device, cli: this.d.cli, web: UI_FILE.test(diff) && !device?.devices.length, handoff: A.readHandoff(this.root, id), brief, checks: passed }) + (retry
+      const prompt = reviewPrompt(t, t.base ?? t.startHead ?? 'HEAD', diff, { shots, adb: device, cli: this.d.cli, web: UI_FILE.test(diff) && !device?.devices.length, handoff: A.readHandoff(this.root, id), brief, checks: passed,
+        accepted: acceptedIssues(t.review).map(i => i.text), fixNote }) + (retry
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
@@ -841,7 +882,7 @@ export class Runner {
         if (ac.signal.aborted && !this.store.task(id)) return;
         const msg = String(e.message ?? e).slice(0, 400);
         if (isLimitError(msg)) this.d.limits.setReached('usage');
-        if (this.store.task(id)) this.store.updateTask(id, { review: { state: 'error', attempts, head, error: msg, screenshots: screenshots() } });
+        if (this.store.task(id)) this.store.updateTask(id, { review: { ...keep, state: 'error', attempts, head, error: msg, screenshots: screenshots() } });
         if (isLimitError(msg) || msg === 'cancelled') return;
         if (retry < 1) { after = 'retry'; return; }
         if (o.autoMerge && o.mergeIfCannotRun) { after = 'merge'; return; }
@@ -851,18 +892,22 @@ export class Runner {
       const now = this.store.task(id);
       if (!now || now.status === 'done' || now.worktree !== t.worktree) return; // discarded, deleted or merged meanwhile
       A.writeReview(this.root, id, v, attempts + 1);
-      const lv = { level: tri.level === 'none' ? 'full' as const : tri.level, why: tri.why };
+      const lv = { level: tri.level === 'none' ? 'full' as const : tri.level, why: tri.why, extraRounds: keep.extraRounds, fixNote };
+      const tracked = trackIssues(keep.issues, v.issues);
+      // Only accepted issues left: the reviewer agrees with you, so this counts as a pass.
+      if (!v.pass && !tracked.some(i => !i.accepted)) v = { ...v, pass: true };
       if (v.pass) {
-        this.store.updateTask(id, { review: { ...lv, state: 'pass', attempts, head, risk: v.risk, issues: v.issues.length ? v.issues : undefined, screenshots: screenshots(), tested: v.tested } });
+        this.store.updateTask(id, { review: { ...lv, state: 'pass', attempts, head, risk: v.risk, issues: tracked.length ? tracked : undefined, screenshots: screenshots(), tested: v.tested } });
         this.reviews.delete(id);
         if (o.autoMerge && v.risk !== 'critical') { await this.merge(id, true); return; }
         this.d.notify('info', `"${t.title}" passed AI review${v.risk === 'critical' ? ' (flagged critical: look before merging)' : ''}. Ready to merge.`, id, true);
         return;
       }
       const n = attempts + 1;
-      this.store.updateTask(id, { review: { ...lv, state: 'fail', attempts: n, head, issues: v.issues, risk: v.risk, screenshots: screenshots(), tested: v.tested } });
+      const review = { ...lv, state: 'fail' as const, attempts: n, head, issues: tracked, risk: v.risk, screenshots: screenshots(), tested: v.tested };
+      this.store.updateTask(id, { review });
       this.reviews.delete(id);
-      if (n >= o.maxAttempts) return this.d.notify('warn', `"${t.title}" failed AI review ${n} times. The issues are on the card.`, id, true);
+      if (n >= roundLimit(review, o.maxAttempts)) return this.d.notify('warn', `"${t.title}": ${openIssues(review).length} review issue(s) left after ${n} rounds. Open the card to see them, accept them, try once more or discard.`, id, true);
       await this.sendIssues(id);
     } finally {
       if (this.reviews.get(id)?.ac === ac) this.reviews.delete(id);

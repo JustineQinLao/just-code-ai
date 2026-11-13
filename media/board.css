@@ -165,6 +165,9 @@ textarea { resize: vertical; width: 100%; }
 .st { width: 14px; font-weight: 700; }
 .st-A { color: var(--ok); } .st-D { color: var(--err); } .st-M { color: var(--warn); }
 .issues li { margin-bottom: 6px; }
+.issues li.accepted > div:first-child { opacity: .6; text-decoration: line-through; }
+.issues li .row { gap: 8px; align-items: center; margin-top: 2px; }
+.fixnote summary { cursor: pointer; }
 .shots { display: flex; flex-wrap: wrap; gap: 6px; }
 .shots img { max-width: 100%; max-height: 260px; border: 1px solid var(--line); border-radius: 4px; }
 label.blk { display: grid; gap: 4px; margin-bottom: 10px; }

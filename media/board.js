@@ -77,48 +77,9 @@
   const modelName = id => { const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?/.exec(id || ''); return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? `.${m[3]}` : ''}` : id; };
 
   /* ---------- lanes and what each card says ---------- */
-  function lane(t) {
-    if (t.status === 'done') return 'done';
-    if (t.status === 'todo' && !t.run) return 'todo';
-    if (t.asks?.length || t.error || t.conflicts?.length) return 'needs';
-    const max = S.settings.review.maxAttempts;
-    if (t.status === 'review' && t.review?.state === 'fail' && t.review.attempts >= max) return 'needs';
-    if (t.status === 'review' && t.checks?.state === 'fail' && !t.phase) return 'needs';
-    if (t.phase) return 'work';
-    if (t.status === 'review' && !t.review && !t.reviewing && t.reply && t.where !== 'direct' && !t.run) return 'needs';
-    if (t.run && t.run !== 'idle' || t.remote || t.limited || t.status === 'doing') return 'work';
-    return 'review';
-  }
-
-  // { text, tone, action: [label, fn] } — the one thing a card tells you, and the one button for it.
-  function next(t) {
-    const max = S.settings.review.maxAttempts, r = t.review;
-    if (t.status === 'done') return t.review?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn' } : { text: t.where === 'direct' ? 'Done' : 'Merged', tone: 'ok' };
-    if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : t.asks[0].kind === 'plan' ? 'Plan ready for your OK' : 'Claude needs your approval', tone: 'warn' };
-    if (t.phase) return { text: t.phase, tone: 'run' };
-    if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run' };
-    if (t.run === 'running') return { text: `Working${lastTool(t)}${t.warning ? ` · ⚠ ${t.warning}` : ''}`, tone: 'run', action: ['Open', () => openTask(t.id)] };
-    if (t.remote) return { text: 'In Remote Control: continue in the Claude app or claude.ai/code. Close its terminal to bring it back.', tone: 'run' };
-    if (t.limited) return { text: 'Paused by the usage limit. Continues by itself after the reset.', tone: 'muted' };
-    if (t.error) return { text: `Stopped: ${t.error}`, tone: 'err', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
-    if (t.status === 'todo') return t.queued ? { text: `Queued #${S.queue.queued.indexOf(t.id) + 1}${S.queue.blocker ? ` · waits for “${S.queue.blocker.title.slice(0, 40)}”, which ${S.queue.blocker.why}` : ''}`, tone: 'muted', action: ['▶ Run now', () => post('runNow', { id: t.id })] } : { text: 'Ready', tone: 'muted', action: ['▶ Run', () => post('run', { id: t.id })] };
-    if (t.conflicts?.length) return { text: `Conflicts with ${t.base} in ${t.conflicts.length} file(s)`, tone: 'err', action: ['Resolve with Claude', () => post('resolve', { id: t.id })] };
-    if (t.status === 'review' && t.checks?.state === 'fail') return { text: `Checks still fail: ${t.checks.results.filter(r => !r.ok && !r.preexisting).map(r => r.name).join(', ')}`, tone: 'err', action: ['Send to Claude', () => post('sendChecks', { id: t.id })] };
-    if (t.reviewing) return { text: `AI reviewer is testing it · ${dur(t.reviewing)}`, tone: 'run' };
-    if (t.status === 'doing') return r?.state === 'fail' ? { text: `Fixing review issues (round ${r.attempts} of ${max})`, tone: 'run' } : { text: 'Paused', tone: 'muted', action: ['↻ Resume', () => post('say', { id: t.id, text: 'Continue the task.' })] };
-    if (t.output === 'artifact') {
-      if (t.publishing) return { text: 'Publishing the page to claude.ai…', tone: 'run' };
-      if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', action: ['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], extra: ['Finish', () => post('move', { id: t.id, status: 'done' })] };
-      if (t.status !== 'todo') return { text: 'Finished without a published page.', tone: 'warn', action: ['Publish', () => post('publishArtifact', { id: t.id })], extra: ['Reply', () => openTask(t.id, 'activity')] };
-    }
-    if (t.where === 'direct') return { text: 'Finished. Check the result, then Finish to commit it or Discard to revert it.', tone: 'ok', action: ['Finish', () => post('move', { id: t.id, status: 'done' })] };
-    if (r?.state === 'pass') return { text: r.risk === 'critical' ? 'Review passed, flagged critical: look before merging' : 'Review passed. Ready to merge.', tone: r.risk === 'critical' ? 'warn' : 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
-    if (r?.state === 'fail' && r.attempts >= max) return { text: `Review still finds ${r.issues?.length ?? 0} issue(s) after ${r.attempts} rounds`, tone: 'err', action: ['Send to Claude', () => post('sendIssues', { id: t.id })] };
-    if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}`, tone: 'err', action: ['↻ Retry review', () => post('review', { id: t.id })], extra: t.worktree ? ['✓ Merge anyway', () => post('merge', { id: t.id })] : undefined };
-    if (!r && t.reply && !t.run) return { text: `Claude replied without changing files: "${t.reply.slice(0, 140)}"`, tone: 'warn', action: ['Reply', () => openTask(t.id, 'activity')] };
-    if (!S.settings.review.auto) return { text: 'Finished. Look at the changes, then merge.', tone: 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
-    return { text: 'Waiting for the AI reviewer', tone: 'muted' };
-  }
+  // Column and next step live in status.js (shared with the tests).
+  const lane = t => window.JCStatus.lane(t, S.settings);
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, post, open: openTask, dur, lastTool });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */
@@ -397,6 +358,7 @@
       (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
+        (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
       ready.length ? btn(`✓ Merge ready (${ready.length})`, () => post('mergeReady', { ids: ready.map(t => t.id) })) : '',
@@ -498,7 +460,7 @@
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
       ...(t.asks || []).map(a => askBox(t, a)),
-      nx.action ? h('div', { class: 'acts' }, btn(nx.action[0], nx.action[1], 'primary'), nx.extra ? btn(nx.extra[0], nx.extra[1], 'ghost') : '') : '');
+      nx.actions.length ? h('div', { class: 'acts' }, nx.actions.map(([l, fn, style], i) => btn(l, fn, i === 0 ? 'primary' : style || 'ghost'))) : '');
     return el;
   }
 
@@ -617,7 +579,7 @@
     ].filter(Boolean);
     head.replaceChildren(
       h('div', { class: 'row' }, h('h3', { class: 'grow' }, t.title), btn('×', closeTask, 'ghost icon', 'Close (Esc)')),
-      h('div', { class: `next ${nx.tone}` }, nx.text, nx.action ? btn(nx.action[0], nx.action[1], 'primary') : ''),
+      h('div', { class: `next ${nx.tone}` }, nx.text, ...nx.actions.slice(0, 2).map(([l, fn], i) => btn(l, fn, i === 0 ? 'primary' : 'ghost'))),
       h('div', { class: 'row small' },
         h('label', {}, 'Permissions ', h('select', { onchange: e => post('setMode', { id: t.id, mode: e.target.value }), disabled: !!S.settings?.bypassAll, title: S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
           MODES.map(([v, l, d]) => h('option', { value: v, title: d, selected: (S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, l)))),
@@ -661,9 +623,17 @@
         h('p', {}, h('b', {}, { pass: '✓ Passed', fail: '✗ Issues found', error: 'Review could not run', running: 'Reviewing…' }[r.state]), r.risk === 'critical' ? h('span', { class: 'warn' }, ' · flagged critical') : '', h('span', { class: 'muted' }, ` · round ${r.attempts || 1}`)),
         r.level ? h('p', { class: 'muted small' }, r.level === 'none' ? `No AI review needed: ${r.why}.` : `${r.level === 'light' ? 'Light review (lighter model)' : 'Full review'}${r.why ? `: ${r.why}` : ''}.`) : '',
         r.error ? h('pre', { class: 'err' }, r.error) : '',
-        r.issues?.length ? h('ol', { class: 'issues' }, r.issues.map(i => h('li', {}, i))) : '',
+        r.fixNote ? h('details', { class: 'fixnote' }, h('summary', {}, 'Claude\'s reply to the last round'), h('p', { class: 'small' }, r.fixNote)) : '',
+        r.issues?.length ? h('ol', { class: 'issues' }, r.issues.map(i => h('li', { class: i.accepted ? 'accepted' : '' },
+          h('div', {}, i.text),
+          h('div', { class: 'row small' },
+            h('span', { class: 'muted' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Seen in ${i.rounds} rounds` : 'New this round'),
+            !i.accepted && r.state === 'fail' && !REMOTE ? btn('Accept', () => post('acceptIssues', { id: t.id, keys: [i.key] }), 'ghost small', 'Does not block the merge: the reviewer stops reporting it') : '',
+            !i.accepted && r.state === 'fail' ? btn('Ask Claude to fix this one', () => post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
         r.tested?.length ? h('p', { class: 'muted small' }, 'Tested: ', r.tested.join(' · ')) : '',
-        r.state === 'fail' ? btn('Send these to Claude', () => post('sendIssues', { id: t.id }), 'primary') : '',
+        r.state === 'fail' ? h('div', { class: 'row' },
+          btn('Send open issues to Claude', () => post('sendIssues', { id: t.id }), 'primary'),
+          !REMOTE ? btn(`Accept all and ${t.where === 'direct' && !t.init ? 'finish' : 'merge'}`, () => post('acceptIssues', { id: t.id, merge: true }), 'ghost') : '') : '',
         h('div', { class: 'shots' }, (shots[t.id] || []).map(s => h('img', { src: s.data, title: s.name }))),
       ];
     }

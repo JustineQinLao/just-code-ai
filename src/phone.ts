@@ -42,10 +42,10 @@ export const phoneProjectOk = (path: unknown, roots: string[]) => typeof path ==
 // One rule for showing the Merge button and for accepting a phone merge; never looser than the board's bulk merge.
 export interface PhoneDetail { files: { file: string; status: string; added: number; removed: number }[]; review?: { state: string; why?: string; issues: string[] }; checks: { name: string; ok: boolean; tail?: string }[]; error?: string }
 /** Payload for the detail view. A task without a worktree has no files and no error. `diff` is only called when there is a worktree. */
-export async function phoneDetail(t: { worktree?: string; review?: { state: string; why?: string; issues?: string[] }; checks?: { results?: { name: string; ok: boolean; tail?: string }[] } },
+export async function phoneDetail(t: { worktree?: string; review?: { state: string; why?: string; issues?: { text: string; accepted?: boolean }[] }; checks?: { results?: { name: string; ok: boolean; tail?: string }[] } },
   diff: (dir: string) => Promise<PhoneDetail['files']>): Promise<PhoneDetail> {
   const out: PhoneDetail = { files: [], checks: (t.checks?.results ?? []).map(c => ({ name: c.name, ok: c.ok, tail: c.tail })) };
-  if (t.review) out.review = { state: t.review.state, why: t.review.why, issues: t.review.issues ?? [] };
+  if (t.review) out.review = { state: t.review.state, why: t.review.why, issues: (t.review.issues ?? []).filter(i => !i.accepted).map(i => i.text) };
   if (t.worktree) { try { out.files = await diff(t.worktree); } catch (e: any) { out.error = String(e.message ?? e); } }
   return out;
 }

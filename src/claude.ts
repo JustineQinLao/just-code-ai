@@ -349,6 +349,10 @@ You do not change code: never edit or write project files. You run unattended: n
 If the task has a "Done when" list, check every item; each unmet item is a blocking issue. Judge correctness only: does the change do what the task asks, completely; bugs, unhandled errors, edge cases, regressions in callers;
 missing tests for new behaviour; security (validation, authorization, data isolation, injection, secrets). Do not report style or naming.
 Report only issues that should block the merge, at most 8, each specific and actionable (file, line, what to change). If the change is sound, pass it.
+Report only problems this diff introduces or touches, not older code it leaves alone. A "Done when" item that only a person can check
+(a manual run by hand, a device or account you do not have) is not an issue: say in "tested" that it is left for the user.
+Never re-report an issue listed under "Accepted by the user". If the builder explained why it left an issue from the previous round,
+judge the explanation: drop the issue when the reason is sound.
 Verify, do not only read: the builder's handoff lists what it ran. Re-run the tests that cover the changed files (and the build or type check if quick)
 to confirm; do not re-run the whole suite unless the change is broad, and do not explore unrelated code.
 Run each command on its own, as written: no cd, &&, ;, pipes or redirects. Every command must finish by itself within a few minutes:
@@ -359,7 +363,7 @@ config changes are "minor".
 In "tested", list every command you ran (or why nothing could run).`;
 
 // The review's task-specific part: the task, the builder's handoff, how to test the UI, and the diff.
-export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; web?: boolean; handoff?: string; brief?: string; checks?: string[] } = { shots: '' }) {
+export function reviewPrompt(t: Task, base: string, diff: string, test: { shots: string; adb?: { bin: string; devices: string[] }; cli?: string; web?: boolean; handoff?: string; brief?: string; checks?: string[]; accepted?: string[]; fixNote?: string } = { shots: '' }) {
   const clipped = diff.length <= MAX_DIFF ? diff : `${diff.slice(0, MAX_DIFF)}\n\n[diff truncated; read the changed files for the rest]`;
   return [
     test.brief ? `# Task\n${test.brief}` : `# Task: ${t.title}\n${t.description ?? ''}`,
@@ -369,6 +373,8 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
       ? `# UI checks\nAn Android device is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app with adb, ` +
         `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
       : test.web ? `# UI checks\nFor a web UI with a running dev server: open the page with the Playwright MCP tools, then ${SHOT_RULE(test.shots)} Read the PNG.` : '',
+    test.accepted?.length ? `# Accepted by the user (not blocking; do not report again)\n${test.accepted.map(a => `- ${a}`).join('\n')}` : '',
+    test.fixNote ? `# The builder's reply to the previous review round\n${test.fixNote}` : '',
     `# Diff against ${base}\n\`\`\`diff\n${clipped}\n\`\`\``,
   ].filter(Boolean).join('\n\n');
 }

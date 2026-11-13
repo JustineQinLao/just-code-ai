@@ -251,7 +251,7 @@ When Claude finishes a turn:
    *Done when* item, runs the tests that cover the change, and, for UI changes, takes screenshots with an Android
    device (`adb`) or Playwright and looks at them. Docs-only changes need no AI review.
 4. If it finds issues, they go back to Claude, and the new commit is reviewed again (up to 3 rounds, set in ⚙). If
-   issues remain after that, the card waits under **Needs you**.
+   issues remain after that, the card waits under **Needs you** (see "When a card needs you" below).
 5. If the review passes, press **✓ Merge**, or turn on *Merge automatically* in ⚙. A change the reviewer flags as
    critical is never merged automatically. A task is never merged while its checks are still running.
 
@@ -266,6 +266,23 @@ left with conflict markers. With a GitHub remote and `gh` installed, **Push PR**
 
 If Claude only replies (asks something in text instead of changing files), the card shows its reply under **Needs
 you**. Answer it in the task panel.
+
+### When a card needs you
+
+When an automatic loop gives up, the card says what happened and offers every way out. **Run all goes on without
+it**: the toolbar shows "N need you", and clicking that opens the first such card.
+
+| The card says | What you can do |
+|---|---|
+| Review: N issues left after 3 fix rounds | **See issues** opens the Review tab. Each issue shows how many rounds it came back and Claude's reply to the last round (often "I left X because Y"). **Accept** one issue (it no longer blocks; the reviewer stops reporting it), or **Ask Claude to fix this one**. On the card: **Try 1 more round** (this task gets one extra round), **Accept issues and merge** (or **finish** for a direct task; asks first and lists the issues), or **Discard**. A task merged this way says "Merged with N accepted review issues" |
+| `npm test` still fails after N fix rounds | **See log**, **Try 1 more round**, **Merge anyway** (or **Finish anyway**), **Discard** |
+| Review could not run | **Retry review**, **Merge without review** (or **Finish without review**), **Discard**. A short hint names the usual cause (sign in again, rate limit, timeout) |
+| Stopped: an error | **Resume**, **Open task**, **Discard** |
+| Conflicts with the base | **Resolve with Claude**, **Open task folder**, **Discard** |
+| Claude replied without changing files | **Reply**, **Finish (no changes)**, **Discard** |
+
+The reviewer reports only problems in the change itself. It does not count a *Done when* item that only a person
+can check (a manual run, a device it does not have) as an issue; it leaves that item for you.
 
 ## 9. Run a whole list
 

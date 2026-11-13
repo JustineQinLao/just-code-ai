@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import { trackIssues } from './issues';
 
 export type Status = 'todo' | 'doing' | 'review' | 'done';
 export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
@@ -60,7 +61,10 @@ export interface Checks { state: 'pass' | 'fail' | 'none'; rounds: number; head?
 
 export interface StageUsage { input: number; output: number; cacheRead: number; cacheWrite: number }
 
-export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: string[]; attempts: number; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
+// One review issue, tracked across rounds by key (see issues.ts). accepted: you decided it does not block the merge.
+export interface Issue { text: string; key: string; rounds: number; accepted?: boolean }
+// extraRounds: "1 more round" presses on this task, on top of the setting. fixNote: Claude's reply after the last fix round.
+export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: Issue[]; attempts: number; extraRounds?: number; fixNote?: string; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.
@@ -85,6 +89,8 @@ export class Store {
       const b = JSON.parse(text);
       const tasks = (b.tasks ?? []) as any[];
       for (const t of tasks) if (t && (t.where as string) === 'root') t.where = 'direct'; // renamed once
+      for (const t of tasks) if ((t?.review?.issues as unknown[] | undefined)?.some(i => typeof i === 'string')) // plain strings before issue tracking
+        t.review.issues = trackIssues(undefined, (t.review.issues as unknown[]).map(String));
       return { sprints: b.sprints ?? [], tasks, rules: Array.isArray(b.rules) ? b.rules : [], queue: Array.isArray(b.queue) ? b.queue : [] };
     } catch {
       // Hand-edited or merge-conflicted: keep a copy before the next save replaces it, so nothing is lost.
