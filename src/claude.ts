@@ -319,9 +319,10 @@ export function adb(): { bin: string; devices: string[] } | undefined {
 }
 
 // Headless Playwright MCP for UI work: the only way to take screenshots, saved into the task's shots folder.
-// Flags checked against `npx @playwright/mcp --help`: --headless, --isolated, --output-dir.
-export const PLAYWRIGHT_TOOLS = 'mcp__playwright__*';
-export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated', '--output-dir', shots] } });
+// Pinned version; flags checked against `npx @playwright/mcp@0.0.85 --help`: --headless, --isolated, --output-dir.
+// The server-level rule allows all of the server's tools.
+export const PLAYWRIGHT_TOOLS = 'mcp__playwright';
+export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@0.0.85', '--headless', '--isolated', '--output-dir', shots] } });
 export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); pass filename as ${shots}/<name>.png so it lands there. Never use npx playwright, a screenshot script or a visible browser.`;
 
 // Commands the reviewer may run: read git, run tests and builds, adb, screenshots. Edits stay blocked.

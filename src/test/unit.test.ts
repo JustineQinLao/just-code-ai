@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
-import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
+import { reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store, resolveWhere } from '../store';
 import { projectSetup } from '../setup';
@@ -1152,4 +1152,17 @@ test('design: listDesigns parses a tree and caches 24h; install writes sha256; b
   assert.doesNotMatch(A.writeBrief(root, be, []), /## Design system/);
   D.removeDesign(root);
   assert.doesNotMatch(A.writeBrief(root, ui, []), /## Design system/);
+});
+
+test('playwright MCP: pinned, headless, saves into shots; review prompt UI section', () => {
+  const m = playwrightMcp('/s').playwright;
+  assert.equal(PLAYWRIGHT_TOOLS, 'mcp__playwright');
+  assert.ok(m.args.some(a => /^@playwright\/mcp@\d+\.\d+\.\d+$/.test(a)));
+  assert.deepEqual(m.args.slice(-4), ['--headless', '--isolated', '--output-dir', '/s']);
+  const task = { id: 'x', title: 't' } as any;
+  const web = reviewPrompt(task, 'main', 'd', { shots: '/s', web: true });
+  assert.match(web, /browser_take_screenshot/); assert.doesNotMatch(web, /npx playwright screenshot/);
+  const none = reviewPrompt(task, 'main', 'd', { shots: '/s' });
+  assert.doesNotMatch(none, /# UI checks/);
+  assert.doesNotMatch(reviewPrompt(task, 'main', 'd', { shots: '/s', adb: { bin: 'adb', devices: ['a'] }, cli: 'c.js' }), /browser_take_screenshot/);
 });
