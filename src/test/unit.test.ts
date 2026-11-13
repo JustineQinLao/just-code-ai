@@ -919,3 +919,10 @@ test('src never writes CLAUDE.md, TASKS.md, .claude agents/skills or docs/', () 
     fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((l, i) => { if (/(writeFileSync|copyFileSync|mkdirSync)/.test(l) && bad.test(l)) hits.push(`${f}:${i + 1}`); });
   assert.deepEqual(hits, []);
 });
+
+test('Store migrates where: root to direct', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-mig-'));
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'board.json'), JSON.stringify({ sprints: [], tasks: [{ id: 'a', title: 'x', status: 'todo', mode: 'auto', where: 'root' }] }));
+  assert.equal(new Store(root).data.tasks[0].where, 'direct');
+});

@@ -233,7 +233,19 @@ export class Runner {
         try { await this.d.saveSources(text); } finally { this.setPhase(id); }
         this.useLinkedSources(t.sprintId, text);
       }
-      if (t.where === 'root') return await this.start(t, bin, this.root, {}, prompt);
+      if (t.where === 'direct') {
+        if (!t.init && this.store.data.tasks.some(o => o.id !== id && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done' && (this.starting.has(o.id) || this.sessions.get(o.id)?.open)))
+          throw new Error('Another task is already working in the project folder. Wait for it to finish, or run this one on its own branch.');
+        if (this.busy.size) throw new Error('A merge is running. Start this task in the project folder when it finishes.');
+        const patch: Partial<Task> = {};
+        if (!t.startHead) {
+          patch.startHead = await g.git(this.root, ['rev-parse', 'HEAD']).catch(() => '');
+          const before = await g.dirtyFiles(this.root).catch(() => [] as string[]);
+          fs.mkdirSync(A.taskDir(this.root, id), { recursive: true });
+          fs.writeFileSync(path.join(A.taskDir(this.root, id), 'dirty-before.txt'), before.join('\n'));
+        }
+        return await this.start(t, bin, this.root, patch, prompt);
+      }
       const prep = await this.prepare(t);
       if (!prep) return; // the user cancelled
       if (prep.fresh) await this.setupFolder(id, prep.worktree);
@@ -331,7 +343,7 @@ export class Runner {
     s.on('rate', info => this.d.limits.update(info));
     s.on('running', () => {
       const cur = this.store.task(id);
-      if (cur?.status === 'review' && cur.where !== 'root' && !cur.init) this.store.updateTask(id, { status: 'doing', live: true });
+      if (cur?.status === 'review' && cur.where !== 'direct' && !cur.init) this.store.updateTask(id, { status: 'doing', live: true });
       else if (cur && !cur.live) this.store.updateTask(id, { live: true });
     });
     s.on('turn', turn => void this.turnEnded(id, turn).catch(e => this.d.notify('error', e.message, id)));
@@ -419,6 +431,12 @@ export class Runner {
       return this.pump();
     }
     let committed = false;
+    if (t.where === 'direct' && !t.init) {
+      let before: string[] = [];
+      try { before = fs.readFileSync(path.join(A.taskDir(this.root, id), 'dirty-before.txt'), 'utf8').split('\n').filter(Boolean); } catch { /* none */ }
+      const now = await g.dirtyFiles(this.root).catch(() => [] as string[]);
+      this.store.updateTask(id, { directFiles: now.filter(f => !before.includes(f)) });
+    }
     if (t.worktree && fs.existsSync(t.worktree) && !t.conflicts?.length) {
       try { committed = await g.commitAll(t.worktree, t.title); } catch (e: any) {
         this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });
@@ -597,7 +615,7 @@ export class Runner {
       // Stopped on an error: nothing runs until you press Resume, so it must not hold the slot (a stopped task in
       // another sprint left ▶ Run only queueing, with nothing visible to wait for).
       if (t.error || t.noWait) return false;
-      return t.where !== 'root' && !!t.worktree && (t.status === 'doing' || t.status === 'review');
+      return t.where !== 'direct' && !!t.worktree && (t.status === 'doing' || t.status === 'review');
     });
   }
 
@@ -833,7 +851,7 @@ export class Runner {
 
   changes(id: string) {
     const t = this.store.task(id);
-    if (t?.status === 'done' && !t.worktree && t.branch && t.where !== 'root') return g.mergedChanges(this.root, t.branch);
+    if (t?.status === 'done' && !t.worktree && t.branch && t.where !== 'direct') return g.mergedChanges(this.root, t.branch);
     if (!t?.worktree || !t.base || !fs.existsSync(t.worktree)) return Promise.resolve([]);
     return g.changes(t.worktree, t.base);
   }
@@ -850,7 +868,7 @@ export class Runner {
   merge(id: string, auto = false) {
     return this.guarded(id, async t => {
       this.requireLease();
-      if (t.where === 'root' || !t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
+      if (t.where === 'direct' || !t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
       if (!t.branch || !t.base) throw new Error('Nothing to merge yet');
       const s = this.sessions.get(id);
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');

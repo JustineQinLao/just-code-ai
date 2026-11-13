@@ -451,12 +451,13 @@ export function activate(context: vscode.ExtensionContext) {
     const t: Task | undefined = m.id ? s.task(m.id) : undefined;
     switch (m.type) {
       case 'addTask': {
+        const defaultWhere = (sprintId?: string): 'direct' | 'branch' => { const d = setting<string>('defaultWhere', 'auto'); return d === 'direct' || d === 'branch' ? d : sprintId ? 'branch' : 'direct'; };
         if (!String(m.title ?? '').trim()) return;
         if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return;
         const all = A.loadSources(r.root).map(x => x.id);
         const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
         const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'root' || m.output === 'artifact' ? 'root' : undefined,
+          mode: m.mode || setting('defaultMode', 'auto'), where: m.where === 'direct' || m.output === 'artifact' ? 'direct' : m.where === 'branch' ? 'branch' : defaultWhere(m.sprintId),
           output: m.output === 'artifact' ? 'artifact' : undefined,
           files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
         A.logPrompt(r.root, { kind: 'task', text: [task.title, task.description].filter(Boolean).join('\n\n'), taskId: task.id, title: task.title });
@@ -473,7 +474,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'move': {
         if (!t) return;
         // Done for a task with unmerged work means: merge it.
-        if (m.status === 'done' && t.worktree && t.where !== 'root') {
+        if (m.status === 'done' && t.worktree && t.where !== 'direct') {
           if (await confirm(`Merge "${t.title}" into ${t.base}?`, 'Merge')) await r.merge(m.id);
           return;
         }
@@ -919,7 +920,7 @@ export function activate(context: vscode.ExtensionContext) {
     const running = r.store.data.tasks.find(t => t.init && !t.archived && t.status !== 'done');
     if (running) return open(running.id);
     const task = r.store.addTask({ title: 'Describe this project for JustCode', description: 'Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve: .justcode/project.md and, if you name a design, .justcode/design/DESIGN.md.',
-      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/**)', 'Bash(ls:*)'] });
+      mode: 'acceptEdits', where: 'direct', init: true, allow: ['Write(.justcode/**)', 'Bash(ls:*)'] });
     await r.run(task.id);
     open(task.id);
   }
