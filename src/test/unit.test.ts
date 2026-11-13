@@ -78,6 +78,8 @@ test('carry-over: uncommitted agents and local settings, as a path', () => {
   assert.equal(c.agents?.builder.prompt, 'Build it.');
   assert.equal(c.settingsFile, path.join(root, '.claude', 'settings.local.json'));
   assert.deepEqual(carryOver(root, root), { addDirs: [] });
+  fs.mkdirSync(path.join(root, '.claude', 'skills', 's'), { recursive: true });
+  assert.deepEqual(carryOver(root, wt).addDirs, []); // skills come from the plugin, not the project folder
 });
 
 test('limits: plan windows, reached, reset', () => {
@@ -377,6 +379,22 @@ test('plugin: written once, rewritten when the version changes; agents are disco
   assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '1.2.4');
   assert.notEqual(fs.readFileSync(path.join(pluginDir(root), 'agents', 'reviewer.md'), 'utf8'), 'edited');
   assert.ok(discoverAgents(root).some(a => a.name === 'reviewer'));
+});
+
+test('runner: writes the plugin on creation and hands it to every session', () => {
+  const root = tmp(), settings: any = { personalSetup: false, review: {} };
+  const r: any = new Runner(new Store(root), { version: '9.9.9', bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  const pj = path.join(pluginDir(root), '.claude-plugin', 'plugin.json');
+  assert.equal(JSON.parse(fs.readFileSync(pj, 'utf8')).version, '9.9.9');
+  assert.deepEqual(r.plugins(), [pluginDir(root)]);
+  assert.deepEqual(r.plugins(['/x/fd', undefined]), [pluginDir(root), '/x/fd']);
+  fs.rmSync(pluginDir(root), { recursive: true });
+  r.plugins();
+  assert.ok(fs.existsSync(pj));
+  const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'runner.ts'), 'utf8');
+  assert.equal((src.match(/new Session\(\{[\s\S]*?\n    \}\);|new Session\(\{/g) ?? []).length, 2);
+  assert.equal((src.match(/plugins: this\.plugins\(/g) ?? []).length, 3); // task, planner, review
+  r.dispose();
 });
 
 test('deleting a sprint keeps its tasks, in the backlog', () => {

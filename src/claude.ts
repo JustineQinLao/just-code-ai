@@ -396,7 +396,7 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
   try {
     for await (const m of query({ prompt, options: {
       cwd: o.cwd, pathToClaudeCodeExecutable: o.bin, env: { ...o.env, ...OUTPUT_CAPS }, abortController: ac, settingSources: settingSources(!!o.personal), settings: sessionSettings() as any,
-      ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),
+      plugins: (o.plugins ?? [path.join(o.cwd, '.justcode', 'plugin')]).map(p => ({ type: 'local' as const, path: p })),
       ...(o.model ? { model: o.model } : {}), ...(o.effort ? { effort: o.effort } : {}), ...(o.agent ? { agent: o.agent } : {}), ...extra,
     } as any })) {
       if (m.type === 'rate_limit_event') o.onRate?.((m as any).rate_limit_info);

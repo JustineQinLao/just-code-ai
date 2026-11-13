@@ -922,7 +922,7 @@ export function activate(context: vscode.ExtensionContext) {
     const file = installSkill();
     if (!file) return;
     const task = r.store.addTask({ title: 'Set up this project for Claude', description: 'Set up this project: Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve. Then it syncs TASKS.md (with sprints) into the board.',
-      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.justcode/setup/**)', 'Bash(ls:*)', `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`] });
+      mode: 'acceptEdits', where: 'root', init: true, allow: ['Write(.claude/**)', 'Bash(ls:*)', `Bash(${cliCommand(path.join(context.extensionPath, 'out', 'cli.js'))} sync:*)`] });
     await r.run(task.id);
     open(task.id);
   }
