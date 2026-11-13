@@ -64,7 +64,7 @@ export interface StageUsage { input: number; output: number; cacheRead: number; 
 // One review issue, tracked across rounds by key (see issues.ts). accepted: you decided it does not block the merge.
 export interface Issue { text: string; key: string; rounds: number; accepted?: boolean }
 // extraRounds: "1 more round" presses on this task, on top of the setting. fixNote: Claude's reply after the last fix round.
-export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: Issue[]; attempts: number; extraRounds?: number; fixNote?: string; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
+export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreviewed?: boolean; level?: 'none' | 'light' | 'full'; why?: string; error?: string; issues?: Issue[]; attempts: number; extraRounds?: number; fixNote?: string; hold?: string; head?: string; risk?: 'minor' | 'critical'; screenshots?: string[]; tested?: string[] }
 
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.

@@ -15,6 +15,7 @@ import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallComm
 import * as A from './artifacts';
 import * as R from './registry';
 import * as Audit from './audit';
+import { loadPolicy, policyFile } from './policy';
 import type { Actor } from './audit';
 import * as C from './checks';
 import * as D from './design';
@@ -220,6 +221,8 @@ export function activate(context: vscode.ExtensionContext) {
       skills: discoverSkills(r.root, setting('personalSetup', false)),
       sources: A.loadSources(r.root).map(x => ({ ...x, artifact: x.kind === 'url' && A.isArtifactLink(x.ref), copy: A.hasCopy(r.root, x), savedAt: savedAt(r.root, x), saving: savingTerms.has(x.id), asking: askingTerms.has(x.id) })),
       registry: R.load(r.root),
+      policy: (() => { const l = loadPolicy(r.root), day = new Date(); day.setHours(0, 0, 0, 0);
+        return { ...l, file: policyFile(r.root), denials: Audit.read(r.root, { since: day.getTime(), event: 'policy.deny' }).slice(-50) }; })(),
       detectedChecks: C.detectChecks(r.root),
       settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), defaultWhere: setting('defaultWhere', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       planner: r.plannerLive(),
@@ -710,6 +713,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (src) void saveArtifactSource(r.root, src).then(() => push());
         return;
       }
+      case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
+      case 'exportAudit': void vscode.commands.executeCommand('justCode.exportAudit'); return;
       case 'artifactNote': { const e = R.find(r.root, String(m.url)); if (e) R.upsert(r.root, e.url, { note: String(m.note ?? '').trim() || undefined }); return push(); }
       case 'useArtifact': {
         // A registry artifact becomes a project source (once), used by the current sprint when it picks its sources.

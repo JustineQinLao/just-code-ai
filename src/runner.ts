@@ -230,6 +230,12 @@ export class Runner {
     if (!t || this.sessions.get(id)?.open || this.starting.has(id) || t.remote) return;
     this.requireLease();
     if (t.noWait) this.store.updateTask(id, { noWait: undefined });
+    const block = this.policyBlock(t);
+    if (block) {
+      this.store.updateTask(id, { error: block });
+      this.audit('policy.deny', id, block, 'policy');
+      throw new Error(block);
+    }
     if (await this.settleMerged(t)) return;
     if (this.d.limits.held()) throw new Error('Your Claude usage limit is reached. The task starts by itself after the reset.');
     const bin = this.d.bin();
@@ -339,6 +345,27 @@ export class Runner {
     } catch { /* the registry is a convenience */ }
   }
 
+  // What the project policy forbids about running this task now, or undefined.
+  policyBlock(t: Task) {
+    const p = loadPolicy(this.root).policy, set = this.d.settings();
+    if (p.forbidModes.includes(t.mode)) return `The project policy forbids the "${t.mode}" permission mode (.justcode/policy.json, forbidModes). Pick another mode for this task.`;
+    if (p.allowedModels.length && !p.allowedModels.includes(set.taskModel))
+      return `The project policy allows only these models: ${p.allowedModels.join(', ')} (.justcode/policy.json, allowedModels). Set the task model in ⚙ to one of them.`;
+  }
+  // The mode a session runs in: Bypass all applies only when the policy allows bypassPermissions.
+  modeFor(t: Task) {
+    const set = this.d.settings();
+    return set.bypassAll && loadPolicy(this.root).policy.forbidModes.includes('bypassPermissions') ? t.mode : effectiveMode(t.mode, set.bypassAll);
+  }
+  // Changed paths that the policy says need a person's look before merging (requireHumanReviewFor words).
+  private async humanReviewFor(t: Task) {
+    const words = loadPolicy(this.root).policy.requireHumanReviewFor.map(w => w.toLowerCase()).filter(Boolean);
+    if (!words.length) return [];
+    const files = t.where === 'direct' ? t.directFiles ?? []
+      : t.worktree && t.base ? (await g.git(t.worktree, ['diff', '--name-only', `${t.base}...HEAD`]).catch(() => '')).split('\n').filter(Boolean) : [];
+    return files.filter(f => words.some(w => f.toLowerCase().includes(w)));
+  }
+
   // The project policy for one session: re-read on every call, so an edit to policy.json applies at once.
   private guard(taskId: string | undefined, cwd: string) {
     return (tool: string, input: Record<string, unknown>) => {
@@ -385,7 +412,7 @@ export class Runner {
     const personal = set.personalSetup ? [] : userAllowRules();
     const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
     const s = new Session({
-      bin, cwd, sessionId, resume, mode: effectiveMode(task.mode, set.bypassAll), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
+      bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
@@ -434,6 +461,11 @@ export class Runner {
 
   answer(id: string, a: Answer) { return this.sessions.get(id)?.answer(a) ?? false; }
   async setMode(id: string, mode: string) {
+    if (loadPolicy(this.root).policy.forbidModes.includes(mode)) {
+      const why = `The project policy forbids the "${mode}" permission mode (.justcode/policy.json, forbidModes).`;
+      this.audit('policy.deny', id, why, 'policy');
+      throw new Error(why);
+    }
     this.store.updateTask(id, { mode: mode as Task['mode'] });
     await this.sessions.get(id)?.setMode(mode);
   }
@@ -699,7 +731,8 @@ export class Runner {
     return !!t.conflicts?.length
       || (t.checks?.state === 'fail' && t.checks.rounds > set.maxCheckRounds)
       || (r?.state === 'fail' && r.attempts >= roundLimit(r, set.review.maxAttempts))
-      || (r?.state === 'error' && !(set.review.autoMerge && set.review.mergeIfCannotRun));
+      || (r?.state === 'error' && !(set.review.autoMerge && set.review.mergeIfCannotRun))
+      || (r?.state === 'pass' && !!r.hold);
   }
 
   // What Run all waits for, for the toolbar.
@@ -713,6 +746,7 @@ export class Runner {
       : b.limited ? 'waits for the usage limit to reset'
       : b.error ? 'stopped on an error (Resume it)'
       : this.reviews.has(b.id) ? 'is being reviewed'
+      : r?.state === 'pass' && r.hold ? `needs your approval (policy: ${r.hold})`
       : r?.state === 'pass' && r.risk === 'critical' && this.d.settings().review.autoMerge ? 'passed review but is flagged critical, so it is not merged automatically: open it and merge it yourself'
       : r?.state === 'pass' ? 'is ready to merge'
       : r?.state === 'fail' ? (r.attempts >= roundLimit(r, max) ? 'still has review issues' : 'is fixing review issues')
@@ -1001,6 +1035,21 @@ export class Runner {
   merge(id: string, auto = false, by: Audit.Actor = 'user') {
     return this.guarded(id, async t => {
       this.requireLease();
+      const pol = loadPolicy(this.root).policy;
+      if (pol.requireChecksPass && t.checks?.state === 'fail' && !t.init) {
+        const why = `The project policy requires passing checks before ${t.where === 'direct' ? 'Finish' : 'Merge'} (.justcode/policy.json, requireChecksPass). Fix the checks or Discard.`;
+        this.audit('policy.deny', id, why, 'policy');
+        throw new Error(why);
+      }
+      if (auto && !t.init) {
+        const hold = await this.humanReviewFor(t);
+        if (hold.length) {
+          if (t.review) this.store.updateTask(id, { review: { ...t.review, hold: `touches ${hold.slice(0, 3).join(', ')}${hold.length > 3 ? '…' : ''}` } });
+          this.audit('policy.deny', id, `not merged automatically: ${hold.join(', ')} (requireHumanReviewFor)`, 'policy');
+          this.d.notify('warn', `"${t.title}" passed review but needs your approval (policy): it touches ${hold.slice(0, 3).join(', ')}.`, id, true);
+          return;
+        }
+      }
       if (t.where === 'direct' && !t.init) {
         const s0 = this.sessions.get(id);
         if (t.status !== 'review' || this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle')) throw new Error('Claude is still working on this task. Wait for it to finish, then Finish.');

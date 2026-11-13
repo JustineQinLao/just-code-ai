@@ -85,7 +85,7 @@
   /* ---------- lanes and what each card says ---------- */
   // Column and next step live in status.js (shared with the tests).
   const lane = t => window.JCStatus.lane(t, S.settings);
-  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, post, open: openTask, dur, lastTool });
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, post, open: openTask, dur, lastTool });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */
@@ -945,6 +945,7 @@
         h('span', { class: 'muted small' }, 'Added when you press "Always allow…" on a card. Every task in this project gets them.')),
       f.allowedTools = h('textarea', { rows: 3, placeholder: 'One rule per line, for every project' }, (s.allowedTools || []).join('\n')),
       h('span', { class: 'muted small' }, 'Always allowed in every project.'),
+      policySection(),
       h('div', { class: 'row' }, btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => post('apiKey'), 'ghost'), btn('Setup checklist', () => { showSetup = true; $('#dlg').close(); render(); }, 'ghost')),
       h('div', { class: 'acts' }, btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
@@ -1021,6 +1022,29 @@
       h('div', { class: 'acts' }, btn('+ Files or folders', () => post('addSource', { kind: 'file', sprintId: sprint?.id }), 'primary'), btn('+ Link', () => post('addSource', { kind: 'url', sprintId: sprint?.id })),
         btn('Project history', () => post('openArtifact', { which: 'progress' }), 'ghost', 'What merged tasks changed; later tasks read it instead of digging through git')));
     d.dataset.kind = 'sources';
+  }
+
+  // ⚙ → Policy: what .justcode/policy.json enforces in this project, and what it denied today.
+  function policySection() {
+    const P = S.policy;
+    if (!P) return '';
+    const p = P.policy, list = a => a.length ? a.join(', ') : 'none';
+    const cost = k => p.maxCostUsd[k] ? `$${p.maxCostUsd[k]}` : 'no limit';
+    return h('details', { class: 'adv', open: !!P.errors.length },
+      h('summary', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
+      h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Edit the file to change them; they apply at once.'),
+      ...P.errors.map(e => h('p', { class: 'err small' }, e)),
+      h('ul', { class: 'small' },
+        h('li', {}, 'Protected paths (no edits): ', list(p.protectedPaths)),
+        h('li', {}, 'Denied tools: ', list(p.denyTools)),
+        h('li', {}, 'Forbidden modes: ', list(p.forbidModes)),
+        h('li', {}, 'Needs your approval before merging when a path contains: ', list(p.requireHumanReviewFor)),
+        h('li', {}, `Budgets: task ${cost('task')}, sprint ${cost('sprint')}, project ${cost('project')}`),
+        h('li', {}, 'Models: ', p.allowedModels.length ? p.allowedModels.join(', ') : 'any'),
+        h('li', {}, `Checks must pass to merge: ${p.requireChecksPass ? 'yes' : 'no'} · Secret scan before commits: ${p.secretScan ? 'on' : 'off'}`)),
+      P.denials.length ? h('div', {}, h('h4', {}, 'Denied today'), h('ul', { class: 'small' }, P.denials.slice().reverse().map(d => h('li', {},
+        h('span', { class: 'muted' }, d.time.slice(11, 16), ' '), d.taskId ? h('a', { onclick: () => { $('#dlg').close(); openTask(d.taskId, 'activity'); } }, S.board.tasks.find(t => t.id === d.taskId)?.title || d.taskId) : '', ' ', d.detail || '')))) : '',
+      !REMOTE ? h('div', { class: 'row' }, btn('Open policy.json', () => post('openPolicy'), 'ghost'), btn('Export audit log', () => post('exportAudit'), 'ghost')) : '');
   }
 
   // Every artifact the project typed, saved or published, with the tasks that used or produced it.

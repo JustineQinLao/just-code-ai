@@ -15,6 +15,7 @@
     if (t.status === 'review' && t.review?.state === 'fail' && t.review.attempts >= roundLimit(t.review, settings.review.maxAttempts)) return 'needs';
     if (t.status === 'review' && t.checks?.state === 'fail' && !t.phase) return 'needs';
     if (t.status === 'review' && t.review?.state === 'error' && !t.reviewing) return 'needs';
+    if (t.status === 'review' && t.review?.state === 'pass' && t.review.hold) return 'needs';
     if (t.phase) return 'work';
     if (t.status === 'review' && !t.review && !t.reviewing && t.reply && t.where !== 'direct' && !t.run) return 'needs';
     if (t.run && t.run !== 'idle' || t.remote || t.limited || t.status === 'doing') return 'work';
@@ -22,7 +23,7 @@
   }
 
   // { text, tone, actions: [[label, fn, style?], ...] }: the first action is the primary one.
-  // c: { settings, queue, post, open(id, tab), dur(ms), lastTool(t) }
+  // c: { settings, queue, policy?, post, open(id, tab), dur(ms), lastTool(t) }
   function nextStep(t, c) {
     const s = c.settings, max = roundLimit(t.review, s.review.maxAttempts), r = t.review, post = c.post, id = t.id;
     const fin = isDirect(t) ? 'Finish' : 'Merge';
@@ -47,7 +48,7 @@
       const bad = t.checks.results.filter(x => !x.ok && !x.preexisting);
       const first = (bad[0]?.tail || '').split('\n').map(x => x.trim()).find(Boolean);
       return { text: `${bad.map(x => x.cmd || x.name).join(', ')} still fail${bad.length === 1 ? 's' : ''} after ${Math.max(0, t.checks.rounds - 1)} fix round(s)${first ? `: ${first.slice(0, 120)}` : ''}`, tone: 'err',
-        actions: [['See log', () => c.open(id, 'details')], ['Try 1 more round', () => post('sendChecks', { id })], [`${fin} anyway`, () => post('merge', { id }), 'ghost'], discard] };
+        actions: [['See log', () => c.open(id, 'details')], ['Try 1 more round', () => post('sendChecks', { id })], ...(c.policy?.requireChecksPass ? [] : [[`${fin} anyway`, () => post('merge', { id }), 'ghost']]), discard] };
     }
     if (t.reviewing) return { text: `AI reviewer is testing it · ${c.dur(t.reviewing)}`, tone: 'run', actions: [] };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Claude is fixing ${open(r).length} review issue(s) (round ${r.attempts} of ${max})`, tone: 'run', actions: [] } : { text: 'Paused', tone: 'muted', actions: [resume] };
@@ -56,6 +57,8 @@
       if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', actions: [['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], ['Finish', () => post('move', { id, status: 'done' })]] };
       if (t.status !== 'todo') return { text: 'Finished without a published page.', tone: 'warn', actions: [['Publish', () => post('publishArtifact', { id })], ['Reply', () => c.open(id, 'activity')]] };
     }
+    if (r?.state === 'pass' && r.hold) return { text: `Needs your approval (policy): ${r.hold}. Look at the changes, then ${fin.toLowerCase()}.`, tone: 'warn',
+      actions: [[`✓ ${fin}`, () => post('merge', { id })], ['See changes', () => c.open(id, 'changes')], discard] };
     if (r?.state === 'pass') {
       const text = r.risk === 'critical' ? 'Review passed, flagged critical: look before merging' : acc ? `Review passed (${acc} accepted). Ready to ${fin.toLowerCase()}.` : `Review passed. Ready to ${fin.toLowerCase()}.`;
       return { text, tone: r.risk === 'critical' ? 'warn' : 'ok', actions: [[`✓ ${fin}`, () => post('merge', { id })]] };
