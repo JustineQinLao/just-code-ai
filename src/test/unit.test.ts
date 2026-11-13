@@ -901,3 +901,21 @@ test('writePlugin writes the plugin folder once and keeps unchanged files', () =
   assert.equal(b.written.length, 0);
   assert.equal(b.kept.length, a.written.length);
 });
+
+test('artifact path helpers stay under <root>/.justcode/', () => {
+  const root = path.join(os.tmpdir(), 'jc-root');
+  const base = path.join(root, '.justcode') + path.sep;
+  const paths = [A.sourceCopy(root, 'x'), A.taskDir(root, 'x'), A.briefFile(root, 'x'), A.handoffFile(root, 'x'), A.artifactFile(root, 'x'), A.shotsDir(root, 'x'),
+    A.reviewFile(root, 'x'), A.checksLog(root, 'x'), A.planFile(root, 'x'), A.progressFile(root), A.projectFile(root), A.designMdFile(root), A.promptsFile(root)];
+  for (const p of paths) assert.ok(p.startsWith(base), p);
+  assert.equal(A.shotsDir(root, 'x'), path.join(root, '.justcode', 'tasks', 'x', 'shots'));
+});
+
+test('src never writes CLAUDE.md, TASKS.md, .claude agents/skills or docs/', () => {
+  const dir = path.join(__dirname, '..', '..', 'src');
+  const bad = /CLAUDE\.md|TASKS\.md|\.claude[\\/'"`]?.*(agents|skills)|\bdocs[\\/]/;
+  const hits: string[] = [];
+  for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.ts')))
+    fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((l, i) => { if (/(writeFileSync|copyFileSync|mkdirSync)/.test(l) && bad.test(l)) hits.push(`${f}:${i + 1}`); });
+  assert.deepEqual(hits, []);
+});

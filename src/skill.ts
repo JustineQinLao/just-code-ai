@@ -96,7 +96,7 @@ there today.
 - Then one task per screen, or per screen plus the sheets it opens. Never many screens in one task.
 - Each task's "files" lists the app files AND the screen files it must match, by absolute path. Its goal names the
   screen titles. Its "done" list has: "matches <screen file>: same sections, labels, order and styling", "headless
-  Chrome screenshots of the design and the built screen at the design's size, saved under docs/screenshots/design/",
+  Chrome screenshots of the design and the built screen at the design's size, saved in the task's \"Screenshots go to\" folder",
   and the behavior tests.
 - Name the screen file instead of describing the design in words.
 
@@ -108,10 +108,10 @@ there today.
 3. Keep the structure and order. Translate the classes into the app's styling with the shared tokens.
 4. Check with headless Chrome, never a visible window and never by eye from the code alone. For each screen you
    built, take two screenshots at the design's \`w\`×\`h\` from \`canvas.json\` (e.g. 390×844):
-   - the design: \`npx playwright screenshot --browser=chromium --viewport-size=390,844 "file://<copy>/project/<Name>.dc.html" docs/screenshots/design/<Name>-design.png\`
-     (the \`.dc.html\` renders close enough without the editor: its \`.css\` is beside it)
+   - the design: \`npx playwright screenshot --browser=chromium --viewport-size=390,844 "file://<copy>/project/<Name>.dc.html" <shots>/<Name>-design.png\`
+     (<shots> is the absolute path under "## Screenshots go to" in your brief; the \`.dc.html\` renders close enough without the editor: its \`.css\` is beside it)
    - the build: the same command on the app's route, signed in as the screen's role (use the project's visual
-     runner in headless mode if it has one), saved as \`docs/screenshots/design/<Name>-app.png\`
+     runner in headless mode if it has one), saved as \`<shots>/<Name>-app.png\`
    Read both images and compare: sections, labels, order, colors, type, spacing. Fix what differs, then re-shoot only
    that screen. Run only the tests for the code you changed. List any difference left in the handoff, with both
    image paths. Do not re-shoot unchanged screens or re-run passing suites.

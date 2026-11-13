@@ -41,6 +41,7 @@ export const taskDir = (root: string, id: string) => jc(root, 'tasks', id);
 export const briefFile = (root: string, id: string) => path.join(taskDir(root, id), 'brief.md');
 export const handoffFile = (root: string, id: string) => path.join(taskDir(root, id), 'handoff.md');
 export const artifactFile = (root: string, id: string) => path.join(taskDir(root, id), 'artifact.html');
+export const shotsDir = (root: string, id: string) => path.join(taskDir(root, id), 'shots');
 export const reviewFile = (root: string, id: string) => path.join(taskDir(root, id), 'review.md');
 export const checksLog = (root: string, id: string) => path.join(taskDir(root, id), 'checks.log');
 export const planFile = (root: string, id: string) => path.join(taskDir(root, id), 'plan.md');
@@ -117,6 +118,7 @@ export function writeBrief(root: string, t: Task, sources: Source[]) {
     ...picked.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`),
     ...files.map(f => `- ${f}`),
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
+    `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo)`,
     projectSection(root),
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
     fs.existsSync(progressFile(root)) ? `## Project history\nWhat earlier tasks changed: ${progressFile(root)} (read it if you need context on recent work).` : '',
