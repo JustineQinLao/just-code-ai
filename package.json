@@ -48,6 +48,10 @@
       {
         "command": "justCode.exportAudit",
         "title": "JustCode: Export Audit Log"
+      },
+      {
+        "command": "justCode.exportSprintReport",
+        "title": "JustCode: Export Sprint Report"
       }
     ],
     "configuration": {

@@ -15,6 +15,7 @@ import { checkSetup, installCommand, projectSetup, SetupState, pluginInstallComm
 import * as A from './artifacts';
 import * as R from './registry';
 import * as Audit from './audit';
+import { writeSprintReport } from './report';
 import { loadPolicy, policyFile } from './policy';
 import type { Actor } from './audit';
 import * as C from './checks';
@@ -725,6 +726,11 @@ export function activate(context: vscode.ExtensionContext) {
         return;
       }
       case 'phoneRevoke': phoneDevices.save(phoneDevices.list().filter(d => m.id !== 'all' && d.id !== m.id)); r.audit('phone.action', undefined, `revoked ${m.id === 'all' ? 'all devices' : `device …${m.id}`}`, 'user'); return;
+      case 'sprintReport': {
+        const sp = s.sprint(m.sprintId);
+        if (sp) void vscode.window.showTextDocument(vscode.Uri.file(await writeSprintReport(r.root, sp, s.data.tasks)));
+        return;
+      }
       case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
       case 'exportAudit': void vscode.commands.executeCommand('justCode.exportAudit'); return;
       case 'artifactNote': { const e = R.find(r.root, String(m.url)); if (e) R.upsert(r.root, e.url, { note: String(m.note ?? '').trim() || undefined }); return push(); }
@@ -1076,6 +1082,13 @@ export function activate(context: vscode.ExtensionContext) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, Audit.toCsv(Audit.read(r.root), id => r.store.task(id)?.title));
       void vscode.window.showTextDocument(vscode.Uri.file(file));
+    }),
+    vscode.commands.registerCommand('justCode.exportSprintReport', async () => {
+      const r = runner();
+      const sprints = r?.store.data.sprints ?? [];
+      if (!r || !sprints.length) { vscode.window.showInformationMessage('No sprint on the board yet.'); return; }
+      const pick = sprints.length === 1 ? sprints[0] : (await vscode.window.showQuickPick(sprints.map(sp => ({ label: sp.name, description: sp.goal, sp })), { placeHolder: 'Which sprint?' }))?.sp;
+      if (pick) void vscode.window.showTextDocument(vscode.Uri.file(await writeSprintReport(r.root, pick, r.store.data.tasks)));
     }),
     vscode.commands.registerCommand('justCode.showPhonePairing', async () => {
       if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
