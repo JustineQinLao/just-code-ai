@@ -9,6 +9,7 @@ import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
 import * as Audit from './audit';
+import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
@@ -338,6 +339,15 @@ export class Runner {
     } catch { /* the registry is a convenience */ }
   }
 
+  // The project policy for one session: re-read on every call, so an edit to policy.json applies at once.
+  private guard(taskId: string | undefined, cwd: string) {
+    return (tool: string, input: Record<string, unknown>) => {
+      const why = violations(loadPolicy(this.root).policy, tool, input, cwd);
+      if (why) this.audit('policy.deny', taskId, `${tool} ${toolArg(input)}: ${why}`, 'policy');
+      return why;
+    };
+  }
+
   audit(event: Audit.AuditEvent, taskId?: string, detail?: string, actor: Audit.Actor = 'justcode') {
     Audit.log(this.root, { actor, event, taskId, sprintId: taskId ? this.store.task(taskId)?.sprintId : undefined, detail });
   }
@@ -385,6 +395,7 @@ export class Runner {
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
       env: this.folderEnv(id, cwd), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
       audit: (event, detail, actor) => this.audit(event, id, detail, actor),
+      guard: this.guard(id, cwd),
     });
     this.sessions.set(id, s);
     s.on('change', () => this.changed());
@@ -1178,7 +1189,7 @@ export class Runner {
       // spent tokens on a refused Write. Default mode with the write tools removed keeps it read-only.
       bin, cwd: this.root, sessionId: this.plannerSession, resume: false, mode: 'default', model: set.plannerModel || undefined,
       append: PLANNER_APPEND, readOnly: true, effort: set.plannerEffort || undefined,
-      allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup, plugins: this.plugins(),
+      allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup, plugins: this.plugins(), guard: this.guard(undefined, this.root),
     });
     this.planner = s;
     s.on('change', () => this.changed());

@@ -61,6 +61,7 @@ export interface SessionOptions {
   personal?: boolean;         // also load the user's own Claude setup (plugins, skills, MCP, memory)
   plugins?: string[];         // plugin folders to load even in a lean session (e.g. frontend-design for artifact pages)
   label: string;              // name of the root node in the agent map
+  guard?: (tool: string, input: Record<string, unknown>) => string | undefined;   // the project policy: a reason denies the call, in every mode
   audit?: (event: 'permission.allow' | 'permission.always' | 'permission.deny', detail: string, actor: Actor) => void;
 }
 
@@ -160,6 +161,11 @@ export class Session {
       // Question options may carry a Markdown preview (a file list, a layout sketch); the card shows it.
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       canUseTool: (tool, input, opt) => this.permission(tool, input, opt as any),
+      ...(o.guard ? { hooks: { PreToolUse: [{ hooks: [async (i: any) => {
+        const why = o.guard!(String(i.tool_name), (i.tool_input ?? {}) as Record<string, unknown>);
+        if (why) this.step({ kind: 'error', text: `Denied by policy: ${why}` });
+        return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: why } } : { continue: true };
+      }] }] } } : {}),
       stderr: (s: string) => { if (/error/i.test(s)) this.step({ kind: 'error', text: s.trim().slice(0, 400) }); },
     };
     this.q = query({ prompt: this.inbox, options });
