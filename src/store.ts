@@ -19,7 +19,9 @@ export interface Task {
   status: Status;
   agent?: string;             // .claude/agents name, run as `claude --agent <name>`
   mode: Mode;
-  where?: 'branch' | 'root';  // branch (default): own worktree + PR; root: runs in the project folder, no merge
+  where?: 'branch' | 'direct';  // branch (default): own worktree + PR; direct: runs in the project checkout, no merge
+  startHead?: string;         // direct: HEAD when the task started
+  directFiles?: string[];     // direct: files changed in the checkout during the task (git status minus what was dirty before)
   pastSessions?: string[];    // earlier sessions of this task (replaced by a fresh one when they grew big)
   sessionId?: string;         // Claude session, fixed up front with --session-id
   base?: string;              // branch the task forks from and merges back into
@@ -80,7 +82,9 @@ export class Store {
     try { text = fs.readFileSync(this.file, 'utf8'); } catch { return { sprints: [], tasks: [] }; } // no board yet
     try {
       const b = JSON.parse(text);
-      return { sprints: b.sprints ?? [], tasks: b.tasks ?? [], rules: Array.isArray(b.rules) ? b.rules : [], queue: Array.isArray(b.queue) ? b.queue : [] };
+      const tasks = (b.tasks ?? []) as any[];
+      for (const t of tasks) if (t && (t.where as string) === 'root') t.where = 'direct'; // renamed once
+      return { sprints: b.sprints ?? [], tasks, rules: Array.isArray(b.rules) ? b.rules : [], queue: Array.isArray(b.queue) ? b.queue : [] };
     } catch {
       // Hand-edited or merge-conflicted: keep a copy before the next save replaces it, so nothing is lost.
       const copy = `${this.file}.corrupt-${Date.now()}`;
@@ -220,4 +224,14 @@ export class Store {
     if (s) { s.closed = true; s.active = false; }
     this.save();
   }
+}
+
+// Where a new task runs: an explicit choice wins; otherwise justCode.defaultWhere (auto: backlog direct, sprint branch).
+// A remote client (phone) always gets its own branch.
+export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean }): 'direct' | 'branch' {
+  if (o.remote) return 'branch';
+  if (o.where === 'direct' || o.artifact) return 'direct';
+  if (o.where === 'branch') return 'branch';
+  if (o.setting === 'direct' || o.setting === 'branch') return o.setting;
+  return o.sprintId ? 'branch' : 'direct';
 }

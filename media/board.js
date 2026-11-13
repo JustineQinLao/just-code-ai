@@ -85,7 +85,7 @@
     if (t.status === 'review' && t.review?.state === 'fail' && t.review.attempts >= max) return 'needs';
     if (t.status === 'review' && t.checks?.state === 'fail' && !t.phase) return 'needs';
     if (t.phase) return 'work';
-    if (t.status === 'review' && !t.review && !t.reviewing && t.reply && t.where !== 'root' && !t.run) return 'needs';
+    if (t.status === 'review' && !t.review && !t.reviewing && t.reply && t.where !== 'direct' && !t.run) return 'needs';
     if (t.run && t.run !== 'idle' || t.remote || t.limited || t.status === 'doing') return 'work';
     return 'review';
   }
@@ -93,7 +93,7 @@
   // { text, tone, action: [label, fn] } — the one thing a card tells you, and the one button for it.
   function next(t) {
     const max = S.settings.review.maxAttempts, r = t.review;
-    if (t.status === 'done') return t.review?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn' } : { text: t.where === 'root' ? 'Done' : 'Merged', tone: 'ok' };
+    if (t.status === 'done') return t.review?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn' } : { text: t.where === 'direct' ? 'Done' : 'Merged', tone: 'ok' };
     if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : t.asks[0].kind === 'plan' ? 'Plan ready for your OK' : 'Claude needs your approval', tone: 'warn' };
     if (t.phase) return { text: t.phase, tone: 'run' };
     if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run' };
@@ -111,7 +111,7 @@
       if (t.artifactUrl) return { text: 'Artifact published. Message Claude to change it; the same link updates.', tone: 'ok', action: ['⧉ Open artifact', () => post('openUrl', { url: t.artifactUrl })], extra: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
       if (t.status !== 'todo') return { text: 'Finished without a published page.', tone: 'warn', action: ['Publish', () => post('publishArtifact', { id: t.id })], extra: ['Reply', () => openTask(t.id, 'activity')] };
     }
-    if (t.where === 'root') return { text: 'Finished. Check the result, then mark it done.', tone: 'ok', action: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
+    if (t.where === 'direct') return { text: 'Finished. Check the result, then mark it done.', tone: 'ok', action: ['✓ Done', () => post('move', { id: t.id, status: 'done' })] };
     if (r?.state === 'pass') return { text: r.risk === 'critical' ? 'Review passed, flagged critical: look before merging' : 'Review passed. Ready to merge.', tone: r.risk === 'critical' ? 'warn' : 'ok', action: ['✓ Merge', () => post('merge', { id: t.id })] };
     if (r?.state === 'fail' && r.attempts >= max) return { text: `Review still finds ${r.issues?.length ?? 0} issue(s) after ${r.attempts} rounds`, tone: 'err', action: ['Send to Claude', () => post('sendIssues', { id: t.id })] };
     if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}`, tone: 'err', action: ['↻ Retry review', () => post('review', { id: t.id })], extra: t.worktree ? ['✓ Merge anyway', () => post('merge', { id: t.id })] : undefined };
@@ -136,7 +136,7 @@
       h('div', { class: 'addrow' },
         complete(h('input', { id: 'title', class: 'grow', placeholder: 'What should Claude do?  / skills · @ files · Enter adds · ⌘/Ctrl+Enter adds and runs', oninput: e => {
           // A lone /command runs in the project folder; anything more is a normal task again.
-          if (acRooted && !/^\/\S+\s*$/.test(e.target.value)) { $('#where').value = 'branch'; acRooted = false; }
+          if (acRooted && !/^\/\S+\s*$/.test(e.target.value)) { $('#where').value = ''; acRooted = false; }
         }, onkeydown: e => {
           if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTask(e.metaKey || e.ctrlKey); }
         }, onpaste: pasteImages })),
@@ -157,7 +157,7 @@
             h('label', { title: 'Code change: Claude edits the project. Artifact page: Claude designs one web page (with the frontend-design skill) and JustCode publishes it to claude.ai and puts the link on the card. Tasks that say "artifact" pick this by themselves.' }, 'Result ',
               h('select', { id: 'output' }, h('option', { value: '' }, 'Code change'), h('option', { value: 'artifact' }, 'Artifact page (link)'))),
             h('label', { title: 'Own branch: an isolated copy you review and merge. Project folder: runs in the project itself (deploys, syncs, releases).' }, 'Runs in ',
-              h('select', { id: 'where' }, h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'root' }, 'Project folder'))))))),
+              h('select', { id: 'where' }, h('option', { value: '' }, 'Automatic (backlog: project folder, sprint: own branch)'), h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'direct' }, 'Project folder (no review or merge)'))))))),
     h('div', { id: 'toolbar', class: 'toolbar' }),
     h('div', { id: 'progress' }),
     h('main', { id: 'lanes', class: 'lanes' }));
@@ -226,7 +226,7 @@
     if (!t || !it) return acHide();
     const end = el.selectionStart;
     el.setRangeText(it.insert, t.start, end, 'end');
-    if (el.id === 'title' && el.value.trim() === it.label) { $('#where').value = 'root'; acRooted = true; }
+    if (el.id === 'title' && el.value.trim() === it.label) { $('#where').value = 'direct'; acRooted = true; }
     acSel = 0;
     it.dir ? acDraw() : acHide();
   }
@@ -365,7 +365,7 @@
     $('#skills').replaceChildren(...(S.skills.length ? [h('span', { class: 'muted small', title: 'Skills this task can use. Your personal skills appear when "Your personal Claude setup in tasks" is on (⚙).' }, 'Skills:')] : []),
       ...S.skills.map(({ name: n, description: d }) => h('span', { class: 'chip', title: `${d || 'No description'}\n\nClick to use it in this task.`, onclick: () => {
         const t = $('#title'); if (!t.value.trim()) t.value = `/${n}`; else $('#desc').value += `${$('#desc').value ? '\n' : ''}/${n}`;
-        if (t.value.trim() === `/${n}`) $('#where').value = 'root';
+        if (t.value.trim() === `/${n}`) $('#where').value = 'direct';
       } }, `/${n}`)));
   }
 
@@ -490,7 +490,7 @@
       h('div', { class: 'meta' },
         t.agent ? h('span', { class: 'tag' }, t.agent) : '',
         h('span', { class: `tag mode-${S.settings?.bypassAll ? 'bypassPermissions' : t.mode}` }, modeName(S.settings?.bypassAll ? 'bypassPermissions' : t.mode)),
-        t.output === 'artifact' ? h('span', { class: 'tag', title: 'Result: a page published as a claude.ai artifact' }, '⧉ artifact') : t.where === 'root' ? h('span', { class: 'tag' }, 'project folder') : '',
+        t.output === 'artifact' ? h('span', { class: 'tag', title: 'Result: a page published as a claude.ai artifact' }, '⧉ artifact') : t.where === 'direct' ? h('span', { class: 'tag' }, 'project folder') : '',
         t.images?.length ? h('span', { class: 'tag' }, `🖼 ${t.images.length}`) : '',
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
@@ -643,8 +643,8 @@
     }
     if (tab === 'changes') {
       const files = changes[t.id];
-      const merged = t.status === 'done' && !t.worktree && t.branch && t.where !== 'root';
-      if (!t.worktree && !merged) return [h('p', { class: 'muted' }, t.where === 'root' ? 'This task runs in the project folder: its changes are in your working tree.' : 'No changes yet.')];
+      const merged = t.status === 'done' && !t.worktree && t.branch && t.where !== 'direct';
+      if (!t.worktree && !merged) return [h('p', { class: 'muted' }, t.where === 'direct' ? 'This task runs in the project folder: its changes are in your working tree.' : 'No changes yet.')];
       if (!files) return [h('p', { class: 'muted' }, 'Loading…')];
       if (!files.length) return [h('p', { class: 'muted' }, merged ? 'Could not find this task\'s merge in git history.' : 'No changes on this branch yet.')];
       return [merged ? h('p', { class: 'muted small' }, 'What the merge changed. Click a file for its diff; Open shows it from the project folder.') : '',

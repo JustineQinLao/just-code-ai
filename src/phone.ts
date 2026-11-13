@@ -57,7 +57,7 @@ export function phoneSteps<T extends { text: string }>(steps: T[], cap = PHONE_S
 }
 
 export const canPhoneMerge = (t: { worktree?: string; where?: string; status: string; review?: { state?: string; risk?: string } }) =>
-  !!t.worktree && t.where !== 'root' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical';
+  !!t.worktree && t.where !== 'direct' && t.status === 'review' && t.review?.state === 'pass' && t.review?.risk !== 'critical';
 
 // Pairing codes: single-use and short-lived, so the link/QR never carries the long-lived token.
 const PAIR_TTL_MS = 10 * 60_000;

@@ -24,7 +24,7 @@ test('phone merge is never looser than bulk merge', () => {
   assert.equal(canPhoneMerge(ok), true);
   assert.equal(canPhoneMerge({ ...ok, review: { state: 'pass', risk: 'critical' } }), false);
   assert.equal(canPhoneMerge({ ...ok, status: 'doing' }), false);
-  assert.equal(canPhoneMerge({ ...ok, where: 'root' }), false);
+  assert.equal(canPhoneMerge({ ...ok, where: 'direct' }), false);
   assert.equal(canPhoneMerge({ ...ok, worktree: undefined }), false);
   assert.equal(canPhoneMerge({ ...ok, review: { state: 'fail' } }), false);
 });

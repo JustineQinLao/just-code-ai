@@ -9,7 +9,7 @@ import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
 import { agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, frontendDesignPlugin, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
-import { Store } from '../store';
+import { Store, resolveWhere } from '../store';
 import { projectSetup } from '../setup';
 import { Session } from '../session';
 import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
@@ -918,4 +918,52 @@ test('src never writes CLAUDE.md, TASKS.md, .claude agents/skills or docs/', () 
   for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.ts')))
     fs.readFileSync(path.join(dir, f), 'utf8').split('\n').forEach((l, i) => { if (/(writeFileSync|copyFileSync|mkdirSync)/.test(l) && bad.test(l)) hits.push(`${f}:${i + 1}`); });
   assert.deepEqual(hits, []);
+});
+
+test('Store migrates where: root to direct', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-mig-'));
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'board.json'), JSON.stringify({ sprints: [], tasks: [{ id: 'a', title: 'x', status: 'todo', mode: 'auto', where: 'root' }] }));
+  assert.equal(new Store(root).data.tasks[0].where, 'direct');
+});
+
+test('resolveWhere: explicit wins, setting decides otherwise, remote is always a branch', () => {
+  assert.equal(resolveWhere({}), 'direct');
+  assert.equal(resolveWhere({ sprintId: 's' }), 'branch');
+  assert.equal(resolveWhere({ setting: 'branch' }), 'branch');
+  assert.equal(resolveWhere({ setting: 'direct', sprintId: 's' }), 'direct');
+  assert.equal(resolveWhere({ where: 'direct', sprintId: 's' }), 'direct');
+  assert.equal(resolveWhere({ where: 'direct', remote: true, setting: 'direct' }), 'branch');
+  assert.equal(resolveWhere({ remote: true }), 'branch');
+});
+
+test('direct tasks: one at a time, not during a merge; directFiles = status minus dirty-before, no commit', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-direct-'));
+  const sh = (...a: string[]) => execFileSync('git', a, { cwd: root, stdio: 'pipe' });
+  sh('init', '-q', '-b', 'main'); sh('config', 'user.email', 'a@b.c'); sh('config', 'user.name', 'a');
+  fs.writeFileSync(path.join(root, 'a.txt'), '1'); sh('add', '-A'); sh('commit', '-qm', 'init');
+  const store = new Store(root);
+  const settings: any = { maxParallel: 2, taskModel: '', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, freshAfterTokens: 0, checks: 'none', setup: '', maxCheckRounds: 2, checkTimeoutMinutes: 1,
+    review: { auto: false, model: '', lightModel: '', triage: true, maxAttempts: 3, autoMerge: false, mergeIfCannotRun: false, commands: [], timeoutMinutes: 1 } };
+  const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => settings, limits: new Limits(), notify: () => {}, choose: async () => 'x', cli: '' });
+  const t1 = store.addTask({ title: 'One', mode: 'auto', where: 'direct' });
+  const t2 = store.addTask({ title: 'Two', mode: 'auto', where: 'direct' });
+  // A second direct task is refused while the first is starting; the first is not affected.
+  r.starting.add(t1.id);
+  await assert.rejects(() => r.run(t2.id), /already working in the project folder/);
+  r.starting.delete(t1.id);
+  // Not while a merge (busy op) runs.
+  r.busy.add('other');
+  await assert.rejects(() => r.run(t2.id), /merge is running/);
+  r.busy.delete('other');
+  // turnEnded: only files that changed during the task, nothing committed.
+  fs.writeFileSync(path.join(root, 'old.txt'), 'dirty before'); // already dirty at start
+  fs.mkdirSync(A.taskDir(root, t1.id), { recursive: true });
+  fs.writeFileSync(path.join(A.taskDir(root, t1.id), 'dirty-before.txt'), 'old.txt');
+  fs.writeFileSync(path.join(root, 'new.txt'), 'x');
+  const head = sh('rev-parse', 'HEAD').toString();
+  store.updateTask(t1.id, { status: 'doing' });
+  await r.turnEnded(t1.id, { ok: true, text: 'done' });
+  assert.deepEqual(store.task(t1.id)!.directFiles, ['new.txt']);
+  assert.equal(sh('rev-parse', 'HEAD').toString(), head);
 });

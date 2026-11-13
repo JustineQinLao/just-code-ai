@@ -70,9 +70,9 @@ test('LAN client cannot merge via move, bypass, or root-writing options', () => 
   assert.deepEqual(mobileMessage({ type: 'move', id: 'x', status: 'review' }), { type: 'move', id: 'x', status: 'review' });
   assert.equal(mobileMessage({ type: 'setMode', id: 'x', mode: 'bypassPermissions' }), undefined);
   assert.equal(mobileMessage({ type: 'setMode', id: 'x', mode: 'plan' }).mode, 'plan');
-  const a = mobileMessage({ type: 'addTask', title: 't', mode: 'bypassPermissions', where: 'root', output: 'artifact', start: true });
+  const a = mobileMessage({ type: 'addTask', title: 't', mode: 'bypassPermissions', where: 'direct', output: 'artifact', start: true });
   assert.equal(a.mode, 'auto'); assert.ok(!('where' in a) && !('output' in a));
   assert.equal(mobileMessage({ type: 'addTask', title: 't' }).mode, 'auto');
-  const e = mobileMessage({ type: 'editTask', id: 'x', patch: { mode: 'bypassPermissions', where: 'root', title: 'n' } });
+  const e = mobileMessage({ type: 'editTask', id: 'x', patch: { mode: 'bypassPermissions', where: 'direct', title: 'n' } });
   assert.deepEqual(e.patch, { title: 'n' });
 });

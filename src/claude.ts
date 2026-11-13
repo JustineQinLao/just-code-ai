@@ -130,7 +130,7 @@ export function carryOver(root: string, worktree: string) {
 // The task as the first message: its brief (see artifacts.ts) plus where it runs.
 export function taskPrompt(t: Task, brief: string) {
   return [brief,
-    t.where !== 'root' && 'You work in this task\'s own copy of the project (a git worktree on its own branch). Stay inside the current directory. ' +
+    t.where !== 'direct' && 'You work in this task\'s own copy of the project (a git worktree on its own branch). Stay inside the current directory. ' +
       'JustCode commits your changes when you finish; do not commit or push yourself.']
     .filter(Boolean).join('\n\n');
 }

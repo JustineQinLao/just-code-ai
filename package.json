@@ -54,6 +54,17 @@
           "default": "",
           "description": "Path to the claude CLI. Empty: found automatically (PATH, ~/.local/bin, Homebrew, npm global)."
         },
+        "justCode.defaultWhere": {
+          "type": "string",
+          "enum": ["auto", "direct", "branch"],
+          "enumDescriptions": [
+            "Backlog tasks run in the project folder; sprint tasks get their own branch.",
+            "New tasks run in the project folder (no review or merge).",
+            "New tasks get their own branch (reviewed, merged)."
+          ],
+          "default": "auto",
+          "description": "Where a new task runs by default."
+        },
         "justCode.defaultMode": {
           "type": "string",
           "enum": [
