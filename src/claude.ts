@@ -186,13 +186,13 @@ export function artifactUrlIn(cwd: string, id: string) {
 }
 
 // Plugins Claude Code has installed (plugins/installed_plugins.json): name (without @marketplace) → install path.
-// With several scopes the user scope wins; entries whose folder lacks skills/ are ignored.
+// With several scopes the user scope wins; entries whose folder is missing are ignored (`need`: a subfolder that must exist, e.g. 'skills').
 const pluginsFile = () => path.join(process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude'), 'plugins', 'installed_plugins.json');
-export function installedPlugins(file = pluginsFile()): Record<string, string> {
+export function installedPlugins(file = pluginsFile(), need?: string): Record<string, string> {
   const found: Record<string, string> = {};
   try {
     const all = JSON.parse(fs.readFileSync(file, 'utf8'))?.plugins ?? {};
-    const ok = (e: { installPath?: string }) => !!e.installPath && fs.existsSync(path.join(e.installPath, 'skills'));
+    const ok = (e: { installPath?: string }) => !!e.installPath && fs.existsSync(need ? path.join(e.installPath, need) : e.installPath);
     for (const [key, list] of Object.entries<{ scope?: string; installPath?: string }[]>(all)) {
       const entries = Array.isArray(list) ? list : [];
       const hit = entries.find(e => e.scope === 'user' && ok(e)) ?? entries.find(ok);
@@ -204,7 +204,7 @@ export function installedPlugins(file = pluginsFile()): Record<string, string> {
 }
 // One installed plugin's folder, e.g. installedPlugin('frontend-design'). Lean task sessions do not load your plugins,
 // so artifact tasks are given the design plugin by path.
-export const installedPlugin = (name: string, file?: string) => installedPlugins(file)[name];
+export const installedPlugin = (name: string, file?: string, need?: string) => installedPlugins(file, need)[name];
 
 // What an artifact task is told: build one page with the design skill, in the shape claude.ai artifacts accept.
 export function artifactBrief(file: string, design: boolean) {

@@ -1109,3 +1109,23 @@ test('setup: Recommended rows are optional and follow the lookups', async () => 
   assert.equal(playwrightCommand('claude'), 'claude plugin install playwright@claude-plugins-official');
   assert.equal(row('playwright').fix?.action, 'installPlaywright');
 });
+
+test('installedPlugins: scopes, fallbacks, bare keys, two marketplaces, no skills/', () => {
+  const dir = tmp(), mk = (n: string, skills = true) => { const d = path.join(dir, n); fs.mkdirSync(skills ? path.join(d, 'skills') : d, { recursive: true }); return d; };
+  const file = path.join(dir, 'p.json');
+  const [u, pr, only, bare, m1, m2, mcp] = [mk('u'), mk('pr'), mk('only'), mk('bare'), mk('m1'), mk('m2'), mk('mcp', false)];
+  fs.writeFileSync(file, JSON.stringify({ plugins: {
+    'both@x': [{ scope: 'project', installPath: pr }, { scope: 'user', installPath: u }],
+    'proj@x': [{ scope: 'project', installPath: only }],
+    'bare': [{ scope: 'user', installPath: bare }],
+    'dup@a': [{ scope: 'user', installPath: m1 }], 'dup@b': [{ scope: 'user', installPath: m2 }],
+    'playwright@claude-plugins-official': [{ scope: 'user', installPath: mcp }] } }));
+  const all = installedPlugins(file);
+  assert.equal(all.both, u);
+  assert.equal(all.proj, only);
+  assert.equal(all.bare, bare);
+  assert.equal(all.dup, m1); // first marketplace wins
+  assert.equal(all.playwright, mcp); // MCP-only plugin: no skills/ needed
+  assert.equal(installedPlugin('playwright', file, 'skills'), undefined);
+  assert.equal(installedPlugin('both', file, 'skills'), u);
+});
