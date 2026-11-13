@@ -317,8 +317,10 @@ JustCode can serve the board to your phone over your own network. This is separa
 - **Same network:** the phone and the computer must be on the same Wi-Fi or LAN.
 - **Keep the computer awake:** the server runs inside VS Code on your computer. If it sleeps or VS Code closes, the
   phone loses the board and tasks stop.
-- **Open it on the phone:** run *JustCode: Show Phone Pairing* in VS Code. It shows an address (`http://<computer-ip>:7878/`)
-  and the token. Open the address in the phone's browser and paste the token. The page lists the open project's tasks and
+- **Pair the phone:** run *JustCode: Show Phone Pairing* in VS Code. It shows a 6-digit pairing code (one use, valid 10
+  minutes) and a link with that code. Open the link on the phone, or open `http://<computer-ip>:7878/` and type the code.
+  Ten wrong codes cancel every open code. A paired phone stays signed in for `justCode.phoneTokenDays` days (default 7),
+  then pairs again. ⚙ → **Phone** lists paired phones (when paired, last used, expiry) with **Revoke**. The page lists the open project's tasks and
   lets you switch project, move cards between columns, add and run a task, approve or deny a permission, stop a task and merge a task that passed review. Nothing else
   (no settings, files or bypass mode) is allowed from the phone. A native Android app is not built yet (docs/FOLLOWUPS.md).
 - **Selecting a project:** the top of the phone page shows one button per project open in VS Code; tap one to switch the
@@ -329,6 +331,10 @@ JustCode can serve the board to your phone over your own network. This is separa
   (discard it on the desktop first).
 - **Tablet view:** at 900px wide or more (a tablet or landscape), the four columns show side by side with a detail pane on the right instead of tabs. Tap a card to see it in the pane; drag-to-move (drop on a column heading), the project switcher and approval notifications work as on the phone. Below 900px the tabs layout is unchanged.
 - **Port:** `justCode.phoneServerPort` (default 7878).
+- **HTTPS (optional):** turn on `justCode.phoneTls` to serve the phone page over HTTPS with a self-signed certificate.
+  JustCode makes it once with `openssl` and keeps it in `~/.justcode-cache/phone-cert/` (never in the project). The
+  pairing link becomes `https://…&fp=<fingerprint>`, and the Android app trusts only that certificate. A browser shows a
+  certificate warning instead: compare the fingerprint in the pairing dialog before you accept it.
 - **Security:** the token is the only thing protecting the server. Keep it private and regenerate it if shared. Anyone
   on your network with the token can act as you. In *Bypass permissions* mode (or with `justCode.bypassAll`), tasks
   run with no approvals, so a phone with the token can start commands and change files unchecked. Leave the server
@@ -405,7 +411,57 @@ saves a local copy instead, every time it is needed, not once:
   day, is saved through a ⧉ terminal running `claude` (signed in with a Claude account). The card says *Saving
   claude.ai sources locally…* meanwhile. A failed refresh keeps the old copy.
 - Plans and task briefs then point Claude at the copy in `.justcode/sources/`. **Refresh copy** under 📎 Sources
-  picks up a newer version right away.
+  picks up a newer version right away. `justCode.artifactRefreshHours` (default 24) sets how old a copy may be.
+
+### ⧉ Artifacts
+
+**⧉ Artifacts** (toolbar) lists every claude.ai artifact the project used as input or published as a result
+(`.justcode/artifacts.json`): its title, which tasks used or produced it, and the age of its saved copy. Each row has
+**Copy link**, **Refresh copy** (inputs), **Use as source** (adds it to 📎 Sources and ticks it for the next task) and a
+note Claude reads. A task's Details show the artifacts it used and published.
+
+Briefs and planning chats list the project's artifacts under *Project artifacts*, so a later task can build on one.
+An artifact task whose title names a page an earlier task published (for example "Add a region filter to the Sales
+dashboard") updates that page at the same link instead of creating a new one. When a refresh finds that an input
+artifact changed, the button shows a dot and To do tasks built on it get the tag *design changed since this task was
+written*.
+
+Each task's transcript is also copied to `.justcode/tasks/<id>/transcript.jsonl` after every turn (**Transcript**
+under Details), so the activity log survives after the task's folder is gone.
+
+## Project controls (policy, budgets, audit)
+
+`.justcode/policy.json` is created with defaults the first time it is needed. Edit it (⚙ → **Policy** → **Open
+policy.json**); changes apply at once. ⚙ → **Policy** also lists what the policy denied today.
+
+| Field | Default | What it does |
+|---|---|---|
+| `protectedPaths` | `.github/workflows/**`, `infra/**`, `**/*.pem`, `**/.env*` | A task may not edit these files, in any permission mode. Claude is told why and works around it. |
+| `denyTools` | `Bash(curl *)`, `Bash(wget *)`, `WebFetch` | Always denied, also inside a longer command (`npm test && curl …`). |
+| `forbidModes` | `bypassPermissions` | A task in this mode does not start; *Bypass all* is ignored for this project. |
+| `requireHumanReviewFor` | `auth`, `payment`, `migration`, `security` | A change whose paths contain one of these words is never merged automatically: the card says *Needs your approval (policy)*. |
+| `maxCostUsd` | task 5, sprint 50, project 500 | A task that reaches a budget stops with *Budget reached: $X of $Y*. Raise the number, then press **Resume**. 0 = no budget. Reviews and planning count too. |
+| `allowedModels` | any | Tasks run only with these models. |
+| `requireChecksPass` | true | **Merge** / **Finish** is refused while the project's checks fail (the card then offers no "anyway"). |
+| `secretScan` | true | Before JustCode commits, it scans the added lines for keys and tokens (AWS, GitHub, Slack, private keys, JWTs, `password = "…"`). On a hit nothing is committed, the card names `file:line`, and Claude is asked once to remove them. |
+
+**Audit log.** `.justcode/audit.jsonl` records who did what: task created, run, stopped, messaged; every permission
+answer (with *phone* when you answered on the phone); mode switches; reviews; merges, finishes and discards; policy
+denials, budget stops, blocked commits, accepted review issues; phone pairing and phone actions. *JustCode: Export
+Audit Log* writes it as CSV to `.justcode/reports/`.
+
+**Dependencies.** Under Details → **After**, tick the tasks this one waits for. Run all never starts it before they are
+done; its card says *⟂ waits for "…"* (**Run anyway** starts it now). ✦ Plan sets this for you when one task needs
+another.
+
+**Sprint report.** **Report** on the sprint bar (or *JustCode: Export Sprint Report*) writes
+`.justcode/reports/sprint-<name>-<date>.md`: the goal, every task with its merge commit, files changed, review rounds
+and cost, audit highlights (denials, budget stops, blocked commits, overrides) and the artifacts it published.
+
+**Health.** *JustCode: Check Setup and Health* also checks the project's JustCode files: a broken `board.json`,
+`policy.json` errors, a corrupt `artifacts.json` or links to deleted tasks, leftover task folders, artifact sources
+without a recent copy, and transcripts not yet archived. Each problem is a row with one fix; a banner on the board
+points at the first one.
 
 ## 15. Checks and ready folders
 
