@@ -1104,4 +1104,8 @@ test('setup: Recommended rows are optional and follow the lookups', async () => 
   assert.equal(row('frontendDesign').fix?.action, 'installPlugin:frontend-design');
   assert.ok((await run([], true)).checks.find(c => c.id === 'designMd')!.ok);
   assert.equal(pluginInstallCommands('claude', 'superpowers').length, 2);
+  // the install route registers a plugin named playwright, which is what the row looks up
+  const { playwrightCommand } = await import('../setup');
+  assert.equal(playwrightCommand('claude'), 'claude plugin install playwright@claude-plugins-official');
+  assert.equal(row('playwright').fix?.action, 'installPlaywright');
 });

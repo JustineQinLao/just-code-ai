@@ -77,10 +77,11 @@ export function projectSetup(root: string) {
 }
 
 // Terminal commands for the Recommended installs. Superpowers is not in the official marketplace, so it adds its own first.
-export const MARKETPLACE: Record<string, string> = { 'frontend-design': 'claude-plugins-official', superpowers: 'superpowers-marketplace' };
+export const MARKETPLACE: Record<string, string> = { 'frontend-design': 'claude-plugins-official', superpowers: 'superpowers-marketplace', playwright: 'claude-plugins-official' };
 export const pluginInstallCommands = (bin: string, name: string) => [
   ...(name === 'superpowers' ? [`${bin} plugin marketplace add obra/superpowers-marketplace`] : []),
   `${bin} plugin install ${name}@${MARKETPLACE[name] ?? 'claude-plugins-official'}`];
-export const playwrightCommand = (bin: string) => `${bin} mcp add playwright -- npx @playwright/mcp@latest`;
+// Playwright is installed as a plugin, so the same lookup that detects it (installed_plugins.json) sees the result.
+export const playwrightCommand = (bin: string) => pluginInstallCommands(bin, 'playwright').join(' && ');
 // Shown if the CLI route fails: the same steps typed inside Claude Code.
 export const SUPERPOWERS_FALLBACK = ['/plugin marketplace add obra/superpowers-marketplace', '/plugin install superpowers@superpowers-marketplace'];
