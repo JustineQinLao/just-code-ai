@@ -323,7 +323,7 @@ export function adb(): { bin: string; devices: string[] } | undefined {
 // The server-level rule allows all of the server's tools.
 export const PLAYWRIGHT_TOOLS = 'mcp__playwright';
 export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@0.0.85', '--headless', '--isolated', '--output-dir', shots] } });
-export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); pass just filename "<name>.png" (the server saves it into ${shots}). If the browser is missing, call browser_install once and retry. Never use npx playwright, a screenshot script or a visible browser.`;
+export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); always pass filename as the absolute path "${shots}/<name>.png" (a bare name lands in the project folder). If the browser is missing, call browser_install once and retry. Never use npx playwright, a screenshot script or a visible browser.`;
 
 // Tool options for a UI session or review: the MCP server and its allow rule are added together, or not at all.
 export function webOptions(on: boolean, shots: string, allowed: string[]) {

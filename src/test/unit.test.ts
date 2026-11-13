@@ -11,7 +11,7 @@ import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, sa
 import { Limits, isLimitError } from '../limits';
 import { Store, resolveWhere } from '../store';
 import { projectSetup } from '../setup';
-import { Session } from '../session';
+import { Session, toolOptions } from '../session';
 import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
 import { writePlugin } from '../plugin';
 import * as g from '../git';
@@ -1161,7 +1161,7 @@ test('playwright MCP: pinned, headless, saves into shots; review prompt UI secti
   assert.deepEqual(m.args.slice(-4), ['--headless', '--isolated', '--output-dir', '/s']);
   const task = { id: 'x', title: 't' } as any;
   const web = reviewPrompt(task, 'main', 'd', { shots: '/s', web: true });
-  assert.match(web, /browser_take_screenshot/); assert.doesNotMatch(web, /npx playwright screenshot/);
+  assert.match(web, /browser_take_screenshot/); assert.doesNotMatch(web, new RegExp(['npx', 'playwright', 'screenshot'].join(' ')));
   const none = reviewPrompt(task, 'main', 'd', { shots: '/s' });
   assert.doesNotMatch(none, /# UI checks/);
   assert.doesNotMatch(reviewPrompt(task, 'main', 'd', { shots: '/s', adb: { bin: 'adb', devices: ['a'] }, cli: 'c.js' }), /browser_take_screenshot/);
@@ -1173,4 +1173,23 @@ test('webOptions: MCP server and allow rule come together', () => {
   const off = webOptions(false, '/s', ['Read']);
   assert.deepEqual(off.allowed, ['Read']); assert.equal(off.mcpServers, undefined);
   assert.match(reviewPrompt({ id: 'x', title: 't' } as any, 'm', 'd', { shots: '/s', web: true }), /browser_install/);
+  // A bare filename is saved relative to the server's cwd (the project), not --output-dir: checked live with 0.0.85.
+  assert.match(reviewPrompt({ id: 'x', title: 't' } as any, 'm', 'd', { shots: '/s', web: true }), /absolute path "\/s\/<name>\.png"/);
+});
+
+test('UI wiring: webOptions reach the SDK options, the rule approves the server tools, the brief follows the same flag', () => {
+  const w = webOptions(true, '/s', ['Read']);
+  const o = toolOptions({ mcpServers: w.mcpServers, allowed: w.allowed });
+  assert.deepEqual((o.mcpServers as any).playwright.args.slice(-2), ['--output-dir', '/s']);
+  assert.ok(o.allowedTools?.includes('mcp__playwright'));
+  assert.equal(toolOptions({ mcpServers: undefined, allowed: [] }).mcpServers, undefined);
+  assert.ok(matches('mcp__playwright', 'mcp__playwright__browser_take_screenshot', {}));
+  assert.ok(!matches('mcp__playwright', 'mcp__playwrightx__a', {}));
+  assert.ok(!matches('mcp__play', 'mcp__playwright__a', {}));
+  const root = tmp();
+  const ui = { id: 'u', title: 'Restyle the settings page', mode: 'auto', status: 'todo', created: 0 } as any;
+  const be = { id: 'b', title: 'Fix retry logic in queue', mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.equal(A.isUiTask(ui), true); assert.equal(A.isUiTask(be), false);
+  assert.match(A.writeBrief(root, ui, []), /browser_take_screenshot/);
+  assert.doesNotMatch(A.writeBrief(root, be, []), /browser_take_screenshot/);
 });

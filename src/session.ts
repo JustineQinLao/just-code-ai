@@ -62,6 +62,16 @@ export interface SessionOptions {
   label: string;              // name of the root node in the agent map
 }
 
+// The tool-related SDK options: MCP servers, allow rules, extra folders and plugins, passed through unchanged.
+export function toolOptions(o: Pick<SessionOptions, 'mcpServers' | 'allowed' | 'addDirs' | 'plugins'>): Partial<Sdk.Options> {
+  return {
+    ...(o.mcpServers ? { mcpServers: o.mcpServers } : {}),
+    ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
+    ...(o.addDirs?.length ? { additionalDirectories: o.addDirs } : {}),
+    ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),
+  };
+}
+
 const MAX_STEPS = 400;
 
 // A queue of user messages the SDK reads from: what keeps the session open between turns.
@@ -141,10 +151,7 @@ export class Session {
       ...(o.readOnly ? { disallowedTools: ['Agent', 'Task', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'EnterPlanMode', 'ExitPlanMode'] } : o.subagents ? {} : { disallowedTools: ['Agent', 'Task'] }),
       ...(o.agent ? { agent: o.agent } : {}),
       ...(o.agents && Object.keys(o.agents).length ? { agents: o.agents as any } : {}),
-      ...(o.mcpServers ? { mcpServers: o.mcpServers } : {}),
-      ...(o.allowed.length ? { allowedTools: o.allowed } : {}),
-      ...(o.addDirs?.length ? { additionalDirectories: o.addDirs } : {}),
-      ...(o.plugins?.length ? { plugins: o.plugins.map(p => ({ type: 'local' as const, path: p })) } : {}),
+      ...toolOptions(o),
       ...(o.resume ? { resume: o.sessionId } : { sessionId: o.sessionId }),
       abortController: this.ac,
       agentProgressSummaries: true,

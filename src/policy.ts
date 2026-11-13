@@ -24,7 +24,8 @@ const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 export function matches(rule: string, tool: string, input: Record<string, unknown>): boolean {
   const r = parseRule(rule);
   if (!r) return false;
-  const sameTool = r.tool === tool || (r.tool === 'Edit' && EDIT_TOOLS.has(tool));
+  // "mcp__server" approves every tool of that MCP server (mcp__server__tool), as in Claude Code.
+  const sameTool = r.tool === tool || (r.tool === 'Edit' && EDIT_TOOLS.has(tool)) || (!r.content && r.tool.startsWith('mcp__') && tool.startsWith(r.tool + '__'));
   if (!sameTool) return false;
   if (!r.content) return true;
   if (tool === 'Bash') {

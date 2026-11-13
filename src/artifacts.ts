@@ -124,7 +124,7 @@ export function writeBrief(root: string, t: Task, sources: Source[]) {
     ...picked.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`),
     ...files.map(f => `- ${f}`),
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
-    `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo). Take screenshots only with the Playwright MCP browser_take_screenshot tool (headless), never npx playwright`,
+    `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo).${isUiTask(t) ? ` Take screenshots only with the Playwright MCP browser_take_screenshot tool (headless), filename always an absolute path in that folder.` : ''}`,
     projectSection(root),
     designSection(root, t),
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
