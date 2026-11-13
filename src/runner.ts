@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
@@ -20,6 +20,7 @@ import { Limits, isLimitError } from './limits';
 
 // The folder where checks run on the base branch, to tell failures a task caused from ones it found.
 const BASELINE = '_base';
+const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
 const TEST_CMD = /\b(test|pytest|jest|vitest|spec|build|tsc|check|gradlew|playwright|screenshot|lint)\b/i;
 const UI_FILE = /^\+\+\+ b\/.*\.(html?|css|scss|tsx|jsx|vue|svelte|xml|kt|java|swift|dart|component\.ts)$/m;
@@ -456,7 +457,7 @@ export class Runner {
     const cur = this.store.task(id);
     // An artifact task's page is published (again, after a change) once Claude has written it.
     if (cur?.output === 'artifact' && fs.existsSync(A.artifactFile(this.root, id))) { this.d.publish?.(id); return; }
-    if (cur?.status !== 'review' || !cur.branch || this.emptyAt.has(id)) return;
+    if (cur?.status !== 'review' || !(cur.branch || (cur.where === 'direct' && !cur.init)) || this.emptyAt.has(id)) return;
     if (await this.check(id) === 'fail') return;
     if (this.d.settings().review.auto) await this.review(id);
   }
@@ -484,26 +485,34 @@ export class Runner {
   // work that passes.
   private async check(id: string): Promise<'pass' | 'fail' | 'none'> {
     const t = this.store.task(id), set = this.d.settings();
-    if (!t?.worktree || !t.base) return 'none';
-    const checks = C.checksFor(t.worktree, set.checks);
+    const direct = t?.where === 'direct' && !t.init;
+    if (!t || (direct ? !t.directFiles?.length : (!t.worktree || !t.base))) return 'none';
+    const cwd = direct ? this.root : t.worktree!, base = direct ? t.startHead : t.base;
+    if (!base) return 'none';
+    const checks = C.checksFor(cwd, set.checks);
     if (!checks.length) return 'none';
-    const head = await g.git(t.worktree, ['rev-parse', 'HEAD']).catch(() => '');
+    // A direct task has no commit of its own: its state is the hash of its working-tree diff.
+    const head = direct ? sha(await g.workingDiff(cwd, base, t.directFiles!)) : await g.git(cwd, ['rev-parse', 'HEAD']).catch(() => '');
     if (t.checks?.head === head && t.checks.state === 'pass') return 'pass';
     if (this.checking.has(id)) return 'fail';  // already running for this task: the first run decides
     this.checking.add(id);
     this.setPhase(id, `Running checks: ${checks.map(c => c.name).join(', ')}…`);
     let results: C.CheckResult[], log: string;
     try {
-      ({ results, log } = await C.runChecks(checks, t.worktree, this.folderEnv(id, t.worktree), set.checkTimeoutMinutes * 60_000));
+      ({ results, log } = await C.runChecks(checks, cwd, this.folderEnv(id, cwd), set.checkTimeoutMinutes * 60_000));
       const failing = results.filter(r => !r.ok);
       if (failing.length) {
-        const base = await this.baseline(t.base, failing.map(f => f.cmd));
-        for (const r of failing) if (base.get(r.cmd) === false) r.preexisting = true;
+        const bl = await this.baseline(base, failing.map(f => f.cmd));
+        for (const r of failing) if (bl.get(r.cmd) === false) r.preexisting = true;
       }
     } finally { this.setPhase(id); this.checking.delete(id); }
     const now = this.store.task(id);
     // Merged, discarded or deleted while the checks ran: their results no longer belong to anything.
-    if (!now || now.status === 'done' || !now.worktree || now.worktree !== t.worktree || !fs.existsSync(path.join(now.worktree, '.git'))) return 'none';
+    if (!now || now.status === 'done' || now.worktree !== t.worktree || (!direct && (!now.worktree || !fs.existsSync(path.join(now.worktree, '.git'))))) return 'none';
+    if (direct) {
+      const outside = (await g.dirtyFiles(this.root).catch(() => [] as string[])).filter(f => !t.directFiles!.includes(f));
+      if (outside.length) log += `Note: the working tree also had changes outside this task's files (${outside.slice(0, 20).join(', ')}${outside.length > 20 ? ', …' : ''}); the checks ran with them present.\n`;
+    }
     try { fs.mkdirSync(A.taskDir(this.root, id), { recursive: true }); fs.writeFileSync(A.checksLog(this.root, id), log); } catch { /* the card still shows it */ }
     const real = results.filter(r => !r.ok && !r.preexisting);
     const rounds = real.length ? (now.checks?.state === 'fail' ? now.checks.rounds : 0) + 1 : 0;
@@ -521,7 +530,7 @@ export class Runner {
   async sendChecks(id: string) {
     const t = this.store.task(id);
     const failing = t?.checks?.results?.filter(r => !r.ok && !r.preexisting) ?? [];
-    if (!t?.worktree || t.status === 'done' || !failing.length) return;
+    if (!t || (!t.worktree && !(t.where === 'direct' && !t.init)) || t.status === 'done' || !failing.length) return;
     this.store.updateTask(id, { status: 'doing' });
     await this.say(id, `JustCode ran the project's checks after your turn. These fail:\n\n` +
       failing.map(r => `$ ${r.cmd}  (${r.timedOut ? 'timed out' : 'failed'})\n\`\`\`\n${r.tail ?? ''}\n\`\`\``).join('\n\n') +
@@ -729,7 +738,7 @@ export class Runner {
     if (big && t.sessionId) {
       this.stop(id);
       this.store.updateTask(id, { sessionId: undefined, pastSessions: [...(t.pastSessions ?? []), t.sessionId], status: 'doing' });
-      await this.run(id, `This task was already built on this branch (see git diff ${t.base}...HEAD) and ${A.handoffFile(this.root, id)} ` +
+      await this.run(id, `This task was already built on this branch (see ${t.where === 'direct' ? `git diff ${t.startHead} -- ${(t.directFiles ?? []).join(' ')}` : `git diff ${t.base}...HEAD`}) and ${A.handoffFile(this.root, id)} ` +
         `describes it. The review is in ${A.reviewFile(this.root, id)}.\n\n${issues}`);
       return;
     }
@@ -744,7 +753,9 @@ export class Runner {
   async review(id: string, force = false, retry = 0): Promise<void> {
     const t = this.store.task(id), o = this.d.settings().review;
     const bin = this.d.bin();
-    if (!t?.worktree || !t.base || !t.branch || t.conflicts?.length || this.reviews.has(id) || !bin) return;
+    const direct = t?.where === 'direct' && !t.init;
+    if (!t || (direct ? !t.startHead || !t.directFiles?.length : (!t.worktree || !t.base || !t.branch)) || t.conflicts?.length || this.reviews.has(id) || !bin) return;
+    const cwd = direct ? this.root : t.worktree!;
     this.requireLease();
     let after: 'retry' | 'merge' | undefined;
     const ac = new AbortController();
@@ -752,9 +763,9 @@ export class Runner {
     this.changed();
     const shots = path.join(os.tmpdir(), 'justcode-reviews', id);
     try {
-      const head = await g.git(t.worktree, ['rev-parse', 'HEAD']).catch(() => '');
+      const diff = direct ? await g.workingDiff(cwd, t.startHead!, t.directFiles!) : await g.git(cwd, ['diff', `${t.base}...HEAD`]).catch(() => '');
+      const head = direct ? sha(diff) : await g.git(cwd, ['rev-parse', 'HEAD']).catch(() => '');
       if (!force && t.review?.head === head && t.review.state !== 'error') return;
-      const diff = await g.git(t.worktree, ['diff', `${t.base}...HEAD`]).catch(() => '');
       if (!diff.trim()) { this.emptyAt.add(id); return; }
       const attempts = t.review?.state === 'fail' ? t.review.attempts : 0;
       this.store.updateTask(id, { review: { state: 'running', attempts, head } });
@@ -780,11 +791,11 @@ export class Runner {
       let brief = ''; try { brief = fs.readFileSync(A.briefFile(this.root, id), 'utf8').replace(/\n## When you finish[\s\S]*$/, '').trim(); } catch { /* none yet */ }
       try { brief += `\n\n## Approved plan\n${fs.readFileSync(A.planFile(this.root, id), 'utf8').slice(0, 6000)}`; } catch { /* no plan */ }
       const passed = this.store.task(id)?.checks?.state === 'pass' ? this.store.task(id)!.checks!.results!.filter(r => r.ok).map(r => r.cmd) : [];
-      const prompt = reviewPrompt(t, t.base, diff, { shots, adb: device, cli: this.d.cli, handoff: A.readHandoff(this.root, id), brief, checks: passed }) + (retry
+      const prompt = reviewPrompt(t, t.base ?? t.startHead ?? 'HEAD', diff, { shots, adb: device, cli: this.d.cli, handoff: A.readHandoff(this.root, id), brief, checks: passed }) + (retry
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
-        const r = await runReview(p, { bin, cwd: t.worktree!, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(),
+        const r = await runReview(p, { bin, cwd, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(),
           timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, adbBin: device?.bin, cli: this.d.cli, resume });
         if (r.usage) {
           usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });
@@ -855,6 +866,7 @@ export class Runner {
   changes(id: string) {
     const t = this.store.task(id);
     if (t?.status === 'done' && !t.worktree && t.branch && t.where !== 'direct') return g.mergedChanges(this.root, t.branch);
+    if (t?.where === 'direct' && !t.init) return t.startHead && t.directFiles?.length ? g.workingChanges(this.root, t.startHead, t.directFiles) : Promise.resolve([]);
     if (!t?.worktree || !t.base || !fs.existsSync(t.worktree)) return Promise.resolve([]);
     return g.changes(t.worktree, t.base);
   }
