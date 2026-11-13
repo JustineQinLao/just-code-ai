@@ -50,6 +50,8 @@ test('policy on runs and merges: forbidden mode and model refused, bypass-all ne
   const notes: string[] = [];
   const r: any = new Runner(store, { bin: () => 'claude', env: () => ({}), settings: () => set, limits: new Limits(), notify: (_l: string, m: string) => notes.push(m), choose: async () => 'x', cli: '' });
   r.holdsLease = () => true; r.requireLease = () => {};
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'policy.json'), JSON.stringify({ forbidModes: ['bypassPermissions'] }));
   const t = store.addTask({ title: 'A', mode: 'bypassPermissions' });
   await assert.rejects(r.run(t.id), /forbids the "bypassPermissions" permission mode/);
   assert.match(store.task(t.id)!.error!, /forbidModes/);
@@ -119,4 +121,14 @@ test('health: corrupted registry, stale links, leftover folders, policy errors a
   fs.rmSync(jc('worktrees', 'abc'), { recursive: true });
   const clean = checkHealth(base, []);
   assert.deepEqual(clean.map(r => [r.id, r.fix!.action]), [['registry', 'pruneRegistry']]);
+});
+
+test('policy: the 2.0.0 default (bypass forbidden) is upgraded when untouched, kept when edited; no mode is forbidden by default', () => {
+  assert.deepEqual(DEFAULT_POLICY.forbidModes, []);
+  const root = tmp(); fs.mkdirSync(path.join(root, '.justcode'));
+  fs.writeFileSync(policyFile(root), JSON.stringify({ ...DEFAULT_POLICY, forbidModes: ['bypassPermissions'] }, null, 2));
+  assert.deepEqual(loadPolicy(root).policy.forbidModes, []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(policyFile(root), 'utf8')).forbidModes, []);
+  fs.writeFileSync(policyFile(root), JSON.stringify({ ...DEFAULT_POLICY, forbidModes: ['bypassPermissions'], secretScan: false }));
+  assert.deepEqual(loadPolicy(root).policy.forbidModes, ['bypassPermissions'], 'an edited policy keeps its choice');
 });

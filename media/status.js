@@ -6,6 +6,7 @@
   const open = r => (r?.issues || []).filter(i => !i.accepted);
   const accepted = r => (r?.issues || []).filter(i => i.accepted);
   const isDirect = t => t.where === 'direct' && !t.init;
+  const busy = t => t.run === 'running' || t.run === 'starting';
 
   // Which column a card sits in.
   function lane(t, settings) {
@@ -17,7 +18,8 @@
     if (t.status === 'review' && t.review?.state === 'error' && !t.reviewing) return 'needs';
     if (t.status === 'review' && t.review?.state === 'pass' && t.review.hold) return 'needs';
     if (t.phase) return 'work';
-    if (t.status === 'review' && !t.review && !t.reviewing && t.reply && t.where !== 'direct' && !t.run) return 'needs';
+    // Claude finished but changed nothing to review (a branch with no new commits, a workspace task with no files).
+    if (t.status === 'review' && !t.review && !t.reviewing && t.reply && !busy(t) && (t.where !== 'direct' || !(t.directFiles || []).length)) return 'needs';
     if (t.run && t.run !== 'idle' || t.remote || t.limited || t.status === 'doing') return 'work';
     return 'review';
   }
@@ -73,7 +75,7 @@
     }
     if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}${hint(r.error)}`, tone: 'err',
       actions: [['↻ Retry review', () => post('review', { id })], ...(t.worktree || isDirect(t) ? [[`${fin} without review`, () => post('merge', { id }), 'ghost']] : []), discard] };
-    if (!r && t.reply && !t.run) return { text: `Claude replied without changing files: "${t.reply.slice(0, 140)}"`, tone: 'warn',
+    if (!r && t.reply && !busy(t) && (!isDirect(t) || !(t.directFiles || []).length)) return { text: `Claude finished without changing project files: "${t.reply.slice(0, 140)}"`, tone: 'warn',
       actions: [['Reply', () => c.open(id, 'activity')], ['Finish (no changes)', () => post('merge', { id }), 'ghost'], discard] };
     if (!s.review.auto) return { text: `Finished. Look at the changes, then ${fin.toLowerCase()}.`, tone: 'ok', actions: [[`✓ ${fin}`, () => post('merge', { id })]] };
     return { text: 'Waiting for the AI reviewer', tone: 'muted', actions: [] };

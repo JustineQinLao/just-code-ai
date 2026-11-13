@@ -104,13 +104,17 @@ export interface Policy {
 export const DEFAULT_POLICY: Policy = {
   protectedPaths: ['.github/workflows/**', 'infra/**', '**/*.pem', '**/.env*'],
   denyTools: ['Bash(curl *)', 'Bash(wget *)', 'WebFetch'],
-  forbidModes: ['bypassPermissions'],
+  forbidModes: [],
   requireHumanReviewFor: ['auth', 'payment', 'migration', 'security'],
   maxCostUsd: { task: 5, sprint: 50, project: 500 },
   allowedModels: [],
   requireChecksPass: true,
   secretScan: true,
 };
+
+// The first default (2.0.0) forbade bypassPermissions, which silently overrode a mode the user picked on purpose. A
+// policy.json still exactly as JustCode wrote it then is upgraded to the current defaults; an edited one is kept.
+const FIRST_DEFAULT = { ...DEFAULT_POLICY, forbidModes: ['bypassPermissions'] };
 
 export const policyFile = (root: string) => nodePath.join(root, '.justcode', 'policy.json');
 
@@ -127,6 +131,10 @@ export function loadPolicy(root: string): { policy: Policy; errors: string[] } {
       return { policy: DEFAULT_POLICY, errors: [] };
     }
     return { policy: DEFAULT_POLICY, errors: [`policy.json is not valid JSON (${String(e?.message ?? e).slice(0, 120)}): the defaults apply`] };
+  }
+  if (JSON.stringify(raw) === JSON.stringify(FIRST_DEFAULT)) {
+    try { fs.writeFileSync(file, JSON.stringify(DEFAULT_POLICY, null, 2) + '\n'); } catch { /* read-only */ }
+    return { policy: DEFAULT_POLICY, errors: [] };
   }
   const errors: string[] = [], d = DEFAULT_POLICY;
   const list = (k: 'protectedPaths' | 'denyTools' | 'forbidModes' | 'requireHumanReviewFor' | 'allowedModels') => {

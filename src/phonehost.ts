@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { Store, Task, resolveWhere } from './store';
+import { Store, Task, resolveWhere, resolveOutput } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
 import { pluginDir } from './plugin';
@@ -60,7 +60,8 @@ export async function phoneAct(m: any, via = 'phone'): Promise<string | void> {
   switch (m.type) {
     case 'addTask': {
       if (!String(m.title ?? '').trim()) return 'title required';
-      const task = r.store.addTask({ title: String(m.title).trim(), mode: (setting<string>('defaultMode', 'auto') === 'bypassPermissions' ? 'auto' : setting<string>('defaultMode', 'auto')) as Task['mode'] });
+      const output = resolveOutput(undefined, String(m.title));
+      const task = r.store.addTask({ title: String(m.title).trim(), mode: (setting<string>('defaultMode', 'auto') === 'bypassPermissions' ? 'auto' : setting<string>('defaultMode', 'auto')) as Task['mode'], ...(output ? { output, where: 'direct' as const } : {}) });
       A.logPrompt(r.root, { kind: 'task', text: task.title, taskId: task.id, title: task.title });
       r.audit('task.create', task.id, task.title, 'phone');
       if (m.start) await r.run(task.id);

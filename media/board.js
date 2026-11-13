@@ -123,7 +123,7 @@
             h('label', {}, 'Agent ', h('select', { id: 'agent' })),
             h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
             h('label', { title: 'Code change: Claude edits the project. Artifact page: Claude designs one web page (with the frontend-design skill) and JustCode publishes it to claude.ai and puts the link on the card. Tasks that say "artifact" pick this by themselves.' }, 'Result ',
-              h('select', { id: 'output' }, h('option', { value: '' }, 'Code change'), h('option', { value: 'artifact' }, 'Artifact page (link)'))),
+              h('select', { id: 'output' }, h('option', { value: '' }, 'Automatic (a mockup or page: artifact)'), h('option', { value: 'code' }, 'Code change'), h('option', { value: 'artifact' }, 'Artifact page (link)'))),
             h('label', { title: 'Own branch: an isolated copy you review and merge. Workspace: runs in your checkout, reviewed, then Finish commits its files.' }, 'Runs in ',
               h('select', { id: 'where' }, h('option', { value: '' }, 'Automatic (backlog: workspace, sprint: own branch)'), h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'direct' }, 'Workspace (direct, reviewed)'))))))),
     h('div', { id: 'toolbar', class: 'toolbar' }),
@@ -248,7 +248,7 @@
     const done = $('#done').value.split('\n').map(x => x.trim().replace(/^[-*]\s*/, '')).filter(Boolean);
     const description = [$('#desc').value.trim(), done.length ? `Done when:\n${done.map(d => `- ${d}`).join('\n')}` : ''].filter(Boolean).join('\n');
     // "make an artifact…", "artifact of the API": the result is a published page, not a code change.
-    const output = $('#output').value || (/\bartifacts?\b/i.test(`${title}\n${description}`) ? 'artifact' : '');
+    const output = $('#output').value;   // '' = automatic: the host decides from the text (resolveOutput)
     post('addTask', { title, description, output, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
       sprintId: sprint || undefined, images, files, sources: sprintSrcs(sprint).map(s => s.id).filter(id => !srcOff.has(id)), start });
     $('#title').value = ''; $('#desc').value = ''; $('#done').value = ''; $('#output').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();

@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { Store, Task, resolveWhere } from './store';
+import { Store, Task, resolveWhere, resolveOutput } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
 import { pluginDir } from './plugin';
@@ -91,9 +91,10 @@ export async function handle(m: any, remote = false) {
       if (m.mode === 'bypassPermissions' && !await bypassGate(remote, bypassAllOn(), confirmBypass)) return;
       const all = A.loadSources(r.root).map(x => x.id);
       const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
+      const output = resolveOutput(m.output, `${m.title}\n${m.description ?? ''}`);
       const task = s.addTask({ title: m.title.trim(), description: m.description?.trim() || undefined, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-        mode: m.mode || setting('defaultMode', 'auto'), where: resolveWhere({ where: m.where, artifact: m.output === 'artifact', setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote }),
-        output: m.output === 'artifact' ? 'artifact' : undefined,
+        mode: m.mode || setting('defaultMode', 'auto'), where: resolveWhere({ where: m.where, artifact: !!output, setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote }),
+        output,
         files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
       A.logPrompt(r.root, { kind: 'task', text: [task.title, task.description].filter(Boolean).join('\n\n'), taskId: task.id, title: task.title });
       r.audit('task.create', task.id, task.title, who);

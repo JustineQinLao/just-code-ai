@@ -23,7 +23,8 @@
   // Plan mode: Claude's plan, to build as is or send back with changes.
   function planBox(t, a) {
     let note;
-    const build = JC.S.settings.defaultMode === 'plan' ? 'auto' : JC.S.settings.defaultMode;
+    const forbid = JC.S.policy?.policy.forbidModes || [];
+    const build = JC.S.settings.defaultMode === 'plan' || forbid.includes(JC.S.settings.defaultMode) ? 'auto' : JC.S.settings.defaultMode;
     return JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       JC.h('div', { class: 'askhead' }, JC.h('b', {}, 'Plan ready'), JC.h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
       JC.h('pre', { class: 'askdetail plan' }, a.plan || '(empty plan)'),
@@ -119,7 +120,7 @@
       JC.h('div', { class: `next ${nx.tone}` }, nx.text, ...nx.actions.slice(0, 2).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))),
       JC.h('div', { class: 'row small' },
         JC.h('label', {}, 'Permissions ', JC.h('select', { onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
-          JC.MODES.map(([v, l, d]) => JC.h('option', { value: v, title: d, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, l)))),
+          JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); }))),
         t.modeNote ? JC.h('span', { class: 'warn' }, t.modeNote) : '',
         t.branch ? JC.h('span', { class: 'muted' }, `⎇ ${t.branch}`) : '',
         t.modelUsed ? JC.h('span', { class: 'muted', title: t.modelUsed }, JC.modelName(t.modelUsed)) : '',

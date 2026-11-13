@@ -244,6 +244,15 @@ export class Store {
 
 // Where a new task runs: an explicit choice wins; otherwise justCode.defaultWhere (auto: backlog direct, sprint branch).
 // A remote client (phone) always gets its own branch.
+// What a task produces. 'code' or 'artifact' when the form says so; automatic ('' or missing): an artifact page when the
+// text asks for a mockup, wireframe, prototype or artifact, otherwise a code change.
+export const ARTIFACT_WORDS = /\b(mock-?ups?|wire-?frames?|prototypes?|artifacts?|landing page|design concepts?|style guide)\b/i;
+export function resolveOutput(output: unknown, text: string): 'artifact' | undefined {
+  if (output === 'artifact') return 'artifact';
+  if (output === 'code') return undefined;
+  return ARTIFACT_WORDS.test(text) ? 'artifact' : undefined;
+}
+
 export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean }): 'direct' | 'branch' {
   if (o.remote) return 'branch';
   if (o.where === 'direct' || o.artifact) return 'direct';

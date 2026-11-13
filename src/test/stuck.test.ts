@@ -53,6 +53,7 @@ const STUCK: Record<string, any> = {
   stopped: { id: 'd', title: 'D', status: 'doing', worktree: '/w', error: 'crashed' },
   conflicts: { id: 'e', title: 'E', status: 'review', worktree: '/w', base: 'main', conflicts: ['a.ts'] },
   noChanges: { id: 'f', title: 'F', status: 'review', worktree: '/w', reply: 'Nothing to do' },
+  directNoFiles: { id: 'g', title: 'G', status: 'review', where: 'direct', run: 'idle', directFiles: [], reply: 'Made a mockup in .justcode' },
 };
 
 test('status: every stuck card explains itself and offers more than a retry', () => {
@@ -106,4 +107,13 @@ test('runner: accepting issues passes the review; a stuck task does not hold Run
   assert.equal(store.task(u.id)!.status, 'doing');
   assert.match(said[0], /review 3 of 4[\s\S]*1\. src\/c\.ts three[\s\S]*accepted these[\s\S]*src\/d\.ts four/);
   r.dispose();
+});
+
+import { resolveOutput } from '../store';
+test('output: automatic picks an artifact page for a mockup, the form can force either', () => {
+  assert.equal(resolveOutput('', 'create mockup redesign for this with good ui'), 'artifact');
+  assert.equal(resolveOutput(undefined, 'Wireframe the onboarding'), 'artifact');
+  assert.equal(resolveOutput('', 'Fix the retry bug'), undefined);
+  assert.equal(resolveOutput('code', 'mockup data for tests'), undefined);
+  assert.equal(resolveOutput('artifact', 'Q3 numbers'), 'artifact');
 });
