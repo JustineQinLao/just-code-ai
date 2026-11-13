@@ -990,3 +990,79 @@ test('git: workingDiff and workingChanges cover tracked edits and untracked file
   assert.doesNotMatch(diff, /other\.txt/);
   assert.equal(await g.workingDiff(root, head, []), '');
 });
+
+// ---- direct tasks: Finish and Discard against a real temp repo ----
+const gitSync = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8' });
+const directRepo = () => {
+  const d = tmp();
+  gitSync(d, 'init', '-q'); gitSync(d, 'config', 'user.email', 't@t'); gitSync(d, 'config', 'user.name', 't');
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a1\n'); fs.writeFileSync(path.join(d, 'other.txt'), 'o1\n');
+  gitSync(d, 'add', '-A'); gitSync(d, 'commit', '-q', '-m', 'init');
+  return d;
+};
+const mkRunner = async (d: string, files: string[]) => {
+  const { Runner } = await import('../runner');
+  const store = new Store(d);
+  const t = store.addTask({ title: 'My task', mode: 'auto' });
+  store.updateTask(t.id, { where: 'direct', status: 'review', directFiles: files, startHead: gitSync(d, 'rev-parse', 'HEAD').trim() });
+  const deps: any = { bin: () => undefined, env: () => ({}), settings: () => ({}), limits: new Limits(), notify() {}, choose: async () => undefined, cli: '' };
+  return { r: new Runner(store, deps), store, id: t.id };
+};
+
+test('commitFiles commits only the listed files, skipping stale entries', async () => {
+  const d = directRepo();
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a2\n'); fs.writeFileSync(path.join(d, 'new.txt'), 'n\n'); fs.writeFileSync(path.join(d, 'other.txt'), 'o2\n');
+  fs.writeFileSync(path.join(d, 'staged.txt'), 's\n'); gitSync(d, 'add', 'staged.txt');
+  const made = await g.commitFiles(d, 'My task', ['a.txt', 'new.txt', 'ghost.txt']);
+  assert.equal(made, true);
+  assert.equal(gitSync(d, 'rev-list', '--count', 'HEAD').trim(), '2');
+  assert.equal(gitSync(d, 'log', '-1', '--format=%s').trim(), 'My task');
+  assert.deepEqual(gitSync(d, 'show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort(), ['a.txt', 'new.txt']);
+  assert.match(gitSync(d, 'status', '--porcelain'), /other\.txt/);
+  assert.match(gitSync(d, 'status', '--porcelain'), /A  staged\.txt/);
+  assert.equal(await g.commitFiles(d, 'again', ['a.txt']), false);
+});
+
+test('Runner.merge finishes a direct task: one commit, progress, done', async () => {
+  const d = directRepo();
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a2\n'); fs.writeFileSync(path.join(d, 'other.txt'), 'o2\n');
+  const { r, store, id } = await mkRunner(d, ['a.txt']);
+  await r.merge(id);
+  assert.equal(store.task(id)!.status, 'done'); assert.ok(store.task(id)!.doneAt);
+  assert.equal(gitSync(d, 'log', '-1', '--format=%s').trim(), 'My task');
+  assert.ok(fs.readFileSync(path.join(d, '.justcode', 'progress.md'), 'utf8').includes('My task'));
+  assert.match(gitSync(d, 'status', '--porcelain'), /other\.txt/);
+  r.dispose?.();
+});
+
+test('Runner.merge with nothing to commit still marks done; refuses a task still working', async () => {
+  const d = directRepo();
+  const { r, store, id } = await mkRunner(d, ['a.txt']);
+  await r.merge(id);
+  assert.equal(store.task(id)!.status, 'done');
+  assert.equal(gitSync(d, 'rev-list', '--count', 'HEAD').trim(), '1');
+  assert.ok(fs.existsSync(path.join(d, '.justcode', 'progress.md')));
+  const w = await mkRunner(directRepo(), ['a.txt']);
+  w.store.updateTask(w.id, { status: 'doing' });
+  await w.r.merge(w.id);
+  assert.equal(w.store.task(w.id)!.status, 'doing');
+  r.dispose?.(); w.r.dispose?.();
+});
+
+test('Runner.discard reverts only the listed files and refuses done tasks', async () => {
+  const d = directRepo();
+  fs.mkdirSync(path.join(d, 'dir')); fs.writeFileSync(path.join(d, 'dir', 'x.txt'), 'x\n');
+  fs.writeFileSync(path.join(d, 'a.txt'), 'a2\n'); fs.writeFileSync(path.join(d, 'new.txt'), 'n\n'); fs.writeFileSync(path.join(d, 'st.txt'), 's\n');
+  gitSync(d, 'add', 'st.txt'); fs.writeFileSync(path.join(d, 'other.txt'), 'o2\n'); fs.writeFileSync(path.join(d, 'keep.txt'), 'k\n');
+  const { r, store, id } = await mkRunner(d, ['a.txt', 'new.txt', 'st.txt', 'dir']);
+  await r.discard(id);
+  assert.equal(fs.readFileSync(path.join(d, 'a.txt'), 'utf8'), 'a1\n');
+  for (const f of ['new.txt', 'st.txt', 'dir']) assert.equal(fs.existsSync(path.join(d, f)), false);
+  assert.equal(fs.readFileSync(path.join(d, 'other.txt'), 'utf8'), 'o2\n');
+  assert.ok(fs.existsSync(path.join(d, 'keep.txt')));
+  assert.equal(store.task(id)!.status, 'todo');
+  store.updateTask(id, { status: 'done', directFiles: ['a.txt'] });
+  await r.discard(id);
+  assert.equal(store.task(id)!.status, 'done');
+  r.dispose?.();
+});

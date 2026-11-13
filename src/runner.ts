@@ -884,11 +884,10 @@ export class Runner {
     return this.guarded(id, async t => {
       this.requireLease();
       if (t.where === 'direct' && !t.init) {
+        const s0 = this.sessions.get(id);
+        if (t.status !== 'review' || this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle')) throw new Error('Claude is still working on this task. Wait for it to finish, then Finish.');
         const files = t.directFiles ?? [];
-        if (files.length) {
-          await g.git(this.root, ['add', '-A', '--', ...files]);
-          if (!(await g.git(this.root, ['diff', '--cached', '--quiet', '--', ...files]).then(() => true, () => false))) await g.git(this.root, ['commit', '-q', '-m', t.title, '--only', '--', ...files]);
-        }
+        if (files.length) await g.commitFiles(this.root, t.title, files);
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
         this.stop(id);
         this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
@@ -965,14 +964,10 @@ export class Runner {
   discard(id: string) {
     return this.guarded(id, async t => {
       if (t.where === 'direct' && !t.init) {
+        if (t.status === 'done') throw new Error('This task is finished and committed. Revert the commit in git instead.');
         this.stop(id);
         this.cancelReview(id);
-        for (const f of t.directFiles ?? []) {
-          if (path.isAbsolute(f) || f.split(/[\\/]/).includes('..')) continue;
-          const tracked = (await g.git(this.root, ['ls-files', '--', f]).catch(() => '')).trim();
-          if (tracked) await g.git(this.root, ['checkout', 'HEAD', '--', f]);
-          else fs.rmSync(path.join(this.root, f), { recursive: true, force: true });
-        }
+        await g.revertFiles(this.root, t.directFiles ?? []);
         this.store.updateTask(id, { status: 'todo', directFiles: undefined, startHead: undefined, usage: undefined, checks: undefined, startedAt: undefined, sessionId: undefined,
           review: undefined, error: undefined, live: undefined, reply: undefined, limited: undefined });
         A.removeTaskDir(this.root, id);

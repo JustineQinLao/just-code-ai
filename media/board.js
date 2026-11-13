@@ -610,7 +610,7 @@
       t.worktree && ['Open its folder', () => post('openFolder', { id: t.id })],
       t.worktree && !t.pr && ['Push PR', () => post('remotePr', { id: t.id })],
       t.pr && ['Open PR', () => post('openUrl', { url: t.pr })],
-      (t.worktree || (t.where === 'direct' && !t.init && t.directFiles?.length)) && ['Discard work', () => post('discard', { id: t.id }), 'danger'],
+      (t.worktree || (t.where === 'direct' && !t.init && t.status !== 'done' && t.directFiles?.length)) && ['Discard work', () => post('discard', { id: t.id }), 'danger'],
       [t.archived ? 'Unarchive' : 'Archive', () => post('archive', { id: t.id })],
       ['Delete', () => post('delete', { id: t.id }), 'danger'],
     ].filter(Boolean);
