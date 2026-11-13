@@ -1129,3 +1129,27 @@ test('installedPlugins: scopes, fallbacks, bare keys, two marketplaces, no skill
   assert.equal(installedPlugin('playwright', file, 'skills'), undefined);
   assert.equal(installedPlugin('both', file, 'skills'), u);
 });
+
+test('design: listDesigns parses a tree and caches 24h; install writes sha256; brief section only for UI tasks', async () => {
+  const D = await import('../design');
+  const dir = tmp(), file = path.join(dir, 'c', 'designs.json');
+  let calls = 0;
+  const tree = { tree: [{ type: 'blob', path: 'design-md/stripe/DESIGN.md' }, { type: 'blob', path: 'design-md/apple/DESIGN.md' }, { type: 'blob', path: 'README.md' }, { type: 'tree', path: 'design-md/x' }] };
+  const get = async () => { calls++; return tree; };
+  assert.deepEqual((await D.listDesigns(get, 1000, file)).map(d => d.name), ['apple', 'stripe']);
+  await D.listDesigns(get, 1000 + 3600e3, file);
+  assert.equal(calls, 1);
+  await D.listDesigns(get, 1000 + 25 * 3600e3, file);
+  assert.equal(calls, 2);
+  const root = tmp();
+  const info = D.installDesign(root, '# Stripe\n', { source: 'awesome-design-md', name: 'stripe' });
+  assert.equal(JSON.parse(fs.readFileSync(D.originFile(root), 'utf8')).sha256, info.sha256);
+  assert.equal(info.sha256.length, 64);
+  const ui = { id: 'u', title: 'Restyle the settings page', mode: 'auto', status: 'todo', created: 0 } as any;
+  const be = { id: 'b', title: 'Fix retry logic in queue', mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.match(A.writeBrief(root, ui, []), /## Design system/);
+  assert.match(A.writeBrief(root, { ...be, output: 'artifact' }, []), /## Design system/);
+  assert.doesNotMatch(A.writeBrief(root, be, []), /## Design system/);
+  D.removeDesign(root);
+  assert.doesNotMatch(A.writeBrief(root, ui, []), /## Design system/);
+});
