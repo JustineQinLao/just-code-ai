@@ -883,7 +883,20 @@ export class Runner {
   merge(id: string, auto = false) {
     return this.guarded(id, async t => {
       this.requireLease();
-      if (t.where === 'direct' || !t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
+      if (t.where === 'direct' && !t.init) {
+        const files = t.directFiles ?? [];
+        if (files.length) {
+          await g.git(this.root, ['add', '-A', '--', ...files]);
+          if (!(await g.git(this.root, ['diff', '--cached', '--quiet', '--', ...files]).then(() => true, () => false))) await g.git(this.root, ['commit', '-q', '-m', t.title, '--only', '--', ...files]);
+        }
+        try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
+        this.stop(id);
+        this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
+        this.d.notify('info', `Finished "${t.title}".`, undefined, auto);
+        this.pump();
+        return;
+      }
+      if (!t.worktree) { this.store.updateTask(id, { status: 'done' }); return; }
       if (!t.branch || !t.base) throw new Error('Nothing to merge yet');
       const s = this.sessions.get(id);
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
@@ -951,6 +964,21 @@ export class Runner {
   // Drops the branch and its work; the task goes back to To do with a fresh session next run.
   discard(id: string) {
     return this.guarded(id, async t => {
+      if (t.where === 'direct' && !t.init) {
+        this.stop(id);
+        this.cancelReview(id);
+        for (const f of t.directFiles ?? []) {
+          if (path.isAbsolute(f) || f.split(/[\\/]/).includes('..')) continue;
+          const tracked = (await g.git(this.root, ['ls-files', '--', f]).catch(() => '')).trim();
+          if (tracked) await g.git(this.root, ['checkout', 'HEAD', '--', f]);
+          else fs.rmSync(path.join(this.root, f), { recursive: true, force: true });
+        }
+        this.store.updateTask(id, { status: 'todo', directFiles: undefined, startHead: undefined, usage: undefined, checks: undefined, startedAt: undefined, sessionId: undefined,
+          review: undefined, error: undefined, live: undefined, reply: undefined, limited: undefined });
+        A.removeTaskDir(this.root, id);
+        this.pump();
+        return;
+      }
       await this.cleanup(t);
       A.removeTaskDir(this.root, id);
       this.store.updateTask(id, { status: 'todo', usage: undefined, checks: undefined, startedAt: undefined, branch: undefined, worktree: undefined, sessionId: undefined, conflicts: undefined, pr: undefined,

@@ -202,7 +202,7 @@ export function activate(context: vscode.ExtensionContext) {
       skills: discoverSkills(r.root, setting('personalSetup', false)),
       sources: A.loadSources(r.root).map(x => ({ ...x, artifact: x.kind === 'url' && A.isArtifactLink(x.ref), copy: A.hasCopy(r.root, x), savedAt: savedAt(r.root, x), saving: savingTerms.has(x.id), asking: askingTerms.has(x.id) })),
       detectedChecks: C.detectChecks(r.root),
-      settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
+      settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), defaultWhere: setting('defaultWhere', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!apiKey },
       planner: r.plannerLive(),
       plannerPhase: r.plannerPhase,
       guideSeen: context.globalState.get('guideSeen', false),
@@ -473,6 +473,7 @@ export function activate(context: vscode.ExtensionContext) {
       case 'move': {
         if (!t) return;
         // Done for a task with unmerged work means: merge it.
+        if (m.status === 'done' && t.where === 'direct' && !t.init) { await r.merge(m.id); return; }
         if (m.status === 'done' && t.worktree && t.where !== 'direct') {
           if (await confirm(`Merge "${t.title}" into ${t.base}?`, 'Merge')) await r.merge(m.id);
           return;
@@ -586,6 +587,11 @@ export function activate(context: vscode.ExtensionContext) {
       case 'sendChecks': await r.sendChecks(m.id); return;
       case 'copy': if (remote) hub.emit({ type: 'copy', text: String(m.text ?? '') }); else { await vscode.env.clipboard.writeText(String(m.text ?? '')); say('Copied.'); } return;
       case 'discard':
+        if (t && t.where === 'direct' && !t.init) {
+          const fl = t.directFiles ?? [];
+          if (await confirm(`Discard "${t.title}"? These files are reverted (new ones deleted):\n${fl.join('\n') || '(none)'}`, 'Discard')) await r.discard(m.id);
+          return;
+        }
         if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id);
         return;
       case 'remotePr': await r.remotePr(m.id); return;
