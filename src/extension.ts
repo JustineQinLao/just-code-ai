@@ -19,6 +19,7 @@ import { loadPolicy, policyFile } from './policy';
 import type { Actor } from './audit';
 import * as C from './checks';
 import * as D from './design';
+import { ensureCert, PhoneCert } from './phonecert';
 import { Device, DeviceStore, startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
@@ -260,6 +261,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   /* ---------- phone server (off by default) ---------- */
   let phone: http.Server | undefined;
+  let phoneCert: PhoneCert | undefined;   // set while the phone server runs with TLS (justCode.phoneTls)
   let phoneTok = '';
   const newToken = () => randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
   const phoneToken = () => phoneTok;
@@ -318,7 +320,9 @@ export function activate(context: vscode.ExtensionContext) {
     const on = setting('phoneServer', false);
     if (!on) { phone?.close(); phone = undefined; return; }
     if (phone) return;
-    try { phone = await startPhoneServer(setting('phoneServerPort', 7878), { token: phoneToken(), state: phoneState, act: phoneAct, paired: via => { const r = runner(); if (r) Audit.log(r.root, { actor: 'phone', event: 'phone.pair', detail: via }); }, board: phoneBoard, events: n => hub.events(n),
+    try {
+      phoneCert = setting('phoneTls', false) ? await ensureCert() : undefined;
+      phone = await startPhoneServer(setting('phoneServerPort', 7878), { tls: phoneCert, token: phoneToken(), state: phoneState, act: phoneAct, paired: via => { const r = runner(); if (r) Audit.log(r.root, { actor: 'phone', event: 'phone.pair', detail: via }); }, board: phoneBoard, events: n => hub.events(n),
       task: async id => { const r = runner(), t = r?.store.task(id); if (!r || !t) return undefined; const l = r.live(t.id);
         return { id: t.id, ...await detailOf(id), agents: l.agents, costUsd: t.costUsd ?? 0, usage: t.usage, context: l.context }; },
       detail: id => detailOf(id), allowTokenInUrl: false, devices: phoneDevices, tokenDays: Math.max(1, setting<number>('phoneTokenDays', 7)) }); }
@@ -1051,9 +1055,9 @@ export function activate(context: vscode.ExtensionContext) {
       await syncPhone();
       const panel = vscode.window.createWebviewPanel('justCodePhoneLink', 'JustCode: Phone Link', vscode.ViewColumn.Active, { enableScripts: true });
       const render = () => {
-        const link = phoneLinkUrl(lanIps()[0] ?? 'this-computer', setting('phoneServerPort', 7878), issuePairingCode());
+        const link = phoneLinkUrl(lanIps()[0] ?? 'this-computer', setting('phoneServerPort', 7878), issuePairingCode(), phoneCert?.fingerprint);
         const esc = link.replace(/&/g, '&amp;').replace(/</g, '&lt;');
-        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><p>One-time link, valid 10 minutes. Same Wi-Fi only.</p><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p><script>const vs=acquireVsCodeApi()</script><button onclick="vs.postMessage('new')">New link</button> <button onclick="vs.postMessage('revoke')">Unpair all devices</button></body>`;
+        panel.webview.html = `<body style="font-family:sans-serif;text-align:center"><h3>Scan with the JustCode Android app</h3><p>One-time link, valid 10 minutes. Same Wi-Fi only.</p><div style="width:320px;margin:auto;background:#fff;padding:8px">${qrSvg(link)}</div><p><code>${esc}</code></p>${phoneCert ? `<p>HTTPS, certificate fingerprint (SHA-256):<br><code style="word-break:break-all">${phoneCert.fingerprint.match(/../g)!.join(':')}</code></p>` : ''}<script>const vs=acquireVsCodeApi()</script><button onclick="vs.postMessage('new')">New link</button> <button onclick="vs.postMessage('revoke')">Unpair all devices</button></body>`;
       };
       panel.webview.onDidReceiveMessage(async m => {
         if (m === 'new') return render(); // a fresh one-time link; paired devices keep working
@@ -1078,7 +1082,7 @@ export function activate(context: vscode.ExtensionContext) {
       await syncPhone();
       const port = setting('phoneServerPort', 7878);
       const code = issuePairingCode();
-      vscode.window.showInformationMessage(`Pairing code ${code} (valid 10 minutes, one use). Type it in the JustCode app, or open this link on your phone (same Wi-Fi): ${phoneLinkUrl(lanIps()[0] ?? 'this-computer', port, code)}`, { modal: true });
+      vscode.window.showInformationMessage(`Pairing code ${code} (valid 10 minutes, one use). Type it in the JustCode app, or open this link on your phone (same Wi-Fi): ${phoneLinkUrl(lanIps()[0] ?? 'this-computer', port, code, phoneCert?.fingerprint)}${phoneCert ? `\n\nCertificate fingerprint (SHA-256): ${phoneCert.fingerprint.match(/../g)!.join(':')}` : ''}`, { modal: true });
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(push),
     // A key changed in VS Code's own Settings UI replaces the board's copy of it.
@@ -1090,6 +1094,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (e.affectsConfiguration('justCode.phoneServer') && bypassAllOn() && setting('phoneServer', false)) void confirm(PHONE_BYPASS_TEXT, 'Keep both on').then(async ok => { if (!ok) { await cfg().update('phoneServer', false, vscode.ConfigurationTarget.Global); const o3 = { ...overrides() }; delete o3.phoneServer; await context.globalState.update('settings', o3); void syncPhone(); push(); } });
       if (e.affectsConfiguration('justCode.claudePath')) void recheck();
       if (e.affectsConfiguration('justCode.phoneServer')) void syncPhone();
+      if (e.affectsConfiguration('justCode.phoneTls')) { phone?.close(); phone = undefined; void syncPhone(); }
       if (e.affectsConfiguration('justCode.mobile')) void syncMobile(true);
     }),
     vscode.window.registerWebviewPanelSerializer('justCode.board', { async deserializeWebviewPanel(p) { open(undefined, p); } }),

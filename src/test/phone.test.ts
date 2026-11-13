@@ -554,3 +554,26 @@ test('phone devices: 6-digit codes, POST /pair gives a device token, expired and
     assert.equal((await fetch(`${base}/api/state`, { headers: { 'x-token': j.token } })).status, 401);
   } finally { srv.close(); }
 });
+
+test('phone TLS: a self-signed certificate is made once, served over HTTPS, and its fingerprint goes in the link', async () => {
+  const { ensureCert, fingerprintOf } = await import('../phonecert');
+  const { startPhoneServer, phoneLinkUrl } = await import('../phone');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-cert-'));
+  const c = await ensureCert(dir);
+  assert.match(c.fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal((await ensureCert(dir)).fingerprint, c.fingerprint, 'reused while valid');
+  assert.equal(fingerprintOf(c.cert), c.fingerprint);
+  assert.equal(phoneLinkUrl('h', 1, '123456', c.fingerprint), `https://h:1/?pair=123456&fp=${c.fingerprint}`);
+  assert.equal(phoneLinkUrl('h', 1, '123456'), 'http://h:1/?pair=123456');
+  const srv = await startPhoneServer(0, { token: 'master', state: () => ({}), act: async () => {}, tls: c });
+  try {
+    const https = await import('https');
+    const fp = await new Promise<string>((resolve, reject) => {
+      const req = https.request({ host: '127.0.0.1', port: (srv.address() as any).port, path: '/api/state', rejectUnauthorized: false, headers: { 'x-token': 'master' } }, res => {
+        resolve((res.socket as any).getPeerCertificate().fingerprint256.replace(/:/g, '').toLowerCase()); res.resume();
+      });
+      req.on('error', reject); req.end();
+    });
+    assert.equal(fp, c.fingerprint);
+  } finally { srv.close(); }
+});

@@ -325,6 +325,11 @@
           "default": false,
           "description": "Serve the board to your phone over your local network (token protected). Off by default. Anyone with the token can start tasks and approve permissions."
         },
+        "justCode.phoneTls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Serve the phone server over HTTPS with a self-signed certificate (made once with openssl, kept in ~/.justcode-cache/phone-cert). The pairing link carries the certificate's fingerprint and the Android app pins it, so the token never crosses Wi-Fi in clear text. Off: plain HTTP on your local network."
+        },
         "justCode.phoneTokenDays": {
           "type": "number",
           "default": 7,

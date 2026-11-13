@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as https from 'https';
 import { timingSafeEqual, randomBytes, randomInt, createHash } from 'crypto';
 import { PAGE } from './phonepage';
 
@@ -22,6 +23,8 @@ export interface PhoneDeps {
   devices?: DeviceStore;
   /** How long a paired device stays signed in, in days (justCode.phoneTokenDays). Default 7. */
   tokenDays?: number;
+  /** Serve HTTPS with this certificate (justCode.phoneTls). */
+  tls?: { key: string; cert: string };
 }
 
 // A paired phone: its token is a random id the phone keeps (cookie or x-token header); only its hash is stored.
@@ -111,7 +114,7 @@ const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(
 export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Server> {
   // A cookie or x-token is a paired device's own token (revocable, expires after tokenDays), never the permanent token.
   const devices = d.devices ?? memoryDevices(), days = d.tokenDays ?? 7;
-  const srv = http.createServer((req, res) => {
+  const handler: http.RequestListener = (req, res) => {
     const url = new URL(req.url ?? '/', 'http://x');
     const send = (code: number, body: string, type = 'application/json') => { res.writeHead(code, { 'content-type': type + '; charset=utf-8', 'cache-control': 'no-store' }); res.end(body); };
     if (url.pathname === '/sw.js') return send(200, SW, 'application/javascript');
@@ -191,7 +194,8 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
       return;
     }
     send(404, '{"error":"not found"}');
-  });
+  };
+  const srv = (d.tls ? https.createServer({ key: d.tls.key, cert: d.tls.cert }, handler) : http.createServer(handler)) as http.Server;
   return new Promise((resolve, reject) => { srv.once('error', reject); srv.listen(port, '0.0.0.0', () => resolve(srv)); });
 }
 
@@ -209,8 +213,10 @@ if(r.ok)location.replace('/');else{const m=document.getElementById('m');m.classN
 const SW = `self.addEventListener('notificationclick',e=>{e.notification.close();const u=e.notification.data||'/';
 e.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(l=>{for(const c of l){if('focus' in c){c.postMessage({open:u});return c.focus()}}return clients.openWindow(u)}))});`;
 
-/** The link the Android app pairs with (also what the QR encodes). */
-export const phoneLinkUrl = (host: string, port: number, code: string) => `http://${host}:${port}/?pair=${encodeURIComponent(code)}`;
+/** The link the Android app pairs with (also what the QR encodes). With TLS it is https and carries the certificate's
+ *  SHA-256 fingerprint (fp=), which the app pins. */
+export const phoneLinkUrl = (host: string, port: number, code: string, fingerprint?: string) =>
+  `${fingerprint ? 'https' : 'http'}://${host}:${port}/?pair=${encodeURIComponent(code)}${fingerprint ? `&fp=${fingerprint}` : ''}`;
 
 /** QR code for the link as inline SVG. */
 export function qrSvg(text: string): string {
