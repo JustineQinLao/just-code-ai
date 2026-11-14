@@ -25,7 +25,7 @@ fs.writeFileSync(harness, `<!doctype html><html><head><meta charset="utf-8"><lin
 <body><div id="app"></div><div id="drawer"></div><dialog id="dlg"></dialog>
 <script>window.errs=[];window.posts=[];addEventListener('error',e=>errs.push(String(e.message)+' @'+e.filename+':'+e.lineno));
 window.acquireVsCodeApi=()=>({postMessage:m=>posts.push(m),getState:()=>({}),setState:()=>{}});</script>
-${['status', 'board', 'drawer', 'dialogs'].map(f => `<script src="file://${media}/${f}.js"></script>`).join('')}
+${['status', 'board', 'composer', 'drawer', 'dialogs'].map(f => `<script src="file://${media}/${f}.js"></script>`).join('')}
 <script>window.STATE=${JSON.stringify(state)};</script></body></html>`);
 const { spawn } = require('child_process');
 const p = spawn('npx', ['-y', '@playwright/mcp@0.0.85', '--headless', '--isolated', '--allow-unrestricted-file-access', '--output-dir', shots]);
@@ -45,6 +45,14 @@ const EXERCISE = `async () => {
   await run('history', () => { document.querySelector('#dlg').close(); JC.historyDialog(); window.postMessage({ type: 'history', items: [] }, '*'); });
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });
   document.querySelector('#dlg').open && document.querySelector('#dlg').close();
+  // The new-task box: Details toggles, Quick and Add each post addTask with the typed title.
+  try {
+    const btnOf = t => [...document.querySelectorAll('#composer .box button')].find(b => b.innerText.includes(t)), title = document.querySelector('#title');
+    posts.length = 0; const was = !document.querySelector('#more').hidden; btnOf('Details').click(); out.detailsOpen = was && document.querySelector('#more').hidden; btnOf('Details').click(); out.detailsOpen = out.detailsOpen && !document.querySelector('#more').hidden;
+    title.value = 'smoke quick'; btnOf('Quick').click(); title.value = 'smoke add'; btnOf('Add').click();
+    const adds = posts.filter(m => m.type === 'addTask'); out.addTask = adds.map(m => m.title + (m.quick ? ':quick' : '')).join(',');
+    if (out.detailsOpen !== true || out.addTask !== 'smoke quick:quick,smoke add') errs.push('composer: ' + JSON.stringify([out.detailsOpen, out.addTask]));
+  } catch (e) { errs.push('composer: ' + e.message); }
   out.stuckText = [...document.querySelectorAll('article.card')].find(a => a.innerText.includes(stuck.title.slice(0, 20)))?.innerText.slice(0, 300);
   out.toolbarButtons = [...document.querySelectorAll('#toolbar button')].map(b => b.innerText).join(' | ');
   out.banners = [...document.querySelectorAll('.banner')].map(b => b.innerText.slice(0, 80));
