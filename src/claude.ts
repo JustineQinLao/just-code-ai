@@ -341,7 +341,7 @@ export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status',
   'pytest', 'python -m pytest', 'python3 -m pytest', 'python manage.py test', 'python3 manage.py test', 'ruff', 'mypy',
   'go test', 'go build', 'go vet', 'cargo test', 'cargo build', 'cargo check', 'cargo clippy', 'make test', 'make check', 'make build',
   'mvn test', 'mvn -q test', './gradlew', 'gradle test', 'dotnet test', 'dotnet build', 'flutter test', 'dart test', 'swift test', 'xcodebuild test',
-  'docker compose exec', 'docker compose run', 'adb', 'curl'];
+  'docker compose exec', 'docker compose run', 'docker compose -p * exec *', 'docker compose -p * run *', 'docker compose -p * ps', 'docker compose -p * logs *', 'adb', 'curl'];
 
 const MAX_DIFF = 150_000;
 const q = (p: string) => /\s/.test(p) ? `"${p}"` : p;
@@ -363,6 +363,7 @@ never a dev server, watch mode or anything interactive (use flags like --run, --
 Risk "critical" only when merging without a human look could do real harm: authentication or authorization, secrets, payments,
 data migrations or deletion, deployment or infrastructure config, breaking a public API. Ordinary code, tests, scripts and build or package
 config changes are "minor".
+If a command is denied or fails for a setup reason (wrong folder, missing flag), try another allowed form of it (a package script, a path argument) before giving up.
 In "tested", list every command you ran (or why nothing could run).`;
 
 // The review's task-specific part: the task, the builder's handoff, how to test the UI, and the diff.
@@ -450,7 +451,7 @@ export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
 export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
-  const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => `Bash(${c}:*)`)]);
+  const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => c.includes('*') ? `Bash(${c})` : `Bash(${c}:*)`)]);
   const allow = w.allowed;
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };

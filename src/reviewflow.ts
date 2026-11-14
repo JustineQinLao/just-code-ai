@@ -80,6 +80,7 @@ export const reviewMethods = {
     this.store.updateTask(id, { status: 'doing' });
     const accepted = acceptedIssues(t.review);
     const issues = `The code reviewer found these issues (review ${t.review.attempts} of ${max}). Fix them, verify, update your handoff, then finish your turn. ` +
+      `Do not give up on one because the environment blocks it (a service or Docker not running, a missing tool or browser, a command that failed): start it, fix the setup or find another way to do the check, and only then judge it impossible. ` +
       `If you leave one unfixed on purpose, say why in your final message: the reviewer reads it.\n` +
       open.map((x, i) => `${i + 1}. ${x.text}`).join('\n') +
       (accepted.length ? `\n\nThe user accepted these as they are; leave them:\n${accepted.map(a => `- ${a.text}`).join('\n')}` : '');

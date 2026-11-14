@@ -185,6 +185,8 @@
     }
     if (JC.tab === 'review') {
       const r = t.review;
+      // Issues are only actionable while the task waits on you; during a fix round, or while the next review is pending, the old verdict is stale.
+      const act = r?.state === 'fail' && t.status === 'review' && !t.reviewing && (r.attempts >= window.JCStatus.roundLimit(r, JC.S.settings.review.maxAttempts) || !JC.S.settings.review.auto);
       if (!r) return [JC.h('p', { class: 'muted' }, t.reviewing ? 'The AI reviewer is testing this change…' : JC.S.settings.review.auto ? 'Reviewed automatically when Claude finishes.' : 'AI review is off (⚙ Settings).'), t.worktree && !t.reviewing ? JC.btn('Review now', () => JC.post('review', { id: t.id })) : ''];
       return [
         JC.h('p', {}, JC.h('b', {}, { pass: '✓ Passed', fail: '✗ Issues found', error: 'Review could not run', running: 'Reviewing…' }[r.state]), r.risk === 'critical' ? JC.h('span', { class: 'warn' }, ' · flagged critical') : '', JC.h('span', { class: 'muted' }, ` · round ${r.attempts || 1}`)),
@@ -195,10 +197,10 @@
           JC.h('div', { class: 'itxt' }, i.text),
           JC.h('div', { class: 'row small' },
             JC.h('span', { class: 'muted grow' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Came back ${i.rounds} rounds` : 'New this round'),
-            !i.accepted && r.state === 'fail' && !JC.REMOTE ? JC.btn('Accept', () => JC.post('acceptIssues', { id: t.id, keys: [i.key] }), 'ghost small', 'Does not block the merge: the reviewer stops reporting it') : '',
-            !i.accepted && r.state === 'fail' ? JC.btn('Fix this one', () => JC.post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
+            !i.accepted && act && !JC.REMOTE ? JC.btn('Accept', () => JC.post('acceptIssues', { id: t.id, keys: [i.key] }), 'ghost small', 'Does not block the merge: the reviewer stops reporting it') : '',
+            !i.accepted && act ? JC.btn('Fix this one', () => JC.post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
         r.tested?.length ? JC.h('p', { class: 'muted small' }, 'Tested: ', r.tested.join(' · ')) : '',
-        r.state === 'fail' ? JC.h('div', { class: 'row' },
+        act ? JC.h('div', { class: 'row' },
           JC.btn('Send open issues to Claude', () => JC.post('sendIssues', { id: t.id }), 'primary'),
           !JC.REMOTE ? JC.btn(`Accept all and ${t.where === 'direct' && !t.init ? 'finish' : 'merge'}`, () => JC.post('acceptIssues', { id: t.id, merge: true }), 'ghost') : '') : '',
         JC.h('div', { class: 'shots' }, (JC.shots[t.id] || []).map(s => JC.h('img', { src: s.data, title: s.name }))),
