@@ -94,11 +94,14 @@
   }
   const body = JC.h('div', { class: 'dbody' });
   const head = JC.h('div', { class: 'dhead' });
-  drawer.append(head, body, JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, JC.btn('Send', sendMsg, 'primary'), JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
+  const applyBtn = JC.btn('Apply', () => {}, 'primary');
+  applyBtn.hidden = true;
+  drawer.append(head, body, JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, applyBtn, JC.btn('Send', sendMsg), JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') JC.post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !JC.$('#dlg').open) closeTask(); });
 
   let menu = [];
   function renderDrawer() {
+    applyBtn.hidden = true;
     if (open === '__planner') return renderPlanner();
     const t = open && JC.S.board.tasks.find(x => x.id === open);
     drawer.classList.toggle('on', !!t);
@@ -262,6 +265,11 @@
 
   /* ---------- planner / editor chat ---------- */
   // What the planner is doing this turn: a moving bar while it works, then where the plan stands.
+  function planProgressText(p, running) {
+    const since = p.turnAt || 0;
+    const tools = (p.steps || []).filter(x => x.time && Date.parse(x.time) >= since && x.kind === 'tool');
+    return p.asks?.length ? 'Claude has a question for you (below).' : running ? `Claude is reading the code…${tools.length ? ` ${tools.length} tool uses` : ''}` : 'Your turn: message Claude to refine, or apply the tasks.';
+  }
   function planProgress(p, running) {
     const since = p.turnAt || 0;
     const turn = (p.steps || []).filter(x => x.time && Date.parse(x.time) >= since);
@@ -278,6 +286,14 @@
         running && tools.length ? ` · now: ${tools[tools.length - 1].text.slice(0, 60)}` : ''));
   }
 
+  function fileHint(c) { return (c.description || '').match(/[\w@.-]+(?:\/[\w@.-]+)+\.\w+/g)?.slice(0, 2).join(', ') || ''; }
+  // The planning chat as you / Claude bubbles; tool noise stays out of it.
+  function chatEl(list) {
+    const el = JC.h('div', { class: 'chat' }, list.filter(s => s.kind === 'user' || s.kind === 'say' || s.kind === 'error').map(s =>
+      JC.h('div', { class: `msg ${s.kind === 'user' ? 'you' : 'claude'}${s.kind === 'error' ? ' err' : ''}` }, s.text)));
+    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    return el;
+  }
   const pKeep = {}; // which proposals the user has unticked
   function renderPlanner() {
     const p = JC.S.planner;
@@ -290,13 +306,15 @@
       return;
     }
     const running = p.run && p.run !== 'idle';
+    const stepsNow = p.asks?.length ? 1 : running ? 0 : p.proposals ? 2 : 0;
+    const asked = (p.steps || []).some(x => x.kind === 'user') && (p.asks?.length || p.proposals || (p.steps || []).some(x => /^(AskUserQuestion)/.test(x.text || '')));
+    const stepNames = ['Reading code', 'Asked you', 'Proposal ready'];
     head.replaceChildren(
-      JC.h('div', { class: 'row' }, JC.h('h3', { class: 'grow' }, p.sprint ? `Editing ${p.sprint}` : p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
-        JC.btn('×', closeTask, 'ghost icon', 'Close (the chat keeps running)')),
-      JC.h('div', { class: `next ${p.asks?.length ? 'warn' : running ? 'run' : 'muted'}` }, p.asks?.length ? 'Claude has a question for you (below).' : running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
-        p.model ? JC.h('span', { class: 'muted small', title: p.model }, ` · ${JC.modelName(p.model)}`) : '',
-        p.context ? JC.h('span', { class: 'muted small' }, ` · ${JC.tok(p.context)}`) : ''),
-      planProgress(p, running));
+      JC.h('div', { class: 'row' }, JC.h('h2', { class: 'grow' }, '✦ Plan with Claude'),
+        JC.btn('✕', closeTask, 'ghost', 'Close (the chat keeps running)')),
+      JC.h('div', { class: 'steps' }, stepNames.map((n, i) => JC.h('span', { class: i < stepsNow || (i === 1 && asked && stepsNow === 2) ? 'ok' : i === stepsNow ? 'now' : '' }, i < stepsNow || (i === 1 && asked && stepsNow === 2) ? `✓ ${n}` : n))),
+      JC.h('div', { class: 'small muted' }, p.sprint ? `Editing ${p.sprint} · ` : p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'} · ` : '', planProgressText(p, running),
+        p.model ? ` · ${JC.modelName(p.model)}` : '', p.context ? ` · ${JC.tok(p.context)}` : ''));
     const prop = p.proposals;
     const panel = [];
     if (p.note) panel.push(JC.h('div', { class: 'applied' }, '✓ ', p.note));
@@ -317,22 +335,24 @@
       const all = [...changes, ...removes];
       all.forEach(c => { if (!(c.key in pKeep)) pKeep[c.key] = c.kind !== 'same'; });
       const nChange = all.filter(c => c.kind !== 'same').length;
+      const apply = () => {
+        JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
+        for (const k in pKeep) delete pKeep[k];
+      };
+      const nTick = all.filter(c => c.kind !== 'same' && pKeep[c.key]).length;
+      applyBtn.textContent = `Apply ${nTick} task${nTick === 1 ? '' : 's'}`;
+      applyBtn.onclick = apply; applyBtn.disabled = !nTick; applyBtn.hidden = false;
       panel.push(JC.h('div', { class: 'proppanel' },
-        JC.h('div', { class: 'row' }, JC.h('h4', { class: 'grow' }, `Proposed tasks (${prop.length})`), nChange ? JC.h('span', { class: 'muted small' }, `${nChange} change${nChange === 1 ? '' : 's'}`) : ''),
         JC.h('div', { class: 'reflist' }, all.map(c => JC.h('label', { class: `refrow ${c.kind}` },
-          c.kind === 'same' ? JC.h('span', { class: 'rspace' }) : JC.h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; } }),
-          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : ''),
+          c.kind === 'same' ? JC.h('span', { class: 'rspace' }) : JC.h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; const n = all.filter(x => x.kind !== 'same' && pKeep[x.key]).length; applyBtn.textContent = `Apply ${n} task${n === 1 ? '' : 's'}`; applyBtn.disabled = !n; } }),
+          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : '', c.after?.length ? JC.h('span', { class: 'pill' }, `after ${c.after.map(a => { const i = all.findIndex(x => x.title === a); return i >= 0 ? i + 1 : a; }).join(', ')}`) : ''),
+            fileHint(c) ? JC.h('div', { class: 'small muted fhint' }, fileHint(c)) : '',
             c.kind === 'reopen' ? JC.h('div', { class: 'small warn' }, 'Done, but must change: goes back to To do and is built again on top of the merged work.') : '',
             c.kind === 'amend' ? JC.h('div', { class: 'small warn' }, 'Already started: the new text is saved and sent to its Claude as a message.') : '',
             c.before && c.before !== c.title ? JC.h('div', { class: 'small muted strike' }, c.before) : '',
-            c.description ? JC.h('div', { class: 'small muted' }, c.description) : '')))),
-        JC.h('div', { class: 'acts' },
-          nChange ? JC.btn('Apply the ticked tasks', () => {
-            JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
-            for (const k in pKeep) delete pKeep[k];
-          }, 'primary') : JC.h('span', { class: 'muted small' }, 'No changes to apply yet.'))));
+            c.description ? JC.h('div', { class: 'small muted' }, c.description) : ''))))));
     }
-    body.replaceChildren(logEl(p.steps || []), ...panel);
+    body.replaceChildren(chatEl(p.steps || []), ...panel);
     msg.placeholder = 'Message Claude to refine the tasks…  Enter sends';
   }
 
