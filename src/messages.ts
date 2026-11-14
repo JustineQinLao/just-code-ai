@@ -347,6 +347,7 @@ export async function handle(m: any, remote = false) {
     }
     case 'phoneUnpair':
       if (remote) return;
+      if (!await confirm('Unpair all phones? Every paired device is signed out and the phone token changes. They pair again with a new code.', 'Unpair all')) return;
       await st.ctx.secrets.store('justCode.phoneToken', newToken()); await loadPhoneToken();
       phoneDevices.save([]);
       st.phone?.close(); st.phone = undefined; await syncPhone();

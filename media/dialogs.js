@@ -179,7 +179,8 @@
   function settings() {
     const s = JC.S.settings;
     const f = {};
-    const field = (key, label, input, help) => JC.h('label', { class: 'blk' }, JC.h('span', {}, label), f[key] = input, help ? JC.h('span', { class: 'muted small' }, help) : '');
+    const els = {};
+    const field = (key, label, input, help) => els[key] = JC.h('label', { class: 'blk' }, JC.h('span', {}, label), f[key] = input, help ? JC.h('span', { class: 'muted small' }, help) : '');
     const sel = (v, opts) => JC.h('select', {}, opts.map(([k, l]) => JC.h('option', { value: k, selected: String(v) === String(k) }, l)));
     const effort = v => sel(v, [['low', 'Low (fewest tokens)'], ['medium', 'Medium'], ['high', 'High'], ['', 'Model default']]);
     // Every model in one dropdown (aliases follow the newest version); "Other…" takes any model id. Reads like an input: .value.
@@ -195,12 +196,11 @@
       return box;
     };
     let rules;
-    dialog('Settings',
-      JC.h('div', { class: 'grid' },
+    const build = () => [
         field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, JC.MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
         field('notifications', 'Notifications', sel(s.notifications || 'actionable', [['actionable', 'When a task needs me, is ready or failed'], ['errors', 'Only errors'], ['off', 'Off']]), 'The board and the JustCode output log always show everything.'),
-        field('maxParallel', 'Tasks running at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
-        field('taskModel', 'Task model', models(s.taskModel)),
+        field('maxParallel', 'Tasks at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
+        field('taskModel', 'Model for tasks', models(s.taskModel)),
         field('taskEffort', 'Task thinking', effort(s.taskEffort)),
         field('reviewModel', 'Reviewer model', models(s.review.model)),
         field('reviewEffort', 'Reviewer thinking', effort(s.review.effort)),
@@ -209,10 +209,10 @@
         field('allowSubagents', 'Subagents in tasks', sel(s.subagents, [[false, 'Off (saves the most tokens)'], [true, 'On (they run on Haiku)']])),
         field('maxReviews', 'Review rounds before it waits for you', sel(s.review.maxAttempts, [1, 2, 3, 4, 5].map(n => [n, String(n)]))),
         field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
-        field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
+        field('autoMerge', 'Merge automatically after review', sel(s.review.autoMerge, [[false, 'Off'], [true, 'On (not critical ones)']])),
         field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
         field('idleMinutes', 'Close idle Claude processes after (minutes)', JC.h('input', { type: 'number', min: 1, value: s.idleMinutes })),
-        field('checks', 'Checks after each turn (no tokens)', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${JC.S.detectedChecks?.length ? `: ${JC.S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
+        field('checks', 'Checks', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${JC.S.detectedChecks?.length ? `: ${JC.S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
           'Failures go back to Claude before the AI review.'),
         field('checksCustom', 'My check commands (one per line)', JC.h('textarea', { rows: 2, placeholder: 'npm test\nnpx tsc --noEmit' }, s.checks !== 'auto' ? s.checks : '')),
         field('folderSetup', 'Task folder setup', sel(s.setup === '' ? 'off' : s.setup === 'auto' ? 'auto' : 'custom', [['auto', 'Auto: link node_modules, use .venv'], ['off', 'Off'], ['custom', 'My command (below)']])),
@@ -221,7 +221,13 @@
         field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
         field('superpowers', 'superpowers plugin in sessions', sel(s.superpowers, [[true, 'On (when installed)'], [false, 'Off: saves tokens on every step']])),
         field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
-        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
+        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')
+    ];
+    build();
+    const MAIN = ['defaultMode', 'maxParallel', 'taskModel', 'maxReviews', 'autoMerge', 'checks'];
+    dialog('Settings',
+      JC.h('div', { class: 'grid' }, MAIN.map(k => els[k])),
+      JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More settings'), JC.h('div', { class: 'grid' }, Object.keys(els).filter(k => !MAIN.includes(k)).map(k => els[k]))),
       JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More: always-allowed rules and API key'),
       JC.h('label', { class: 'blk' }, JC.h('span', {}, `Always allowed in ${JC.S.roots.find(r => r.path === JC.S.root)?.name ?? 'this project'}`),
         rules = JC.h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (JC.S.board.rules || []).join('\n')),
@@ -333,7 +339,7 @@
         JC.h('div', { class: 'paircode' }, JC.h('div', {}, 'Pairing code'), JC.h('b', {}, code),
           JC.h('span', { class: 'muted small' }, `One use, valid 10 minutes. Scan with the JustCode app, or open ${m.url} on the same Wi-Fi and type the code.`),
           m.fingerprint ? JC.h('span', { class: 'muted small' }, `HTTPS on · fingerprint ${m.fingerprint}`) : '')),
-      JC.h('div', { class: 'row' }, JC.btn('New code', () => JC.post('phonePairing')), JC.btn('Unpair all devices', () => { JC.post('phoneUnpair'); JC.$('#dlg').close(); }, 'danger')));
+      JC.h('div', { class: 'row' }, JC.btn('New code', () => JC.post('phonePairing')), JC.btn('Unpair all devices', () => JC.post('phoneUnpair'), 'danger')));
     d.dataset.kind = 'pairing';
   }
 

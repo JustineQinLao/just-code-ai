@@ -96,6 +96,25 @@ const EXERCISE = `async () => {
       if (a.kind === 'question' && (!m?.answers || Object.values(m.answers).some(v => v === 'stale' || !v))) errs.push('question answer wrong: ' + JSON.stringify(m?.answers));
     }
   } catch (e) { errs.push('asks: ' + e.message); }
+  // Settings sections in design order, phone buttons, and the pairing dialog (on and off).
+  try {
+    window.postMessage({ ...S, phone: { on: true, days: 7, devices: [{ id: 'ab12', created: 1, lastUsed: 0, expires: Date.now() + 1e9 }] } }, '*'); await wait(200);
+    const d = document.querySelector('#dlg'); d.open && d.close(); JC.settings(); await wait(100);
+    const txt = d.innerText.toLowerCase(), at = k => txt.indexOf(k.toLowerCase());
+    const order = ['Permissions for new tasks', 'Policy', 'Open policy.json', 'Export audit log', 'Phone · 1 paired', 'Revoke', 'Pair a phone', 'Setup checklist', 'Save'].map(at);
+    if (order.some((i, k) => i < 0 || (k && i < order[k - 1]))) errs.push('settings sections/order: ' + JSON.stringify(order));
+    out.settingsOrder = order.join(',');
+    posts.length = 0; [...d.querySelectorAll('button')].find(b => b.innerText.startsWith('Pair a phone')).click();
+    if (!posts.some(m => m.type === 'phonePairing')) errs.push('Pair a phone posts no phonePairing');
+    d.close(); JC.pairingDialog({ on: true, code: '482913', qr: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"></svg>', url: 'http://192.168.1.20:7878', fingerprint: '3A:91:C4' }); await wait(100);
+    const pt = d.innerText;
+    for (const l of ['Pair a phone', 'Pairing code', '482 913', 'One use, valid 10 minutes', '3A:91:C4', 'New code', 'Unpair all devices']) if (!pt.includes(l)) errs.push('pairing lacks ' + l);
+    posts.length = 0; [...d.querySelectorAll('button')].find(b => b.innerText === 'New code').click(); [...d.querySelectorAll('button')].find(b => b.innerText === 'Unpair all devices').click();
+    if (posts.map(m => m.type).join() !== 'phonePairing,phoneUnpair') errs.push('pairing buttons post ' + posts.map(m => m.type));
+    d.close(); out.toasts = document.querySelectorAll('.toast').length; JC.pairingDialog({ on: false }); await wait(100);
+    if (d.open) errs.push('pairing dialog opened with the server off');
+    if (!document.body.innerText.includes('phoneServer')) errs.push('server-off toast missing');
+  } catch (e) { errs.push('pairing: ' + e.message); }
   out.banners = [...document.querySelectorAll('.banner')].map(b => b.innerText.slice(0, 80));
   out.errs = errs; out.posts = posts.map(m => m.type).slice(0, 30).join(',');
   return out;
