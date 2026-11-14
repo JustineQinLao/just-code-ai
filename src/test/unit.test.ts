@@ -9,7 +9,7 @@ import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
 import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
-import { Store, resolveWhere } from '../store';
+import { Store, resolveWhere, splitTitle } from '../store';
 import { projectSetup } from '../setup';
 import { Session, toolOptions } from '../session';
 import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
@@ -1207,4 +1207,15 @@ test('design: setup reads DESIGN.md from the code without asking; the checklist 
   assert.match(body, /Never invent values/);
   const st = await checkSetup(undefined, {}, tmp(), false, { plugin: () => undefined, designMd: () => false });
   assert.deepEqual(st.checks.find(c => c.id === 'designMd')!.fix, { action: 'designFromProject', label: 'Write from project' });
+});
+
+test('splitTitle: a long prompt typed as the title keeps a short title and moves the text to the description', () => {
+  assert.deepEqual(splitTitle('Fix login bug', 'details'), { title: 'Fix login bug', description: 'details' });
+  const long = 'Create clickable mock screens for Tally Desk (see docs/project/project-description.md for the full spec). Mockups only: no Django or Angular code, no API calls.';
+  const s = splitTitle(long);
+  assert.ok(s.title.length <= 81, s.title);
+  assert.equal(s.description, long);
+  const nl = splitTitle('Add dark mode\nUse the theme tokens', 'extra');
+  assert.equal(nl.title, 'Add dark mode');
+  assert.equal(nl.description, 'Add dark mode\nUse the theme tokens\n\nextra');
 });

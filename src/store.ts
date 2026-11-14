@@ -254,6 +254,18 @@ export function resolveOutput(output: unknown, text: string): 'artifact' | undef
   return ARTIFACT_WORDS.test(text) ? 'artifact' : undefined;
 }
 
+// A whole prompt typed into the title box (common with ⚡ Quick) makes a wall of text on the card. Keep the first
+// sentence or line (at most 80 characters) as the title and move the full text into the description, so nothing is lost.
+export function splitTitle(title: string, description?: string): { title: string; description?: string } {
+  const t = title.trim(), d = description?.trim() || undefined;
+  if (t.length <= 100 && !t.includes('\n')) return { title: t, description: d };
+  const first = t.split('\n')[0].trim();
+  const sentence = first.match(/^.{10,80}?[.!?](?=\s|$)/)?.[0];
+  let short = sentence ?? first;
+  if (short.length > 80) short = short.slice(0, 80).replace(/\s+\S*$/, '') + '…';
+  return { title: short, description: [t, d].filter(Boolean).join('\n\n') };
+}
+
 export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean }): 'direct' | 'branch' {
   if (o.remote) return 'branch';
   if (o.where === 'direct' || o.artifact) return 'direct';

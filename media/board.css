@@ -123,7 +123,7 @@ textarea { resize: vertical; width: 100%; }
 .card.tone-ok { border-left-color: var(--ok); }
 .ctop { display: flex; gap: 6px; align-items: baseline; }
 .num { font-size: 11px; color: var(--muted); min-width: 14px; }
-.ttl { font-weight: 600; word-break: break-word; }
+.ttl { font-weight: 600; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .meta { display: flex; gap: 4px; flex-wrap: wrap; margin: 5px 0 0; }
 .tag { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
 .tag.mode-bypassPermissions { color: var(--err); }
