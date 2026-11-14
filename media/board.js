@@ -81,7 +81,7 @@
   /* ---------- lanes and what each card says ---------- */
   // Column and next step live in status.js (shared with the tests).
   const lane = t => window.JCStatus.lane(t, S.settings);
-  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, lastTool });
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, lastTool, remote: REMOTE });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */

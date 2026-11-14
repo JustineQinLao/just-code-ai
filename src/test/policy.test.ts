@@ -150,3 +150,14 @@ test('setBudget changes one budget and keeps the rest of policy.json', () => {
   assert.deepEqual(raw.denyTools, ['WebFetch']);
   assert.throws(() => setBudget(root, 'sprint', -1));
 });
+
+test('status: a budget stop offers to raise that budget and resume, not on the phone', () => {
+  const posts: any[] = [];
+  const c = (remote = false) => ({ settings: { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 }, queue: { queued: [] }, post: (type: string, x: any) => posts.push({ type, ...x }), open: () => {}, lastTool: () => '', remote });
+  const t = { id: 'b', title: 'B', status: 'review', worktree: '/w', error: 'Budget reached: $5.65 of $5 (task). Raise the task budget in ⚙ Settings → Policy, then press Resume.' };
+  const raise = status.nextStep(t, c()).actions[0];
+  assert.match(raise[0], /Raise task budget to \$10 and resume/);
+  raise[1]();
+  assert.deepEqual(posts.pop(), { type: 'setBudget', id: 'b', key: 'task', usd: 10 });
+  assert.ok(!status.nextStep(t, c(true)).actions.some((a: any) => /Raise/.test(a[0])));
+});

@@ -365,7 +365,10 @@ export async function handle(m: any, remote = false) {
       const was = loadPolicy(r.root).policy.maxCostUsd[m.key as 'task'];
       setBudget(r.root, m.key, Number(m.usd));
       r.audit('policy.change', undefined, `maxCostUsd.${m.key}: ${was} → ${Number(m.usd)}`, who);
-      return push();
+      push();
+      // "Raise and resume" on a task the budget stopped: the task continues under the new budget.
+      if (t) await r.say(m.id, 'Continue the task.');
+      return;
     }
     case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
     case 'exportAudit': void vscode.commands.executeCommand('justCode.exportAudit'); return;

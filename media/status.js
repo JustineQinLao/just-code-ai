@@ -48,6 +48,11 @@
     if (t.run === 'running') return { text: `Working${c.lastTool(t)}`, tone: 'run', actions: [['Open', () => c.open(id)]] };
     if (t.remote) return { text: 'In Remote Control: continue in the Claude app or claude.ai/code. Close its terminal to bring it back.', tone: 'run', actions: [] };
     if (t.limited) return { text: 'Paused by the usage limit. Continues by itself after the reset.', tone: 'muted', actions: [] };
+    const over = !c.remote && /^Budget reached: .* of \$([\d.]+) \((task|sprint|project)\)/.exec(t.error || '');
+    if (over) {
+      const usd = Math.ceil(Number(over[1]) * 2);
+      return { text: `Stopped: ${t.error}`, tone: 'err', actions: [[`↻ Raise ${over[2]} budget to $${usd} and resume`, () => post('setBudget', { id, key: over[2], usd })], ['Open task', () => c.open(id, 'activity')], discard] };
+    }
     if (t.error) return { text: `Stopped: ${t.error}${hint(t.error)}`, tone: 'err', actions: [resume, ['Open task', () => c.open(id, 'activity')], discard] };
     const waits = (t.dependsOn || []).map(d => (c.tasks || []).find(o => o.id === d)).filter(o => o && !o.archived && o.status !== 'done');
     if (t.status === 'todo' && waits.length) return { text: `⟂ waits for “${waits[0].title.slice(0, 50)}”${waits.length > 1 ? ` and ${waits.length - 1} more` : ''}${t.queued ? ' (queued)' : ''}`, tone: 'muted',
