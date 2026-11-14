@@ -18,4 +18,7 @@ test('panel step tracker picks the step for each task state', () => {
   assert.equal(at({ status: 'review', review: { state: 'fail' } }), 3);
   assert.equal(at({ status: 'review', review: { state: 'pass' } }), 4);
   assert.equal(at({ status: 'done' }), 5);
+  assert.equal(at({ status: 'doing', run: 'running', reviewing: true }), 3);
+  assert.equal(at({ status: 'review', checks: { state: 'pass' } }), 3);
+  assert.equal(at({ status: 'doing', run: 'running', asks: [{ kind: 'plan' }] }), 0);
 });
