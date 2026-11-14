@@ -12,3 +12,5 @@ tsconfig.json
 android/**
 scripts/**
 docs/smoke/**
+docs/**
+data/**
