@@ -221,12 +221,14 @@
   // Activity: what Claude did as a timeline, finished steps green, the last one live while it works.
   function timeline(t, list) {
     const live = t.run && t.run !== 'idle';
-    const el = JC.h('div', { class: 'tl' }, list.map((s, i) => {
-      const last = live && i === list.length - 1;
+    const shown = list.filter(s => s.kind !== 'result');
+    const el = JC.h('div', { class: 'tl' }, shown.map((s, i) => {
+      const last = live && i === shown.length - 1;
       const txt = s.kind === 'tool' ? `${s.agent ? `↳ ${s.agent}: ` : ''}${s.text}` : s.text;
-      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : 'ok'} ${s.kind}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : txt);
+      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : txt);
     }));
-    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    // Keep the ask boxes (above the timeline) in view while Claude waits for an answer.
+    requestAnimationFrame(() => { body.scrollTop = t.asks?.length ? 0 : body.scrollHeight; });
     return el;
   }
 

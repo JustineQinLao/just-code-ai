@@ -74,6 +74,21 @@ const EXERCISE = `async () => {
     for (const l of ['+ Sprint', 'Agent map', 'Report', 'Prompt history']) if (!out.moreItems.includes(l)) errs.push('⋯ menu lacks ' + l);
     document.querySelector('#dlg').close();
   } catch (e) { errs.push('toolbar: ' + e.message); }
+  // Asks (only when the board has them): each button posts the same message as before.
+  try {
+    const kinds = { tool: ['Allow', 'allow'], question: ['Answer', 'allow'], plan: ['Build it', 'allow'] };
+    for (const t of S.board.tasks) for (const a of t.asks || []) {
+      const [label, choice] = kinds[a.kind] || kinds.tool;
+      JC.openTask(t.id, 'activity'); await wait(150);
+      const box = [...document.querySelectorAll('#drawer .ask')].find(b => b.innerText.includes(label));
+      if (!box) { errs.push('ask box missing: ' + a.kind); continue; }
+      if (a.kind === 'question') box.querySelector('.opt input')?.click();
+      posts.length = 0; [...box.querySelectorAll('button')].find(b => b.innerText.startsWith(label)).click(); await wait(50);
+      const m = posts.find(x => x.type === 'answer');
+      if (!m || m.id !== t.id || m.ask !== a.id || m.choice !== choice) errs.push('ask ' + a.kind + ' posted ' + JSON.stringify(posts));
+      if (a.kind === 'question' && !m?.answers) errs.push('question posted no answers');
+    }
+  } catch (e) { errs.push('asks: ' + e.message); }
   out.banners = [...document.querySelectorAll('.banner')].map(b => b.innerText.slice(0, 80));
   out.errs = errs; out.posts = posts.map(m => m.type).slice(0, 30).join(',');
   return out;
