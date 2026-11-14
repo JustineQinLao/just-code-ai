@@ -80,16 +80,21 @@ export const mergeMethods = {
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
       if (this.checking.has(id)) throw new Error('The checks are still running in this task\'s folder. Merge when they finish.');
       this.stop(id);
-      await g.commitAll(t.worktree, t.title, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
-      const conflicts = await g.syncWithBase(t.worktree, t.base);
-      if (conflicts.length) {
-        this.store.updateTask(id, { conflicts, status: 'review' });
-        this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id, true);
-        return;
+      // An earlier Merge got as far as the merge commit and then failed while removing the folder (git no longer knows it): only finish up.
+      const already = await g.isMerged(this.root, t.branch, t.base) && !await g.isWorktree(t.worktree);
+      if (!already) {
+        await g.commitAll(t.worktree, t.title, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
+        const conflicts = await g.syncWithBase(t.worktree, t.base);
+        if (conflicts.length) {
+          this.store.updateTask(id, { conflicts, status: 'review' });
+          this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id, true);
+          return;
+        }
+        await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
+        try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
       }
-      await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
-      try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
-      await this.cleanup(t);
+      // The merge is in git. A folder that will not go away must not leave the task in Review, or Merge runs again.
+      await this.cleanup(t).catch(e => this.d.notify('warn', `Merged "${t.title}", but could not remove its folder (${e.message}). Delete ${t.worktree} by hand.`, id));
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
       this.audit('merge', id, `${t.branch} into ${t.base}${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}${t.review?.unreviewed ? ', unreviewed' : ''}`, auto ? 'justcode' : by);
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);

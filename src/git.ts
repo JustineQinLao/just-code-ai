@@ -174,9 +174,13 @@ export async function pruneOrphans(repo: string, keep: Set<string>): Promise<{ r
 export async function removeWorktree(repo: string, dir: string) {
   const real = fs.existsSync(dir) ? fs.realpathSync(dir) : dir;
   const listed = (await git(repo, ['worktree', 'list', '--porcelain'])).split('\n').includes(`worktree ${real}`);
-  if (listed) await git(repo, ['worktree', 'remove', '--force', dir]);
-  else fs.rmSync(dir, { recursive: true, force: true });
+  // A container or test run may still write into the folder while git empties it ("Directory not empty"): clear the rest.
+  if (listed) await git(repo, ['worktree', 'remove', '--force', dir]).catch(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  else fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }
+
+export const isWorktree = (dir: string) => fs.existsSync(dir) ? ok(dir, ['rev-parse', '--git-dir']) : Promise.resolve(false);
+export const isMerged = (repo: string, branch: string, base: string) => ok(repo, ['merge-base', '--is-ancestor', branch, base]);
 
 // Commits whatever the task's session changed. false = nothing to commit.
 // secretScan: the staged diff is checked first; on a hit everything is unstaged again and SecretsFound is thrown.
