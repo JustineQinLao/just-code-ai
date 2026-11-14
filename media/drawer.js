@@ -96,12 +96,17 @@
   const head = JC.h('div', { class: 'dhead' });
   const applyBtn = JC.btn('Apply', () => {}, 'primary');
   applyBtn.hidden = true;
-  drawer.append(head, body, JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, applyBtn, JC.btn('Send', sendMsg), JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
+  const stopBtn = JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)');
+  const foot = JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, applyBtn, JC.btn('Send', sendMsg), stopBtn));
+  // A finished task has no session to message: the footer offers a follow-up task instead.
+  const doneFoot = JC.h('div', { class: 'dfoot' });
+  drawer.append(head, body, foot, doneFoot);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') JC.post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !JC.$('#dlg').open) closeTask(); });
 
   let menu = [];
   function renderDrawer() {
     applyBtn.hidden = true;
+    foot.hidden = false; doneFoot.hidden = true; stopBtn.hidden = false;   // the planner and running tasks use the message box
     if (open === '__planner') return renderPlanner();
     const t = open && JC.S.board.tasks.find(x => x.id === open);
     drawer.classList.toggle('on', !!t);
@@ -119,8 +124,8 @@
     menu = [
       t.status === 'todo' && ['▶ Run', () => JC.post('run', { id: t.id })],
       live && ['■ Stop', () => JC.post('stop', { id: t.id })],
-      t.sessionId && !t.remote && ['📱 Continue on phone', () => JC.post('remote', { id: t.id })],
-      t.sessionId && !t.remote && ['⌨ Open in terminal', () => JC.post('claudeCode', { id: t.id })],
+      t.sessionId && !t.remote && t.status !== 'done' && ['📱 Continue on phone', () => JC.post('remote', { id: t.id })],
+      t.sessionId && !t.remote && t.status !== 'done' && ['⌨ Open in terminal', () => JC.post('claudeCode', { id: t.id })],
       t.worktree && ['Changes', () => { JC.tab = 'changes'; JC.post('changes', { id: t.id }); JC.render(); }],
       t.worktree && t.status !== 'done' && ['✓ Merge', () => JC.post('merge', { id: t.id })],
       t.worktree && !t.reviewing && t.status === 'review' && ['Review again', () => JC.post('review', { id: t.id })],
@@ -144,6 +149,12 @@
         .map(([k, l]) => JC.h('a', { class: (JC.tab === k || (k === 'details' && JC.tab === 'agents')) ? 'on' : '', onclick: () => { JC.tab = k; if (k === 'changes') JC.post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) JC.post('shots', { id: t.id }); JC.render(); } }, l))));
     body.replaceChildren(...drawerBody(t));
     msg.placeholder = t.status === 'todo' ? 'Run the task first, or edit it under Details' : t.remote ? 'This task is in Remote Control' : 'Message Claude…  Enter sends · Shift+Enter new line';
+    const finished = t.status === 'done';
+    foot.hidden = finished;
+    doneFoot.hidden = !finished;
+    stopBtn.hidden = !(live || t.run === 'starting');
+    if (finished) doneFoot.replaceChildren(JC.h('span', { class: 'muted small grow' }, `${t.where === 'direct' ? 'Finished' : 'Merged'}. For more changes, add a follow-up task.`),
+      JC.btn('Follow-up task', () => { const box = JC.$('#title'); if (box) { box.value = `Follow-up to "${t.title.slice(0, 80)}": `; box.focus(); } closeTask(); }, 'primary'));
   }
 
   function drawerBody(t) {
@@ -198,7 +209,7 @@
       return [
         JC.h('dl', { class: 'kv' },
           JC.h('dt', {}, 'Runs in'), JC.h('dd', {}, t.where === 'direct' && !t.init ? 'Workspace (no branch)' : t.branch ? `Own branch ${t.branch}` : 'Own branch, merged when done'),
-          JC.h('dt', {}, 'Permissions'), JC.h('dd', {}, JC.h('select', { 'aria-label': 'Permissions', onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
+          JC.h('dt', {}, 'Permissions'), JC.h('dd', {}, t.status === 'done' ? JC.modeName(t.mode) : JC.h('select', { 'aria-label': 'Permissions', onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
             JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); })),
             t.modeNote ? JC.h('span', { class: 'warn' }, ` ${t.modeNote}`) : ''),
           JC.h('dt', {}, 'After'), JC.h('dd', {}, (t.dependsOn || []).map(id => JC.S.board.tasks.find(o => o.id === id)?.title).filter(Boolean).join(', ') || 'Nothing'),
@@ -206,8 +217,9 @@
           JC.h('dt', {}, 'Cost'), JC.h('dd', {}, t.costUsd ? `~$${t.costUsd.toFixed(2)} at API prices` : '—', t.output ? ` · ${JC.tok(t.context + t.output)}` : '', t.modelUsed ? ` · ${JC.modelName(t.modelUsed)}` : ''),
           JC.h('dt', {}, 'Files'), JC.h('dd', {}, !Object.values(t.artifacts || {}).some(Boolean) ? '—' : [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l], i) => [i ? ' · ' : '', JC.h('a', { onclick: () => JC.post('openArtifact', { id: t.id, which: k }) }, l)]))),
         JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost')), JC.btn(`Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`, () => { JC.tab = 'agents'; JC.render(); }, 'ghost')),
-        JC.h('label', { class: 'blk' }, 'Title', title = JC.h('input', { value: t.title, disabled: !editable })),
-        JC.h('label', { class: 'blk' }, 'Details', desc = JC.h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
+        editable ? JC.h('label', { class: 'blk' }, 'Title', title = JC.h('input', { value: t.title })) : '',
+        editable ? JC.h('label', { class: 'blk' }, 'Details', desc = JC.h('textarea', { rows: 8 }, t.description || ''))
+          : t.description ? JC.h('div', {}, JC.h('h4', {}, 'Details'), JC.h('p', { class: 'small', style: 'white-space:pre-wrap' }, t.description)) : '',
         editable ? (() => {
           const others = JC.S.board.tasks.filter(o => o.id !== t.id && !o.archived && o.status !== 'done' || (t.dependsOn || []).includes(o.id));
           return others.length ? JC.h('details', { class: 'adv', open: !!t.dependsOn?.length }, JC.h('summary', {}, `After${t.dependsOn?.length ? ` (${t.dependsOn.length})` : ''}: Run all starts this task only when these are done`),
@@ -215,7 +227,7 @@
               onchange: e => { const cur = new Set(t.dependsOn || []); e.target.checked ? cur.add(o.id) : cur.delete(o.id); JC.post('editTask', { id: t.id, patch: { dependsOn: [...cur] } }); } }), ' ', o.title.slice(0, 60))))) : '';
         })() : '',
         editable ? JC.h('div', { class: 'row' }, JC.btn('Save', () => JC.post('editTask', { id: t.id, patch: { title: title.value, description: desc.value } }), 'primary'),
-          JC.h('span', { class: 'muted small' }, 'To rework it with Claude, use ✦ Plan.')) : JC.h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.'),
+          JC.h('span', { class: 'muted small' }, 'To rework it with Claude, use ✦ Plan.')) : t.status !== 'done' ? JC.h('p', { class: 'muted small' }, 'Started tasks keep their text; message Claude instead.') : '',
         t.images?.length ? JC.h('p', { class: 'muted small' }, `${t.images.length} screenshot(s) attached.`) : '',
         t.checks?.results?.length ? JC.h('div', {}, JC.h('h4', {}, `Checks · ${t.checks.state === 'pass' ? 'pass' : 'fail'}${t.checks.rounds ? ` · fix round ${t.checks.rounds}` : ''}`),
           JC.h('ul', { class: 'checks' }, t.checks.results.map(r => JC.h('li', { class: r.ok ? 'ok' : r.preexisting ? 'pre' : 'bad' },
