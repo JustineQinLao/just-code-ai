@@ -71,7 +71,7 @@ test('policy on runs and merges: forbidden mode and model refused, bypass-all ne
 
 test('status: a policy hold asks for your approval and checks-fail hides "anyway" when the policy requires checks', () => {
   const settings = { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 };
-  const c = (policy?: any) => ({ settings, queue: { queued: [] }, policy, post: () => {}, open: () => {}, dur: () => '', lastTool: () => '' });
+  const c = (policy?: any) => ({ settings, queue: { queued: [] }, policy, post: () => {}, open: () => {}, lastTool: () => '' });
   const held = { id: 'a', title: 'A', status: 'review', worktree: '/w', review: { state: 'pass', attempts: 1, hold: 'touches src/auth.ts' } };
   const n = status.nextStep(held, c());
   assert.match(n.text, /Needs your approval \(policy\): touches src\/auth\.ts/);
