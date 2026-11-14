@@ -48,7 +48,7 @@ const EXERCISE = `async () => {
   // The new-task box: Details toggles, Quick and Add each post addTask with the typed title.
   try {
     const btnOf = t => [...document.querySelectorAll('#composer .box button')].find(b => b.innerText.includes(t)), title = document.querySelector('#title');
-    posts.length = 0; btnOf('Details').click(); out.detailsOpen = !document.querySelector('#more').hidden; btnOf('Details').click();
+    posts.length = 0; const was = !document.querySelector('#more').hidden; btnOf('Details').click(); out.detailsOpen = was && document.querySelector('#more').hidden; btnOf('Details').click(); out.detailsOpen = out.detailsOpen && !document.querySelector('#more').hidden;
     title.value = 'smoke quick'; btnOf('Quick').click(); title.value = 'smoke add'; btnOf('Add').click();
     const adds = posts.filter(m => m.type === 'addTask'); out.addTask = adds.map(m => m.title + (m.quick ? ':quick' : '')).join(',');
     if (out.detailsOpen !== true || out.addTask !== 'smoke quick:quick,smoke add') errs.push('composer: ' + JSON.stringify([out.detailsOpen, out.addTask]));

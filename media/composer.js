@@ -2,7 +2,7 @@
 // shares its helpers and state through window.JC; this file hands the box's state and helpers back on the same object.
 (() => {
   const JC = window.JC, { h, $, btn, post, MODES, sprintSrcs, srcLabel } = JC;
-  let more = false;                        // new-task details open
+  let more = true;                         // new-task details open
   let images = [];                         // pasted screenshots for the new task
   let files = [];                          // files attached to the new task
   let srcOff = new Set();                  // project sources unticked for the new task
@@ -165,7 +165,7 @@
       btn('Details ▾', () => toggleMore(), '', 'Details, a "Done when" checklist, files, sprint'),
       btn('⚡ Quick', () => addTask(true, true), '', 'Run now in your workspace: no branch, no checks, no AI review. Then Finish (commit) or Discard. For questions and small edits.'),
       btn('Add', () => addTask(false), 'primary', 'Adds to To do: its own branch or the workspace, checked and reviewed. ⌘/Ctrl+Enter adds and runs it.')),
-    h('div', { id: 'more', class: 'details', hidden: true },
+    h('div', { id: 'more', class: 'details' },
       h('label', {}, 'Done when (the reviewer checks each line)',
         h('textarea', { id: 'done', rows: 3, placeholder: 'One check per line, e.g.\nthe toggle persists after a reload\nnpm test passes' })),
       h('label', { title: 'Code change: Claude edits the project. Artifact page: Claude designs one web page (with the frontend-design skill) and JustCode publishes it to claude.ai and puts the link on the card.' }, 'Result',
@@ -173,7 +173,7 @@
         h('span', { class: 'small' }, '“mockup”, “prototype”, “landing page” become a page with a link.')),
       h('label', { title: 'Own branch: an isolated copy you review and merge. Workspace: runs in your checkout, reviewed, then Finish commits its files.' }, 'Runs in',
         h('select', { id: 'where' }, h('option', { value: '' }, 'Automatic (backlog: workspace, sprint: own branch)'), h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'direct' }, 'Workspace (reviewed, then Finish)')),
-        h('span', { class: 'small' }, 'Based on: ', h('span', { id: 'srcpick', class: 'chips' }))),
+        h('span', { class: 'small' }, h('span', { id: 'srcpick', class: 'chips' }))),
       h('details', { class: 'adv wide' }, h('summary', {}, 'More options'),
         complete(h('textarea', { id: 'desc', rows: 2, placeholder: 'Goal and details. / skills · @ files · paste screenshots', onpaste: pasteImages })),
         h('div', { id: 'imgs', class: 'imgs' }),

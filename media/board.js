@@ -115,7 +115,7 @@
 
   function renderProjects() {
     $('#projects').replaceChildren(...S.roots.map(p => h('span', { class: `proj${p.path === S.root ? ' on' : ''}${p.waiting ? ' dot' : ''}`, title: p.path, onclick: () => { open = undefined; post('root', { root: p.path }); } },
-      p.name, p.running ? h('b', { class: 'badge run' }, `▶${p.running}`) : '', p.waiting ? h('b', { class: 'badge warn', title: `${p.waiting} need you` }, p.waiting) : '',
+      p.name, p.running ? h('b', { class: 'badge run' }, `▶${p.running}`) : '',
       p.removable ? btn('×', () => post('removeProject', { root: p.path }), 'x', 'Remove from JustCode (files are kept)') : '')),
       btn('+', () => post('addProject'), 'ghost icon', 'Add a project folder'),
       setupPill());
@@ -123,6 +123,7 @@
 
   // Next to the project name: whether it is set up for Claude, and what it has.
   function setupPill() {
+    const st = initState(), pr = S.project || {};
     const has = [['project.md', pr.projectMd], ['DESIGN.md', pr.designMd]].map(([n, ok]) => `${ok ? '✓' : '✗'} ${n}`).join('\n');
     if (st.running) return h('span', { class: 'pill run', title: 'Claude is setting up this project. Open the task to answer its questions.', onclick: () => JC.openTask(st.running.id) }, '◌ Setting up…');
     if (st.done) return h('span', { class: 'pill ok', title: `Set up for Claude\n${has}` }, '✓ Set up');
