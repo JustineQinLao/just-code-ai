@@ -116,7 +116,7 @@
   function dialog(title, ...content) {
     const d = JC.$('#dlg');
     delete d.dataset.kind;
-    d.replaceChildren(JC.h('div', { class: 'dlghead' }, JC.h('h3', {}, title), JC.btn('×', () => d.close(), 'ghost icon', 'Close')), JC.h('div', { class: 'dlgbody' }, content));
+    d.replaceChildren(JC.h('div', { class: 'dlghead' }, JC.h('h3', {}, title), JC.btn('✕', () => d.close(), 'ghost icon', 'Close')), JC.h('div', { class: 'dlgbody' }, content));
     if (!d.open) d.showModal();
     return d;
   }
@@ -357,6 +357,7 @@
         e.changedAt ? JC.h('span', { class: 'spill warn', title: 'The last refresh found different content' }, `changed ${JC.savedAgo(e.changedAt)}`) : '',
         e.kind === 'input' && src(e)?.copy ? JC.h('span', { class: 'spill ok' }, `✓ Saved${src(e).savedAt ? ` ${JC.savedAgo(src(e).savedAt)}` : ''}`) : '',
         JC.h('div', { class: 'spacer' }),
+        e.kind === 'output' ? JC.btn('Open', () => JC.post('openUrl', { url: e.url }), 'ghost') : '',
         JC.btn('Copy link', () => JC.post('copy', { text: e.url }), 'ghost'),
         e.kind === 'input' && isSource(e) ? JC.btn('Refresh copy', () => JC.post('refreshArtifact', { url: e.url }), 'ghost', 'Save the artifact\'s files again') : '',
         !JC.REMOTE ? JC.btn('Use as source', () => JC.post('useArtifact', { url: e.url, sprintId: JC.sprintOf(JC.view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
@@ -376,12 +377,13 @@
     const d = dialog('Design', JC.h('p', { class: 'muted' }, has
       ? 'DESIGN.md is set (.justcode/design/DESIGN.md). UI and artifact tasks follow it.'
       : 'UI and artifact tasks follow .justcode/design/DESIGN.md. By default Claude writes it from the styles, theme and components your code already uses. For a project with no UI yet, pick one from the catalog or use your own file.'),
-      JC.h('div', { class: 'acts' },
+      JC.h('div', { class: 'acts row' },
         JC.btn(has ? 'Rewrite from project' : 'From this project', () => { d.close(); JC.post('designFromProject'); }, has ? 'ghost' : 'primary', 'Claude reads the code\'s colors, type, spacing and components into DESIGN.md'),
         JC.btn('Catalog or my own file…', () => { d.close(); JC.post('designPick'); }, 'ghost', 'Pick a design from VoltAgent/awesome-design-md, or use a file you have'),
         has ? JC.btn('Show as artifact', () => { d.close(); JC.post('designArtifact'); }, 'ghost', 'A claude.ai page showing the palette, type and components; listed under ⧉ Artifacts and updated in place') : '',
         has ? JC.btn('Open', () => { d.close(); JC.post('openJustcodeFile', { file: 'design/DESIGN.md' }); }, 'ghost') : '',
-        has ? JC.btn('Remove', () => { d.close(); JC.post('designRemove'); }, 'ghost') : ''));
+        has ? JC.btn('Remove', () => { d.close(); JC.post('designRemove'); }, 'ghost') : ''),
+      has ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Current: '), 'DESIGN.md in .justcode/design') : '');
   }
 
   function guide() {

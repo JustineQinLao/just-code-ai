@@ -426,3 +426,7 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .fhint { font-family: var(--mono); }
 .proppanel .rtag.add { display: none; } /* design shows no NEW tag */
 .refrow b { font-family: var(--vscode-font-family); }
+.srchead a { font-weight: 600; }
+.srchead .tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; }
+.dlgbody .note { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--fg) 6%, transparent); font-size: 12px; }
+.dlgbody .muted { margin: 0; }
