@@ -34,6 +34,17 @@ project. Claude asks for approval right on the card, and an AI reviewer tests th
 - **Continue on your phone:** move any task to Claude Code Remote Control and steer it from the Claude app or
   claude.ai/code.
 
+## Screenshots
+
+The board has five lanes: **To do**, **Needs you**, **Working**, **Review** and **Done**. Each task is a card.
+Approvals and questions appear on the card, and a task you open shows its activity, changes, review and details.
+
+The phone page shows the same tasks, one lane at a time, with **Needs you** first:
+
+| Open | Approve | Merge | Done |
+|---|---|---|---|
+| ![Phone page, task list](docs/smoke/app/01-open.png) | ![A permission card with Allow and Deny](docs/smoke/app/04-permission.png) | ![Confirm the merge](docs/smoke/app/06-confirm.png) | ![The task shows done](docs/smoke/app/07-done.png) |
+
 ## Install
 
 You need VS Code 1.90+, [git](https://git-scm.com), and [Claude Code](https://code.claude.com) signed in with your
@@ -73,6 +84,15 @@ For VS Code itself, if the `code` command is not on your PATH, use the full path
 
 Or, in any of these editors: open the Extensions view (**⌘⇧X**), click **⋯**, choose **Install from VSIX…** and pick
 the file. Then run **Developer: Reload Window** (⌘⇧P) to load the new version.
+
+## Requirements
+
+| Need | Why |
+|---|---|
+| VS Code 1.90+ (or a VS Code based editor) | JustCode is an extension |
+| [git](https://git-scm.com) | each task runs on its own branch in its own folder |
+| [Claude Code](https://code.claude.com), signed in | runs the tasks. Plan login or an API key |
+| Node.js 20+ | only to build from source or run the tests |
 
 ## Quick start
 
@@ -224,9 +244,33 @@ git tag v1.0.0 && git push origin v1.0.0
 ## Phone access
 
 Off by default. Enable the phone server (`justCode.phoneServer`) to open a small task page from your phone's browser
-on the **same network** (no native Android app yet); the computer must stay awake. Access needs a token, so keep it private. With Bypass
+on the **same network**, or pair the Android app in `android/` (**JustCode: Phone Link** shows a QR code); the computer must stay awake. Access needs a token, so keep it private. With Bypass
 permissions or `justCode.bypassAll`, anyone with the token can run unapproved commands. This differs from *Continue on
 phone*, which uses Remote Control. Pairing steps: [docs/GUIDE.md](docs/GUIDE.md) (section 11).
+
+## Commands
+
+Open the Command Palette (**⌘⇧P** / **Ctrl+Shift+P**) and type *JustCode*:
+
+| Command | What it does |
+|---|---|
+| JustCode: Open Board | Opens the board |
+| JustCode: Add Project | Adds another folder to the board |
+| JustCode: Check Setup and Health | Re-runs the setup checklist |
+| JustCode: Use an Anthropic API Key | Uses an API key instead of your Claude login |
+| JustCode: Phone Link / Show Phone Pairing | Pairs a phone (needs `justCode.phoneServer`) |
+| JustCode: Export Audit Log / Sprint Report | Saves the audit log or a sprint report |
+
+## Troubleshooting
+
+- **The checklist shows a red line:** press the button next to it. It installs or signs in Claude Code, or tells you
+  what is missing.
+- **`claude` is not found:** set `justCode.claudePath` to its full path.
+- **`code` is not on your PATH:** see *Other editors* above for the full path.
+- **A task is stuck on Needs you:** open the card and answer or press Allow / Deny.
+- **Merge conflict:** press **Resolve with Claude** on the card.
+- **Logs:** open the *JustCode* output channel (View > Output).
+- **Questions about a feature:** [docs/GUIDE.md](docs/GUIDE.md).
 
 ## Limits
 
