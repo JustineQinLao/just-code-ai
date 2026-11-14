@@ -439,7 +439,7 @@ policy.json**); changes apply at once. ⚙ → **Policy** also lists what the po
 | Field | Default | What it does |
 |---|---|---|
 | `protectedPaths` | `.github/workflows/**`, `infra/**`, `**/*.pem`, `**/.env*` | A task may not edit these files, in any permission mode. Claude is told why and works around it. |
-| `denyTools` | `Bash(curl *)`, `Bash(wget *)`, `WebFetch` | Always denied, also inside a longer command (`npm test && curl …`). |
+| `denyTools` | `Bash(curl *)`, `Bash(wget *)`, `WebFetch` | Always denied, also inside a longer command (`npm test && curl …`). `curl` and `wget` to this machine (localhost, 127.0.0.1) stay allowed, so Claude can check a dev server it started. |
 | `forbidModes` | none | Modes listed here (e.g. `bypassPermissions`) are greyed out in the task's mode picker, a task in one does not start, and *Bypass all* is ignored for this project. |
 | `requireHumanReviewFor` | `auth`, `payment`, `migration`, `security` | A change whose paths contain one of these words is never merged automatically: the card says *Needs your approval (policy)*. |
 | `maxCostUsd` | task 5, sprint 50, project 500 | A task that reaches a budget stops with *Budget reached: $X of $Y*. Raise the number, then press **Resume**. 0 = no budget. Reviews and planning count too. |

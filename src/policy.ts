@@ -169,7 +169,10 @@ export function violations(p: Policy, tool: string, input: Record<string, unknow
     if (tool === 'Bash' && r.content) {
       const cmd = typeof input.command === 'string' ? input.command : '';
       const parts = cmd.split(/&&|\|\||;|\||\n|\$\(|`/).map(s => s.trim().replace(/^\(+/, '')).filter(Boolean);
-      if (parts.some(part => matches(rule, 'Bash', { command: part }))) return `The project policy denies ${rule} (.justcode/policy.json, denyTools).`;
+      // A download tool that only talks to this machine (a dev server Claude started) is not a network call out.
+      const local = (part: string) => /^(curl|wget)\b/.test(part) && (part.match(/https?:\/\/[^\s'"]+|(?<![\w.-])(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*/g) ?? []).length > 0
+        && (part.match(/https?:\/\/[^\s'"/]+/g) ?? []).every(u => /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(u));
+      if (parts.some(part => matches(rule, 'Bash', { command: part }) && !local(part))) return `The project policy denies ${rule} (.justcode/policy.json, denyTools).`;
     } else if (matches(rule, tool, input)) return `The project policy denies ${rule} (.justcode/policy.json, denyTools).`;
   }
   if (EDIT_TOOLS.has(tool)) {
