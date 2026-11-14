@@ -39,7 +39,7 @@ test('planner "after" becomes dependsOn; the card says what it waits for', () =>
   r.applyProposals(p!.map(x => ({ ...x, kind: 'new', apply: true })), []);
   const schema = store.data.tasks.find(t => t.title === 'Schema')!, api = store.data.tasks.find(t => t.title === 'API')!;
   assert.deepEqual(api.dependsOn, [schema.id]);
-  const n = status.nextStep(api, { settings: { review: { maxAttempts: 3, auto: true } }, queue: { queued: [] }, tasks: store.data.tasks, post: () => {}, open: () => {}, dur: () => '', lastTool: () => '' });
+  const n = status.nextStep(api, { settings: { review: { maxAttempts: 3, auto: true } }, queue: { queued: [] }, tasks: store.data.tasks, post: () => {}, open: () => {}, lastTool: () => '' });
   assert.match(n.text, /⟂ waits for “Schema”/);
   r.dispose();
 });

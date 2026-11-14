@@ -52,7 +52,6 @@
   // Icon buttons (⚙, ?, ⋯, ×) get their tooltip as an accessible name for screen readers.
   const btn = (label, onclick, cls = '', title) => h('button', { class: cls, onclick: e => { e.stopPropagation(); onclick(e); }, title, 'aria-label': title && String(label).length <= 2 ? title : undefined }, label);
   const ago = t => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
-  const dur = ms => ms ? ago(Date.now() - ms) : '';
   const tok = n => n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k tokens` : `${n} tokens`;
   const tokShort = n => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M tok` : `${Math.round(n / 1000)}k tok`;
   // Tokens processed per stage. Cache reads are re-sent context: cheap, but they count most toward plan limits.
@@ -82,7 +81,7 @@
   /* ---------- lanes and what each card says ---------- */
   // Column and next step live in status.js (shared with the tests).
   const lane = t => window.JCStatus.lane(t, S.settings);
-  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, dur, lastTool });
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, lastTool });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */
@@ -295,7 +294,6 @@
     andList,
     btn,
     ago,
-    dur,
     tok,
     tokShort,
     fresh,
