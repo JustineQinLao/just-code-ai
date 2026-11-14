@@ -227,17 +227,23 @@
       !REMOTE ? btn('Report', () => post('sprintReport', { sprintId: sp.id }), 'ghost small', 'Export this sprint\'s report (tasks, merges, cost, audit highlights, artifacts) to .justcode/reports') : ''));
   }
 
-  const LANES = [['todo', 'To do'], ['work', 'Working'], ['needs', 'Needs you'], ['review', 'Review'], ['done', 'Done']];
+  const LANES = window.JCStatus.LANES;
   function renderLanes() {
     const tasks = visible();
+    if (!S.board.tasks.some(t => !t.archived)) {
+      $('#lanes').replaceChildren(h('div', { class: 'empty' }, h('b', {}, 'No tasks yet'), h('p', {}, 'Type what you want above. ⚡ Quick runs it now; Add puts it in To do. Or ✦ Plan a bigger goal with Claude.'),
+        btn('✦ Plan with Claude', () => (S.planner ? JC.openPlanner() : JC.planDialog([], undefined, false)), 'primary')));
+      return;
+    }
     $('#lanes').replaceChildren(...LANES.map(([id, name]) => {
       const list = tasks.filter(t => lane(t) === id);
       if (id === 'done') list.reverse();
       return h('section', { class: `lane ${id}`, ondragover: e => { e.preventDefault(); e.currentTarget.classList.add('over'); },
         ondragleave: e => e.currentTarget.classList.remove('over'),
         ondrop: e => { e.currentTarget.classList.remove('over'); if (dragId && id === 'done') post('move', { id: dragId, status: 'done' }); else if (dragId && id === 'todo') post('reorder', { id: dragId }); } },
-        h('h2', {}, name, h('span', { class: 'count' }, list.length)),
-        list.length ? list.map((t, i) => card(t, id === 'todo' ? i + 1 : 0)) : h('p', { class: 'muted small hint' }, hint(id)));
+        h('h2', {}, h('span', { class: 'ldot' }), name, h('span', { class: 'count' }, list.length)),
+        list.length ? list.map((t, i) => card(t, id === 'todo' ? i + 1 : 0)) : h('p', { class: 'muted small hint' }, hint(id)),
+        id === 'todo' ? h('button', { class: 'addtask', onclick: () => $('#title')?.focus() }, '+ Add task') : '');
     }));
   }
   const hint = id => ({ todo: 'Add a task above.', work: 'Running tasks show here.', needs: 'Approvals and questions land here.', review: 'Finished work waits here for review and merge.', done: 'Merged tasks.' })[id];
@@ -260,6 +266,7 @@
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
+      nx.tone === 'run' ? h('div', { class: 'pulsebar' }) : '',
       ...(t.asks || []).map(a => JC.askBox(t, a)),
       nx.actions.length ? h('div', { class: 'acts' }, nx.actions.map(([l, fn, style], i) => btn(l, fn, i === 0 ? 'primary' : style || 'ghost'))) : '');
     return el;
