@@ -186,9 +186,10 @@
       view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') && ['Clear backlog…', 'Archive every idle backlog task (asks first)', () => post('clearBacklog')],
     ].filter(Boolean);
     $('#toolbar').replaceChildren(
-      h('select', { onchange: e => { view = e.target.value; remember(); render(); } },
+      h('select', { title: 'Show all tasks, the backlog or one sprint; or start a new sprint', onchange: e => { if (e.target.value === '__newSprint') { e.target.value = view; return JC.newSprint(); } view = e.target.value; remember(); render(); } },
         h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
-        ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
+        ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`)),
+        h('option', { value: '__newSprint' }, '+ New sprint…')),
       btn('✦ Plan', () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
       (n => btn(`📎 Sources${n ? ` ${n}` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => JC.artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
