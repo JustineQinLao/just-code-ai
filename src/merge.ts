@@ -29,7 +29,8 @@ export const mergeMethods = {
     if (t?.status === 'done' && !t.worktree && t.branch && t.where !== 'direct') return g.mergedChanges(this.root, t.branch);
     if (t?.where === 'direct' && !t.init) return t.startHead && t.directFiles?.length ? g.workingChanges(this.root, t.startHead, t.directFiles) : Promise.resolve([]);
     if (!t?.worktree || !t.base || !fs.existsSync(t.worktree)) return Promise.resolve([]);
-    return g.changes(t.worktree, t.base);
+    // A folder git no longer knows (its record was lost) cannot be diffed: show the merge if there is one, else nothing.
+    return g.isWorktree(t.worktree).then(ok => ok ? g.changes(t.worktree!, t.base!) : t.branch ? g.mergedChanges(this.root, t.branch).catch(() => []) : []);
   },
 
   async guarded<T>(this: Runner, id: string, fn: (t: Task) => Promise<T>) {
