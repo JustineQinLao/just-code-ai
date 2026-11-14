@@ -6,3 +6,5 @@ out-test/
 
 
 data/
+# Local docs (guide, plans, follow-ups): kept on this machine, not in the repo
+docs/

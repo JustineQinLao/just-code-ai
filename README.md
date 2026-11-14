@@ -7,7 +7,7 @@ Own branch per task · approvals on the card · AI review · one-click merge
 
 </div>
 
-![The JustCode board: To do, Needs you, Working, Review and Done lanes](docs/screens/board.png)
+![The JustCode board: To do, Needs you, Working, Review and Done lanes](.github/readme/board.png)
 
 ## Why JustCode
 
@@ -23,12 +23,12 @@ Own branch per task · approvals on the card · AI review · one-click merge
 
 | Review the work | Plan with Claude |
 |---|---|
-| ![A task's review tab](docs/screens/task-review.png) | ![The planning panel](docs/screens/planner.png) |
+| ![A task's review tab](.github/readme/task-review.png) | ![The planning panel](.github/readme/planner.png) |
 | Each task shows its activity, changes, review and details. | **✦ Plan** turns a goal into small tasks with a *Done when* checklist, grouped into sprints. |
 
 | Agent map | On your phone |
 |---|---|
-| ![Every Claude session at work](docs/screens/agentMap.png) | ![Phone page](docs/smoke/app/04-permission.png) |
+| ![Every Claude session at work](.github/readme/agentMap.png) | ![Phone page](.github/readme/phone.png) |
 | Every session, subagent and reviewer, with time and tokens. | Approve, merge and watch tasks one lane at a time. |
 
 ## All features
@@ -109,7 +109,7 @@ the file. Then run **Developer: Reload Window** (⌘⇧P) to load the new versio
    - **Review**: the AI reviewer ran the tests and checked the diff. Issues go back to Claude by themselves.
    - Press **✓ Merge** when it passes.
 
-The full walkthrough is in [docs/GUIDE.md](docs/GUIDE.md), or press **?** on the board.
+For the full walkthrough, press **?** on the board.
 
 ## How it works
 
@@ -246,7 +246,7 @@ git tag v1.0.0 && git push origin v1.0.0
 Off by default. Enable the phone server (`justCode.phoneServer`) to open a small task page from your phone's browser
 on the **same network**, or pair the Android app in `android/` (**JustCode: Phone Link** shows a QR code); the computer must stay awake. Access needs a token, so keep it private. With Bypass
 permissions or `justCode.bypassAll`, anyone with the token can run unapproved commands. This differs from *Continue on
-phone*, which uses Remote Control. Pairing steps: [docs/GUIDE.md](docs/GUIDE.md) (section 11).
+phone*, which uses Remote Control. Pairing steps: press **?** on the board.
 
 ## Commands
 
@@ -270,7 +270,7 @@ Open the Command Palette (**⌘⇧P** / **Ctrl+Shift+P**) and type *JustCode*:
 - **A task is stuck on Needs you:** open the card and answer or press Allow / Deny.
 - **Merge conflict:** press **Resolve with Claude** on the card.
 - **Logs:** open the *JustCode* output channel (View > Output).
-- **Questions about a feature:** [docs/GUIDE.md](docs/GUIDE.md).
+- **Questions about a feature:** press **?** on the board.
 
 ## Limits
 
