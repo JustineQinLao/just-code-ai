@@ -24,6 +24,7 @@ test('extension: activates, opens the board, handles messages, writes only .just
     },
     construct() { return mk(`new ${name}`); },
   });
+  const stored: string[] = [];
   const vscode: any = {};
   for (const k of ['window', 'commands', 'env', 'Uri', 'StatusBarAlignment', 'ViewColumn', 'ConfigurationTarget', 'ThemeColor', 'languages', 'extensions']) vscode[k] = mk(k);
   vscode.workspace = new Proxy({}, { get(_, k) {
@@ -36,7 +37,7 @@ test('extension: activates, opens the board, handles messages, writes only .just
   try {
     const ext = require('../extension');
     const mem = () => { const m = new Map(); return { get: (k: string, d: unknown) => m.has(k) ? m.get(k) : d, update: async (k: string, v: unknown) => { m.set(k, v); }, keys: () => [...m.keys()] }; };
-    ext.activate({ subscriptions: [], globalState: mem(), workspaceState: mem(), secrets: { get: async () => undefined, store: async () => {}, delete: async () => {} },
+    ext.activate({ subscriptions: [], globalState: mem(), workspaceState: mem(), secrets: { get: async () => undefined, store: async (k: string) => { stored.push(k); }, delete: async () => {} },
       extensionUri: { fsPath: process.cwd() }, extension: { packageJSON: { version: '9.9.9' } }, extensionPath: process.cwd() });
     assert.deepEqual(Object.keys(cmds).sort(), ['justCode.addProject', 'justCode.exportAudit', 'justCode.exportSprintReport', 'justCode.open', 'justCode.phoneLink', 'justCode.setApiKey', 'justCode.setup', 'justCode.showPhonePairing']);
     cmds['justCode.open']();
@@ -45,6 +46,21 @@ test('extension: activates, opens the board, handles messages, writes only .just
     await send({ type: 'ready' });
     await send({ type: 'addTask', title: 'Smoke task', mode: 'acceptEdits' });
     await send({ type: 'phoneRevoke', id: 'all' });
+    // Pairing: the code goes to the panel only, never a shared sink; remote calls are ignored; server off issues no code.
+    const { handle } = require('../messages'), { sinks } = require('../host'), { phoneDevices } = require('../phonehost');
+    const seen: any[] = []; sinks.add((m: any) => seen.push(m));
+    const before = posted.length;
+    await handle({ type: 'phonePairing', root }, true);
+    await handle({ type: 'phoneUnpair', root }, true);
+    assert.equal(posted.length, before, 'remote pairing calls are ignored');
+    const tokenWrites = stored.filter(k => k === 'justCode.phoneToken').length;
+    await send({ type: 'phonePairing' });
+    const pairing = posted.slice(before).filter(m => m?.type === 'pairing');
+    assert.deepEqual(pairing, [{ type: 'pairing', on: false }], 'server off: on:false and no code');
+    assert.equal(seen.filter(m => m?.type === 'pairing').length, 0, 'pairing is not broadcast to shared sinks');
+    await send({ type: 'phoneUnpair' });
+    assert.ok(stored.filter(k => k === 'justCode.phoneToken').length > tokenWrites, 'unpair rotates the token');
+    assert.deepEqual(phoneDevices.list(), [], 'unpair clears devices');
     await new Promise(r => setTimeout(r, 200));
     const state = posted.filter(m => m?.type === 'state').pop();
     assert.deepEqual(state.board.tasks.map((t: any) => t.title), ['Smoke task']);

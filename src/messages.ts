@@ -336,11 +336,13 @@ export async function handle(m: any, remote = false) {
     }
     case 'phonePairing': {
       if (remote) return;
-      if (!setting('phoneServer', false)) { emit({ type: 'pairing', on: false }); return; }
+      // The code is for this panel only: never through emit(), which also streams to LAN clients of the mobile server.
+      const toPanel = (p: object) => void st.panel?.webview.postMessage({ type: 'pairing', ...p });
+      if (!setting('phoneServer', false)) { toPanel({ on: false }); return; }
       await syncPhone();
       const port = setting<number>('phoneServerPort', 7878), ip = lanIps()[0] ?? 'this-computer', code = issuePairingCode();
       const link = phoneLinkUrl(ip, port, code, st.phoneCert?.fingerprint);
-      emit({ type: 'pairing', on: true, qr: qrSvg(link), code, url: `${st.phoneCert ? 'https' : 'http'}://${ip}:${port}`, fingerprint: st.phoneCert ? st.phoneCert.fingerprint.match(/../g)!.join(':') : '' });
+      toPanel({ on: true, qr: qrSvg(link), code, url: `${st.phoneCert ? 'https' : 'http'}://${ip}:${port}`, fingerprint: st.phoneCert ? st.phoneCert.fingerprint.match(/../g)!.join(':') : '' });
       return;
     }
     case 'phoneUnpair':
