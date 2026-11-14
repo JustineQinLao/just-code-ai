@@ -114,7 +114,7 @@ export function checkHealth(h: HealthInput, policyErrors: string[]): Check[] {
   // artifacts.json: a list, and every task it names still exists.
   try {
     const list = JSON.parse(fs.readFileSync(jc('artifacts.json'), 'utf8'));
-    if (!Array.isArray(list) || list.some((e: any) => !e || typeof e.url !== 'string' || !Array.isArray(e.taskIds))) problem('registry', 'Artifact registry', '.justcode/artifacts.json is not a valid artifact list.', { action: 'resetRegistry', label: 'Reset registry' });
+    if (!Array.isArray(list) || list.some((e: any) => !e || typeof e.url !== 'string' || !Array.isArray(e.taskIds))) problem('registry', 'Artifact registry', '.justcode/artifacts.json is not a valid list.', { action: 'resetRegistry', label: 'Reset registry' });
     else {
       const gone = new Set(list.flatMap((e: any) => e.taskIds.filter((t: string) => !h.taskIds.has(t))));
       if (gone.size) problem('registry', 'Artifact registry', `.justcode/artifacts.json links ${gone.size} task(s) that no longer exist.`, { action: 'pruneRegistry', label: 'Remove the stale links' });
