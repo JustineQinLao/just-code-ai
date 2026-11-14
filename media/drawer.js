@@ -21,15 +21,20 @@
   }
 
   // Plan mode: Claude's plan, to build as is or send back with changes.
+  function buildMode() {
+    const forbid = JC.S.policy?.policy.forbidModes || [];
+    return JC.S.settings.defaultMode === 'plan' || forbid.includes(JC.S.settings.defaultMode) ? 'auto' : JC.S.settings.defaultMode;
+  }
+  const buildIt = (t, a) => { JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }); JC.post('setMode', { id: t.id, mode: buildMode() }); };
+
   function planBox(t, a) {
     let note;
-    const forbid = JC.S.policy?.policy.forbidModes || [];
-    const build = JC.S.settings.defaultMode === 'plan' || forbid.includes(JC.S.settings.defaultMode) ? 'auto' : JC.S.settings.defaultMode;
+    const build = buildMode();
     return JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       JC.h('div', { class: 'askhead' }, JC.h('b', {}, 'Claude\'s plan'), JC.h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
       JC.h('pre', { class: 'askdetail plan' }, a.plan || '(empty plan)'),
       JC.h('div', { class: 'acts' },
-        JC.btn(`Build it (${JC.modeName(build)})`, () => { JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }); JC.post('setMode', { id: t.id, mode: build }); }, 'primary'),
+        JC.btn(`Build it (${JC.modeName(build)})`, () => buildIt(t, a), 'primary'),
         JC.btn('Revise…', () => { note.hidden = !note.hidden; note.querySelector('input').focus(); })),
       note = JC.h('div', { class: 'row', hidden: true },
         JC.h('input', { class: 'grow', placeholder: 'What should change in the plan?', onkeydown: e => { if (e.key === 'Enter') send(); } }), JC.btn('Send', () => send())));
@@ -50,7 +55,9 @@
           } }),
           JC.h('span', { class: 'otext' }, JC.h('span', { class: 'olabel' }, o.label), o.description ? JC.h('span', { class: 'odesc' }, o.description) : '',
             o.preview ? JC.h('pre', { class: 'opreview' }, o.preview) : '')))),
-        JC.h('input', { class: 'other', placeholder: 'Other…', oninput: e => { other[i] = e.target.value; } }))),
+        JC.h('label', { class: 'opt other-row' }, JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, tabindex: -1, onchange: e => e.target.nextSibling.querySelector('input').focus() }),
+          JC.h('span', { class: 'otext' }, JC.h('input', { class: 'other', placeholder: 'Other…', 'aria-label': 'Other answer', oninput: e => { other[i] = e.target.value; const r = e.target.closest('label').querySelector('input'); r.checked = !!e.target.value; if (!q.multiSelect && e.target.value) picked[i].clear(); } })))
+      )),
       JC.h('div', { class: 'acts' },
         JC.btn('Answer', () => {
           const answers = {};
@@ -98,6 +105,13 @@
     document.body.classList.toggle('drawer-open', !!t);
     if (!t) return;
     const nx = JC.next(t);
+    const a0 = t.asks?.[0];
+    if (a0) {
+      const goAsk = () => { JC.tab = 'activity'; JC.render(); requestAnimationFrame(() => body.querySelector('.ask')?.scrollIntoView({ block: 'start' })); };
+      nx.actions = a0.kind === 'question' ? [['Answer', goAsk]]
+        : a0.kind === 'plan' ? [[`Build it (${JC.modeName(buildMode())})`, () => buildIt(t, a0)], ['Revise…', goAsk]]
+        : [['Allow', () => JC.post('answer', { id: t.id, ask: a0.id, choice: 'allow' })], ...(a0.always ? [['Always allow', () => JC.post('answer', { id: t.id, ask: a0.id, choice: 'always' })]] : []), ['Deny…', goAsk]];
+    }
     const live = t.run && t.run !== 'idle';
     menu = [
       t.status === 'todo' && ['▶ Run', () => JC.post('run', { id: t.id })],

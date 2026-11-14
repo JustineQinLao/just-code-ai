@@ -397,3 +397,4 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .tl .ok::before { background: var(--done); } .tl .live::before { background: var(--work); } .tl .err::before { background: var(--err); }
 .tl .err { color: var(--err); }
 .tl .note, .tl .model { color: var(--muted); font-size: 12px; } .tl .note::before { background: var(--needs); }
+.dbody .ask .other-row .otext { display: block; } .dbody .ask input.other { width: 100%; border: 0; background: none; padding: 0; font-weight: 600; }
