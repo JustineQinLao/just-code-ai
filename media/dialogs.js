@@ -255,6 +255,7 @@
   function setupDialog() {
     const st = JC.S.setup;
     if (!st) return;
+    const d0 = JC.$('#dlg'), top = d0.open && d0.dataset.kind === 'setup' ? d0.scrollTop : 0;   // a redraw on each state message keeps the scroll place
     const req = st.checks.filter(c => !c.optional || c.id === 'repo'), rec = st.checks.filter(c => !req.includes(c));
     const row = c => JC.h('div', { class: 'check' }, JC.h('span', { class: `ic ${c.ok ? 'ok' : c.optional ? 'opt' : 'bad'}` }, c.ok ? '✓' : c.optional ? '○' : '!'),
       JC.h('div', {}, JC.h('b', {}, c.label), JC.h('div', { class: 'muted small' }, c.detail)),
@@ -264,6 +265,7 @@
       ...req.map(row), rec.length ? JC.h('h4', {}, 'Recommended') : '', ...rec.map(row),
       JC.h('div', { class: 'row' }, JC.h('span', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : '📱 Remote Control needs a Claude account login.'),
         JC.h('span', { class: 'grow' }), JC.btn('Check again', () => JC.post('fix', { action: 'recheck' })))).dataset.kind = 'setup';
+    d0.scrollTop = top;
   }
 
   function report() {
