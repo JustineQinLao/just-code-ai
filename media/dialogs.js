@@ -222,15 +222,16 @@
         field('superpowers', 'superpowers plugin in sessions', sel(s.superpowers, [[true, 'On (when installed)'], [false, 'Off: saves tokens on every step']])),
         field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
         field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
+      JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More: always-allowed rules and API key'),
       JC.h('label', { class: 'blk' }, JC.h('span', {}, `Always allowed in ${JC.S.roots.find(r => r.path === JC.S.root)?.name ?? 'this project'}`),
         rules = JC.h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (JC.S.board.rules || []).join('\n')),
         JC.h('span', { class: 'muted small' }, 'Added when you press "Always allow…" on a card. Every task in this project gets them.')),
       f.allowedTools = JC.h('textarea', { rows: 3, placeholder: 'One rule per line, for every project' }, (s.allowedTools || []).join('\n')),
       JC.h('span', { class: 'muted small' }, 'Always allowed in every project.'),
+        JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost')),
       policySection(),
       phoneSection(),
-      JC.h('div', { class: 'row' }, JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost'), JC.btn('Setup checklist', () => { JC.showSetup = true; JC.$('#dlg').close(); JC.render(); }, 'ghost')),
-      JC.h('div', { class: 'acts' }, JC.btn('Save', () => {
+      JC.h('div', { class: 'row' }, JC.btn('Setup checklist', () => { JC.showSetup = true; JC.$('#dlg').close(); JC.render(); }, 'ghost'), JC.h('span', { class: 'grow' }), JC.btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         JC.post('settings', { values: {
           defaultMode: f.defaultMode.value, notifications: f.notifications.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
@@ -244,7 +245,7 @@
         JC.post('rules', { rules: lines(rules) });
         JC.$('#mode').dataset.set = '';
         JC.$('#dlg').close();
-      }, 'primary')));
+      }, 'primary'))).dataset.kind = 'prefs';
   }
 
   // Per task: tokens (build/review), check and review rounds, first-try pass, time. Totals for the current view.
@@ -313,12 +314,27 @@
     const P = JC.S.phone;
     if (!P || JC.REMOTE) return '';
     const day = ms => new Date(ms).toLocaleDateString();
-    return JC.h('details', { class: 'adv' }, JC.h('summary', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
+    return JC.h('div', { class: 'gsec' }, JC.h('h4', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
       JC.h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code from JustCode: Show Phone Pairing.` : 'Turn on justCode.phoneServer to use the phone page or the Android app.'),
       P.devices.length ? JC.h('ul', { class: 'small' }, P.devices.map(d => JC.h('li', { class: 'row' },
         JC.h('span', { class: 'grow' }, `Device …${d.id} · paired ${day(d.created)} · ${d.lastUsed ? `last used ${JC.savedAgo(d.lastUsed)}` : 'not used yet'} · expires ${day(d.expires)}`),
         JC.btn('Revoke', () => JC.post('phoneRevoke', { id: d.id }), 'ghost small')))) : '',
-      P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : '');
+      JC.h('div', { class: 'row' }, P.on ? JC.btn('Pair a phone…', () => JC.post('phonePairing'), 'ghost') : '', P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : ''));
+  }
+
+  // Phone pairing: QR code, one-time code, how to use it, HTTPS fingerprint.
+  function pairingDialog(m) {
+    if (!m.on) { JC.toast('Turn on the justCode.phoneServer setting first.'); return; }
+    const code = `${m.code.slice(0, 3)} ${m.code.slice(3)}`;
+    const qr = JC.h('div', { class: 'qr', role: 'img', 'aria-label': 'QR code' });
+    qr.innerHTML = m.qr;
+    const d = dialog('Pair a phone',
+      JC.h('div', { class: 'row pair' }, qr,
+        JC.h('div', { class: 'paircode' }, JC.h('div', {}, 'Pairing code'), JC.h('b', {}, code),
+          JC.h('span', { class: 'muted small' }, `One use, valid 10 minutes. Scan with the JustCode app, or open ${m.url} on the same Wi-Fi and type the code.`),
+          m.fingerprint ? JC.h('span', { class: 'muted small' }, `HTTPS on · fingerprint ${m.fingerprint}`) : '')),
+      JC.h('div', { class: 'row' }, JC.btn('New code', () => JC.post('phonePairing')), JC.btn('Unpair all devices', () => { JC.post('phoneUnpair'); JC.$('#dlg').close(); }, 'danger')));
+    d.dataset.kind = 'pairing';
   }
 
   // ⚙ → Policy: what .justcode/policy.json enforces in this project, and what it denied today.
@@ -327,8 +343,8 @@
     if (!P) return '';
     const p = P.policy, list = a => a.length ? a.join(', ') : 'none';
     const cost = k => p.maxCostUsd[k] ? `$${p.maxCostUsd[k]}` : 'no limit';
-    return JC.h('details', { class: 'adv', open: !!P.errors.length },
-      JC.h('summary', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
+    return JC.h('div', { class: 'gsec' },
+      JC.h('h4', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
       JC.h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Edit the file to change them; they apply at once.'),
       ...P.errors.map(e => JC.h('p', { class: 'err small' }, e)),
       JC.h('ul', { class: 'small' },
@@ -411,5 +427,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
 })();

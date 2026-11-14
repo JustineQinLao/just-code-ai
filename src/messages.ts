@@ -24,7 +24,7 @@ import { ensureCert, PhoneCert } from './phonecert';
 import { Device, DeviceStore, startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
-import { hub, phoneDevices } from './phonehost';
+import { hub, phoneDevices, lanIps, loadPhoneToken, newToken, syncPhone } from './phonehost';
 import { BYPASS_TEXT, bin, bypassAllOn, cfg, commandCache, confirm, confirmFor, emit, ensureBypassAll, env, limits, open, overrides, pick, push, q, roots, runner, runnerFor, runners, saved, savingTerms, setCurrent, setting, st } from './host';
 import { fix, recheck } from './setupflow';
 import { publishArtifact, saveArtifactSource } from './artifact-terminal';
@@ -334,6 +334,23 @@ export async function handle(m: any, remote = false) {
       if (src) void saveArtifactSource(r.root, src).then(() => push());
       return;
     }
+    case 'phonePairing': {
+      if (remote) return;
+      if (!setting('phoneServer', false)) { emit({ type: 'pairing', on: false }); return; }
+      await syncPhone();
+      const port = setting<number>('phoneServerPort', 7878), ip = lanIps()[0] ?? 'this-computer', code = issuePairingCode();
+      const link = phoneLinkUrl(ip, port, code, st.phoneCert?.fingerprint);
+      emit({ type: 'pairing', on: true, qr: qrSvg(link), code, url: `${st.phoneCert ? 'https' : 'http'}://${ip}:${port}`, fingerprint: st.phoneCert ? st.phoneCert.fingerprint.match(/../g)!.join(':') : '' });
+      return;
+    }
+    case 'phoneUnpair':
+      if (remote) return;
+      await st.ctx.secrets.store('justCode.phoneToken', newToken()); await loadPhoneToken();
+      phoneDevices.save([]);
+      st.phone?.close(); st.phone = undefined; await syncPhone();
+      r.audit('phone.action', undefined, 'unpaired all devices', 'user');
+      push();
+      return;
     case 'phoneRevoke': phoneDevices.save(phoneDevices.list().filter(d => m.id !== 'all' && d.id !== m.id)); r.audit('phone.action', undefined, `revoked ${m.id === 'all' ? 'all devices' : `device …${m.id}`}`, 'user'); return;
     case 'sprintReport': {
       const sp = s.sprint(m.sprintId);
