@@ -55,7 +55,7 @@
           } }),
           JC.h('span', { class: 'otext' }, JC.h('span', { class: 'olabel' }, o.label), o.description ? JC.h('span', { class: 'odesc' }, o.description) : '',
             o.preview ? JC.h('pre', { class: 'opreview' }, o.preview) : '')))),
-        JC.h('label', { class: 'opt other-row' }, JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, tabindex: -1, onchange: e => e.target.nextSibling.querySelector('input').focus() }),
+        JC.h('label', { class: 'opt other-row' }, JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, tabindex: -1, onchange: e => { if (!q.multiSelect) picked[i].clear(); e.target.nextSibling.querySelector('input').focus(); } }),
           JC.h('span', { class: 'otext' }, JC.h('input', { class: 'other', placeholder: 'Other…', 'aria-label': 'Other answer', oninput: e => { other[i] = e.target.value; const r = e.target.closest('label').querySelector('input'); r.checked = !!e.target.value; if (!q.multiSelect && e.target.value) picked[i].clear(); } })))
       )),
       JC.h('div', { class: 'acts' },

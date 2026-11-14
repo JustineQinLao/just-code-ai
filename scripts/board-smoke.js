@@ -83,6 +83,10 @@ const EXERCISE = `async () => {
       const box = [...document.querySelectorAll('#drawer .ask')].find(b => b.innerText.includes(label));
       if (!box) { errs.push('ask box missing: ' + a.kind); continue; }
       if (a.kind === 'question') {
+        // Option, then the empty Other row: the old option must not be submitted.
+        box.querySelector('.opt input').click(); box.querySelector('.other-row input').click();
+        posts.length = 0; [...box.querySelectorAll('button')].find(b => b.innerText.startsWith(label)).click(); await wait(50);
+        if (posts.some(x => x.type === 'answer')) errs.push('question posted a stale option after Other was selected');
         const oi = box.querySelector('input.other'); oi.value = 'stale'; oi.dispatchEvent(new Event('input', { bubbles: true }));
         box.querySelector('.opt input').click(); // picking an option after typing in Other must win
       }
