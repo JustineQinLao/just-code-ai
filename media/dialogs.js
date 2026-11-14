@@ -179,7 +179,8 @@
   function settings() {
     const s = JC.S.settings;
     const f = {};
-    const field = (key, label, input, help) => JC.h('label', { class: 'blk' }, JC.h('span', {}, label), f[key] = input, help ? JC.h('span', { class: 'muted small' }, help) : '');
+    const els = {};
+    const field = (key, label, input, help) => els[key] = JC.h('label', { class: 'blk' }, JC.h('span', {}, label), f[key] = input, help ? JC.h('span', { class: 'muted small' }, help) : '');
     const sel = (v, opts) => JC.h('select', {}, opts.map(([k, l]) => JC.h('option', { value: k, selected: String(v) === String(k) }, l)));
     const effort = v => sel(v, [['low', 'Low (fewest tokens)'], ['medium', 'Medium'], ['high', 'High'], ['', 'Model default']]);
     // Every model in one dropdown (aliases follow the newest version); "Other…" takes any model id. Reads like an input: .value.
@@ -195,12 +196,11 @@
       return box;
     };
     let rules;
-    dialog('Settings',
-      JC.h('div', { class: 'grid' },
+    const build = () => [
         field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, JC.MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
         field('notifications', 'Notifications', sel(s.notifications || 'actionable', [['actionable', 'When a task needs me, is ready or failed'], ['errors', 'Only errors'], ['off', 'Off']]), 'The board and the JustCode output log always show everything.'),
-        field('maxParallel', 'Tasks running at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
-        field('taskModel', 'Task model', models(s.taskModel)),
+        field('maxParallel', 'Tasks at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
+        field('taskModel', 'Model for tasks', models(s.taskModel)),
         field('taskEffort', 'Task thinking', effort(s.taskEffort)),
         field('reviewModel', 'Reviewer model', models(s.review.model)),
         field('reviewEffort', 'Reviewer thinking', effort(s.review.effort)),
@@ -209,10 +209,10 @@
         field('allowSubagents', 'Subagents in tasks', sel(s.subagents, [[false, 'Off (saves the most tokens)'], [true, 'On (they run on Haiku)']])),
         field('maxReviews', 'Review rounds before it waits for you', sel(s.review.maxAttempts, [1, 2, 3, 4, 5].map(n => [n, String(n)]))),
         field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
-        field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
+        field('autoMerge', 'Merge automatically after review', sel(s.review.autoMerge, [[false, 'Off'], [true, 'On (not critical ones)']])),
         field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
         field('idleMinutes', 'Close idle Claude processes after (minutes)', JC.h('input', { type: 'number', min: 1, value: s.idleMinutes })),
-        field('checks', 'Checks after each turn (no tokens)', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${JC.S.detectedChecks?.length ? `: ${JC.S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
+        field('checks', 'Checks', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${JC.S.detectedChecks?.length ? `: ${JC.S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
           'Failures go back to Claude before the AI review.'),
         field('checksCustom', 'My check commands (one per line)', JC.h('textarea', { rows: 2, placeholder: 'npm test\nnpx tsc --noEmit' }, s.checks !== 'auto' ? s.checks : '')),
         field('folderSetup', 'Task folder setup', sel(s.setup === '' ? 'off' : s.setup === 'auto' ? 'auto' : 'custom', [['auto', 'Auto: link node_modules, use .venv'], ['off', 'Off'], ['custom', 'My command (below)']])),
@@ -221,16 +221,23 @@
         field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
         field('superpowers', 'superpowers plugin in sessions', sel(s.superpowers, [[true, 'On (when installed)'], [false, 'Off: saves tokens on every step']])),
         field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
-        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
+        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')
+    ];
+    build();
+    const MAIN = ['defaultMode', 'maxParallel', 'taskModel', 'maxReviews', 'autoMerge', 'checks'];
+    dialog('Settings',
+      JC.h('div', { class: 'grid' }, MAIN.map(k => els[k])),
+      JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More settings'), JC.h('div', { class: 'grid' }, Object.keys(els).filter(k => !MAIN.includes(k)).map(k => els[k]))),
+      JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More: always-allowed rules and API key'),
       JC.h('label', { class: 'blk' }, JC.h('span', {}, `Always allowed in ${JC.S.roots.find(r => r.path === JC.S.root)?.name ?? 'this project'}`),
         rules = JC.h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (JC.S.board.rules || []).join('\n')),
         JC.h('span', { class: 'muted small' }, 'Added when you press "Always allow…" on a card. Every task in this project gets them.')),
       f.allowedTools = JC.h('textarea', { rows: 3, placeholder: 'One rule per line, for every project' }, (s.allowedTools || []).join('\n')),
       JC.h('span', { class: 'muted small' }, 'Always allowed in every project.'),
+        JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost')),
       policySection(),
       phoneSection(),
-      JC.h('div', { class: 'row' }, JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost'), JC.btn('Setup checklist', () => { JC.showSetup = true; JC.$('#dlg').close(); JC.render(); }, 'ghost')),
-      JC.h('div', { class: 'acts' }, JC.btn('Save', () => {
+      JC.h('div', { class: 'row' }, JC.btn('Setup checklist', () => { JC.showSetup = true; JC.$('#dlg').close(); JC.render(); }, 'ghost'), JC.h('span', { class: 'grow' }), JC.btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         JC.post('settings', { values: {
           defaultMode: f.defaultMode.value, notifications: f.notifications.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
@@ -244,7 +251,7 @@
         JC.post('rules', { rules: lines(rules) });
         JC.$('#mode').dataset.set = '';
         JC.$('#dlg').close();
-      }, 'primary')));
+      }, 'primary'))).dataset.kind = 'prefs';
   }
 
   // Per task: tokens (build/review), check and review rounds, first-try pass, time. Totals for the current view.
@@ -313,12 +320,27 @@
     const P = JC.S.phone;
     if (!P || JC.REMOTE) return '';
     const day = ms => new Date(ms).toLocaleDateString();
-    return JC.h('details', { class: 'adv' }, JC.h('summary', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
+    return JC.h('div', { class: 'gsec' }, JC.h('h4', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
       JC.h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code from JustCode: Show Phone Pairing.` : 'Turn on justCode.phoneServer to use the phone page or the Android app.'),
       P.devices.length ? JC.h('ul', { class: 'small' }, P.devices.map(d => JC.h('li', { class: 'row' },
         JC.h('span', { class: 'grow' }, `Device …${d.id} · paired ${day(d.created)} · ${d.lastUsed ? `last used ${JC.savedAgo(d.lastUsed)}` : 'not used yet'} · expires ${day(d.expires)}`),
         JC.btn('Revoke', () => JC.post('phoneRevoke', { id: d.id }), 'ghost small')))) : '',
-      P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : '');
+      JC.h('div', { class: 'row' }, P.on ? JC.btn('Pair a phone…', () => JC.post('phonePairing'), 'ghost') : '', P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : ''));
+  }
+
+  // Phone pairing: QR code, one-time code, how to use it, HTTPS fingerprint.
+  function pairingDialog(m) {
+    if (!m.on) { JC.toast('Turn on the justCode.phoneServer setting first.'); return; }
+    const code = `${m.code.slice(0, 3)} ${m.code.slice(3)}`;
+    const qr = JC.h('div', { class: 'qr', role: 'img', 'aria-label': 'QR code' });
+    qr.innerHTML = m.qr;
+    const d = dialog('Pair a phone',
+      JC.h('div', { class: 'row pair' }, qr,
+        JC.h('div', { class: 'paircode' }, JC.h('div', {}, 'Pairing code'), JC.h('b', {}, code),
+          JC.h('span', { class: 'muted small' }, `One use, valid 10 minutes. Scan with the JustCode app, or open ${m.url} on the same Wi-Fi and type the code.`),
+          m.fingerprint ? JC.h('span', { class: 'muted small' }, `HTTPS on · fingerprint ${m.fingerprint}`) : '')),
+      JC.h('div', { class: 'row' }, JC.btn('New code', () => JC.post('phonePairing')), JC.btn('Unpair all devices', () => JC.post('phoneUnpair'), 'danger')));
+    d.dataset.kind = 'pairing';
   }
 
   // ⚙ → Policy: what .justcode/policy.json enforces in this project, and what it denied today.
@@ -327,8 +349,8 @@
     if (!P) return '';
     const p = P.policy, list = a => a.length ? a.join(', ') : 'none';
     const cost = k => p.maxCostUsd[k] ? `$${p.maxCostUsd[k]}` : 'no limit';
-    return JC.h('details', { class: 'adv', open: !!P.errors.length },
-      JC.h('summary', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
+    return JC.h('div', { class: 'gsec' },
+      JC.h('h4', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
       JC.h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Edit the file to change them; they apply at once.'),
       ...P.errors.map(e => JC.h('p', { class: 'err small' }, e)),
       JC.h('ul', { class: 'small' },
@@ -411,5 +433,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
 })();

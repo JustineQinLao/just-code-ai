@@ -358,6 +358,7 @@
     else if (m.type === 'usedSource') { JC.srcOff.delete(m.sourceId); JC.renderAddOptions(); }
     else if (m.type === 'picked') JC.addPicked(m.files);
     else if (m.type === 'dialog') JC.bridged(m);
+    else if (m.type === 'pairing') JC.pairingDialog(m);
     else if (m.type === 'toast') JC.toast(m.text);
     else if (m.type === 'open') window.open(m.url, '_blank', 'noopener');
     else if (m.type === 'copy') { (navigator.clipboard?.writeText(m.text) ?? Promise.reject()).then(() => JC.toast('Copied.'), () => JC.toast('Could not copy.')); }

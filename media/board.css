@@ -430,3 +430,12 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .srchead .tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; }
 .dlgbody .note { padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--fg) 6%, transparent); font-size: 12px; }
 .dlgbody .muted { margin: 0; }
+dialog[data-kind="prefs"] .grid { grid-template-columns: 1fr 1fr; }
+@media (max-width: 560px) { dialog[data-kind="prefs"] .grid { grid-template-columns: 1fr; } }
+.gsec { border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.pair { align-items: flex-start; gap: 18px; }
+.pair .qr { width: 180px; height: 180px; background: #fff; padding: 4px; border-radius: 8px; flex: none; }
+.pair .qr svg { width: 100%; height: 100%; }
+.paircode { display: grid; gap: 8px; flex: 1; min-width: 200px; }
+.paircode b { font-size: 28px; letter-spacing: 6px; font-variant-numeric: tabular-nums; }
+.gsec h4 { margin: 8px 0 0; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
