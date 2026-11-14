@@ -48,8 +48,11 @@ export const phoneState = () => {
   return { projects: phoneProjects(roots()), current: st.current, tasks: (r?.store.data.tasks ?? []).filter(t => !t.archived).map(t => {
     const l = r!.live(t.id);
     return { id: t.id, title: t.title, status: t.status, busy: l.busy, asks: l.asks, review: t.review?.state,
-      canMerge: canPhoneMerge(t) };
-  }) };
+      canMerge: canPhoneMerge(t),
+      // What status.js lane() reads, so the phone sorts cards exactly like the board.
+      lt: { run: l.run, phase: l.phase, reviewing: l.reviewing, error: t.error, conflicts: t.conflicts, remote: t.remote, limited: t.limited, quick: t.quick, reply: t.reply ? 1 : 0, where: t.where, directFiles: t.directFiles,
+        review: t.review && { state: t.review.state, attempts: t.review.attempts, extraRounds: t.review.extraRounds, hold: t.review.hold }, checks: t.checks && { state: t.checks.state } } };
+  }), settings: { review: { maxAttempts: setting('maxReviews', 3) } } };
 };
 
 export async function phoneAct(m: any, via = 'phone'): Promise<string | void> {

@@ -258,11 +258,15 @@ test('phone page: has the project picker and the column tabs', async () => {
     const html = await (await fetch(base + '/?t=tok')).text();
     assert.match(html, /<div id="pj"/);
     assert.match(html, /<div id="tabs"/);
-    for (const k of ['todo', 'doing', 'review', 'done']) assert.ok(html.includes(`'${k}'`), k);
+    for (const k of ['needs', 'work', 'review', 'todo', 'done']) assert.ok(html.includes(`'${k}'`), k);
+    assert.ok(html.indexOf("LK=['needs','work','review','todo','done']") > 0);
+    assert.match(html, /<span class="br"><b>◆<\/b> JustCode<\/span>/);
+    assert.match(html, /<script src="\/status\.js"><\/script>/);
+    assert.match(html, /prefers-color-scheme:dark/);
     assert.match(html, /type:'project'/);
     assert.match(html, /type:'move'/);
     assert.match(html, /name="viewport" content="width=device-width/);
-    for (const l of ['To do', 'Doing', 'Review', 'Done']) assert.ok(html.includes(`${l}:'`) || html.includes(`'${l}'`), l);
+    for (const l of ['Needs you', 'Working', 'Review', 'To do', 'Done']) assert.ok(html.includes(`${l}'`), l);
     assert.match(html, /<input id="t"/);
     assert.match(html, /\$\('t'\)\.hidden=true/);
     assert.match(html, /const ps=el\('select'/);
@@ -320,7 +324,8 @@ test('phone page: pending permission asks show and notify on every tab, not just
   const { srv, base } = await boot();
   try {
     const html = await (await fetch(base + '/?t=tok')).text();
-    assert.match(html, /t\.status===col\|\|t\.asks\.length/);
+    assert.match(html, /for\(const t of inL\(col\)\)/);
+    assert.match(html, /J\.lane\(/);
     assert.match(html, /for\(const t of data\.tasks\)for\(const a of t\.asks\)/);
     assert.doesNotMatch(html, /Move to done/);
   } finally { srv.close(); }
@@ -351,10 +356,10 @@ test('phone page: Move select blurs then posts a move; drag onto a tab posts it;
   const src = html.match(/let dragging=false.*?c\.addEventListener\('touchcancel',end\)\}/s)![0];
   const acts: any[] = []; const ls: Record<string, any> = {}; let fire: any;
   const card = { style: {} as any, addEventListener: (n: string, f: any) => { ls[n] = f; }, };
-  const tab = { id: 'tab-doing', closest: () => tab };
+  const tab = { id: 'tab-work', closest: () => tab };
   const doc = { elementFromPoint: () => ({ closest: () => tab }) };
   const $ = (id: string) => ({ style: {} as any });
-  const fn = new vm.Script(`(function(document,$,act,setTimeout,clearTimeout,navigator){${src};return {dragMove,get:()=>dragging}})`).runInThisContext();
+  const fn = new vm.Script(`(function(document,$,act,setTimeout,clearTimeout,navigator){const LK=['needs','work','review','todo','done'],MV={work:'doing',review:'review',todo:'todo'};${src};return {dragMove,get:()=>dragging}})`).runInThisContext();
   const m = fn(doc, $, (x: any) => acts.push(x), (f: any) => { fire = f; return 1; }, () => { fire = undefined; }, {});
   m.dragMove(card, { id: 'a', status: 'todo' });
   const pt = { clientX: 5, clientY: 5 };

@@ -1,7 +1,12 @@
 import * as http from 'http';
 import * as https from 'https';
 import { timingSafeEqual, randomBytes, randomInt, createHash } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PAGE } from './phonepage';
+
+// The board's shared status.js (lane()), served to the paired phone page. Found next to the bundle (out/ or out-test/src).
+const statusJs = () => { for (const d of ['../media', '../../media']) { try { return fs.readFileSync(path.join(__dirname, d, 'status.js'), 'utf8'); } catch { /* try next */ } } return 'window.JCStatus=undefined;'; };
 
 export interface PhoneDeps {
   token: string;
@@ -154,6 +159,7 @@ export function startPhoneServer(port: number, d: PhoneDeps): Promise<http.Serve
       if (paired) d.paired?.(via);
     }
     if (url.pathname === '/') return send(200, PAGE, 'text/html');
+    if (url.pathname === '/status.js') return send(200, statusJs(), 'application/javascript');
     if (url.pathname === '/api/state' && req.method === 'GET') return send(200, JSON.stringify(d.state()));
     if (url.pathname === '/api/detail' && req.method === 'GET' && d.detail) {
       d.detail(url.searchParams.get('id') ?? '').then(j => send(200, JSON.stringify(j)), () => send(500, '{"error":"detail failed"}'));
