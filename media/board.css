@@ -372,3 +372,14 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .addtask { width: 100%; background: transparent; border: 1px dashed var(--line); color: var(--muted); }
 .empty b { color: var(--fg); font-size: 16px; }
 .empty { display: grid; gap: 10px; justify-items: center; color: var(--muted); }
+
+/* task panel shell */
+.dhead .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+.dhead .stepper { display: flex; gap: 4px; }
+.stepper span { flex: 1; text-align: center; padding: 3px; border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 11px; }
+.stepper .ok { color: var(--done); }
+.stepper .now { background: var(--accent); color: var(--accent-fg, #fff); font-weight: 600; }
+.dnext { padding: 8px 10px; border-radius: 8px; background: var(--panel); color: var(--fg); display: grid; gap: 6px; font-size: 13px; }
+.dnext.warn { background: var(--warnbg); } .dnext.err { background: color-mix(in srgb, var(--err) 12%, var(--bg)); } .dnext.ok { background: var(--okbg); }
+.dnext.run::before { display: none; }
+.dhead { padding-bottom: 0; }
