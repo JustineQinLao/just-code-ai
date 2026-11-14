@@ -143,16 +143,17 @@
     if (l.held) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Usage limit reached. '),
       `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
     const st = S.setup;
-    if (st && !st.ready && !setupAsked) { setupAsked = true; showSetup = true; }
-    if (st && showSetup) { showSetup = false; JC.setupDialog(); }
+    if (st && !st.ready && !setupAsked && !$('#dlg').open) { setupAsked = true; showSetup = true; }
+    if (st && showSetup && !$('#dlg').open) { showSetup = false; JC.setupDialog(); }
     if (!st) out.push(h('div', { class: 'banner info' }, 'Checking your setup…'));
+    if (st && !st.ready && !REMOTE) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Setup is not finished. '), 'Some things tasks need are missing.'), btn('Get set up', () => JC.setupDialog(), 'primary')));
     if (st?.ready && !REMOTE) {
       const sick = st.checks.filter(c => !c.ok && HEALTH.has(c.id));
       if (sick.length) out.push(h('div', { class: `banner ${sick.some(c => c.id === 'registry') ? 'err' : 'warn'}` }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
         btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : JC.setupDialog(), 'ghost')));
     }
     const over = S.board.tasks.find(t => !t.archived && /^Budget reached/.test(t.error || ''));
-    if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/ Raise.*$/, '')} Raise it in policy.json, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
+    if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in policy.json, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => JC.openTask(init.running.id), 'primary')));
