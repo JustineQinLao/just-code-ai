@@ -179,31 +179,31 @@
     const q = S.queue;
     const sprint = S.board.sprints.find(s => s.id === view);
     const editable = tasks.filter(t => t.status === 'todo' && !t.worktree && !t.queued);
+    const extra = [
+      ['+ Sprint', 'Start a new sprint', () => JC.newSprint()],
+      sprint && editable.length && ['✦ Edit sprint (' + editable.length + ')', `Edit every not-started task in ${sprint.name} with one prompt`, () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint, true)],
+      sprint && !sprint.active && ['Set active', `Make ${sprint.name} the active sprint`, () => post('activateSprint', { sprintId: sprint.id })],
+      sprint && ['Close sprint', `Close ${sprint.name}`, () => post('closeSprint', { sprintId: sprint.id })],
+      sprint?.branch && tasks.length && tasks.every(t => t.status === 'done') && [`Merge sprint into ${sprint.target}`, `${sprint.branch} → ${sprint.target}`, () => post('mergeSprint', { sprintId: sprint.id })],
+      sprint && ['Delete sprint…', 'Asks first. Its tasks move to the Backlog', () => post('deleteSprint', { sprintId: sprint.id })],
+      ready.length && [`✓ Merge ready (${ready.length})`, 'Merge every task whose review passed', () => post('mergeReady', { ids: ready.map(t => t.id) })],
+      view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') && ['Clear backlog…', 'Archive every idle backlog task (asks first)', () => post('clearBacklog')],
+    ].filter(Boolean);
     $('#toolbar').replaceChildren(
       h('select', { onchange: e => { view = e.target.value; remember(); render(); } },
         h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
         ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
-      btn('+ Sprint', () => JC.newSprint(), 'ghost'),
-      sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
-      sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
-      sprint?.branch ? h('span', { class: 'muted small', title: `Tasks in ${sprint.name} merge into ${sprint.branch}. When the last one merges, it merges into ${sprint.target}.` }, `⎇ ${sprint.branch} → ${sprint.target}`) : '',
-      sprint?.branch && tasks.length && tasks.every(t => t.status === 'done') ? btn(`Merge sprint into ${sprint.target}`, () => post('mergeSprint', { sprintId: sprint.id }), 'ghost') : '',
-      view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') ? btn('Clear backlog…', () => post('clearBacklog'), 'ghost', 'Archive every idle backlog task (asks first; undo with Show archived tasks)') : '',
-      sprint ? btn('Delete sprint…', () => post('deleteSprint', { sprintId: sprint.id }), 'ghost', 'Remove this sprint (asks first). Its tasks move to the Backlog') : '',
       btn('✦ Plan', () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
-      sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
-      btn('🎨 Design', () => JC.designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
+      (n => btn(`📎 Sources${n ? ` ${n}` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => JC.artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
-      (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
+      btn('🎨 Design', () => JC.designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); JC.openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
         (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
-      ready.length ? btn(`✓ Merge ready (${ready.length})`, () => post('mergeReady', { ids: ready.map(t => t.id) })) : '',
-      btn(`▶ Run all${todo.length ? ` (${todo.length})` : ''}`, () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
-      btn('🕘', () => JC.historyDialog(), 'ghost icon', 'Prompt history: every prompt you sent, and each session'),
-      btn('⋯', () => JC.moreMenu(), 'ghost icon', 'Agent map, report, history, archived tasks'));
+      btn('▶ Run all', () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
+      btn(ready.length ? '⋯ •' : '⋯', () => JC.moreMenu(extra), 'ghost icon', ready.length ? `${ready.length} task${ready.length === 1 ? '' : 's'} ready to merge: open this menu` : 'Sprints, merge, agent map, report, history, archived tasks'));
   }
 
   const costOf = l => l.reduce((n, t) => n + (t.costUsd || 0), 0);
@@ -217,15 +217,14 @@
     const n = id => tasks.filter(t => lane(t) === id).length;
     const parts = [['done', 'done', n('done')], ['review', 'in review', n('review')], ['work', 'working', n('work')], ['needs', 'need you', n('needs')], ['todo', 'to do', n('todo')]];
     const done = n('done'), pct = Math.round(done / tasks.length * 100);
-    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') },
-      h('div', { class: 'row' }, h('b', {}, sp.name), sp.goal ? h('span', { class: 'muted grow' }, sp.goal) : h('span', { class: 'grow' }),
-        h('span', { class: 'small' }, `${done} of ${tasks.length} done · ${pct}%`),
-        !REMOTE ? btn('Report', () => post('sprintReport', { sprintId: sp.id }), 'ghost small', 'Export this sprint\'s report (tasks, merges, cost, audit highlights, artifacts) to .justcode/reports') : '',
-        (b => b ? h('span', { class: `small${b.max && b.spent >= b.max ? ' err' : ''}`, title: 'Estimated cost of this sprint\'s tasks and reviews, against maxCostUsd.sprint in .justcode/policy.json' }, ` · $${b.spent.toFixed(2)}${b.max ? ` / $${b.max}` : ''}`) : '')(sprintBudget(sp.id))),
+    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') + (sp.branch ? ` — ⎇ ${sp.branch} → ${sp.target}` : '') },
+      h('b', {}, sp.name),
       h('div', { class: 'bar', role: 'progressbar', 'aria-label': `${sp.name} progress`, 'aria-valuemin': '0', 'aria-valuemax': String(tasks.length), 'aria-valuenow': String(done) },
         parts.filter(([, , c]) => c).map(([id, , c]) => h('i', { class: `seg ${id}`, style: `flex:${c}` }))),
-      h('div', { class: 'legend small muted' }, parts.filter(([, , c]) => c).map(([id, l, c]) => h('span', {}, h('i', { class: `dot ${id}` }), ` ${c} ${l}`)),
-        S.queue.queued.length ? h('span', {}, ` · ▶ ${S.queue.queued.length} queued`) : '')));
+      h('span', { class: 'muted small' }, `${done} of ${tasks.length} done`),
+      (b => b ? h('span', { class: `small cost${b.max && b.spent >= b.max ? ' err' : ''}`, title: 'Estimated cost of this sprint\'s tasks and reviews, against maxCostUsd.sprint in .justcode/policy.json' }, `$${b.spent.toFixed(2)}${b.max ? ` / $${b.max}` : ''}`) : '')(sprintBudget(sp.id)),
+      h('div', { class: 'spacer' }),
+      !REMOTE ? btn('Report', () => post('sprintReport', { sprintId: sp.id }), 'ghost small', 'Export this sprint\'s report (tasks, merges, cost, audit highlights, artifacts) to .justcode/reports') : ''));
   }
 
   const LANES = [['todo', 'To do'], ['work', 'Working'], ['needs', 'Needs you'], ['review', 'Review'], ['done', 'Done']];

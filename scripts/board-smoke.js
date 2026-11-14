@@ -65,6 +65,15 @@ const EXERCISE = `async () => {
   } catch (e) { errs.push('composer: ' + e.message); }
   out.stuckText = [...document.querySelectorAll('article.card')].find(a => a.innerText.includes(stuck.title.slice(0, 20)))?.innerText.slice(0, 300);
   out.toolbarButtons = [...document.querySelectorAll('#toolbar button')].map(b => b.innerText).join(' | ');
+  try { // toolbar order and the actions moved into ⋯ must stay reachable
+    const order = ['✦ Plan', '📎 Sources', '⧉ Artifacts', '🎨 Design', '▶ Run all'], got = out.toolbarButtons.split(' | ');
+    const idx = order.map(o => got.findIndex(g => g.startsWith(o)));
+    if (idx.some((i, k) => i < 0 || (k && i < idx[k - 1]))) errs.push('toolbar order: ' + out.toolbarButtons);
+    [...document.querySelectorAll('#toolbar button')].pop().click();
+    out.moreItems = [...document.querySelectorAll('#dlg .menuitem b')].map(b => b.innerText).join(' | ');
+    for (const l of ['+ Sprint', 'Agent map', 'Report', 'Prompt history']) if (!out.moreItems.includes(l)) errs.push('⋯ menu lacks ' + l);
+    document.querySelector('#dlg').close();
+  } catch (e) { errs.push('toolbar: ' + e.message); }
   out.banners = [...document.querySelectorAll('.banner')].map(b => b.innerText.slice(0, 80));
   out.errs = errs; out.posts = posts.map(m => m.type).slice(0, 30).join(',');
   return out;
