@@ -150,7 +150,7 @@
     if (st?.ready && !REMOTE) {
       const sick = st.checks.filter(c => !c.ok && HEALTH.has(c.id));
       if (sick.length) out.push(h('div', { class: `banner ${sick.some(c => c.id === 'registry') ? 'err' : 'warn'}` }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
-        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : JC.setupDialog(), 'ghost')));
+        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post(sick[0].fix.action === 'designPick' ? 'designPick' : 'fix', { action: sick[0].fix.action }) : JC.setupDialog(), 'ghost')));
     }
     const over = S.board.tasks.find(t => !t.archived && /^Budget reached/.test(t.error || ''));
     if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in policy.json, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));

@@ -1207,6 +1207,11 @@ test('design: setup reads DESIGN.md from the code without asking; the checklist 
   assert.match(body, /Never invent values/);
   const st = await checkSetup(undefined, {}, tmp(), false, { plugin: () => undefined, designMd: () => false });
   assert.deepEqual(st.checks.find(c => c.id === 'designMd')!.fix, { action: 'designFromProject', label: 'Write from project' });
+  // Claude already read the code and found no UI: the row offers the catalog instead of the same button again.
+  const tried = await checkSetup(undefined, {}, tmp(), false, { plugin: () => undefined, designMd: () => false, designTried: () => true });
+  const row = tried.checks.find(c => c.id === 'designMd')!;
+  assert.deepEqual(row.fix, { action: 'designPick', label: 'Choose a design' });
+  assert.match(row.detail!, /no styles in the code yet/);
 });
 
 test('splitTitle: a long prompt typed as the title keeps a short title and moves the text to the description', () => {

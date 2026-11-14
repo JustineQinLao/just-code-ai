@@ -19,7 +19,7 @@ export interface Check {
 export interface SetupState { checks: Check[]; ready: boolean; remote: boolean; at: number }
 
 export async function checkSetup(bin: string | undefined, env: Record<string, string>, root: string | undefined, apiKey: boolean,
-  lookup: { plugin: (name: string) => string | undefined; designMd: (root: string) => boolean } = { plugin: n => installedPlugin(n), designMd: r => projectSetup(r).designMd }): Promise<SetupState> {
+  lookup: { plugin: (name: string) => string | undefined; designMd: (root: string) => boolean; designTried?: (root: string) => boolean } = { plugin: n => installedPlugin(n), designMd: r => projectSetup(r).designMd, designTried }): Promise<SetupState> {
   const checks: Check[] = [];
   const version = bin ? await claudeVersion(bin) : undefined;
   checks.push(version
@@ -63,7 +63,11 @@ export async function checkSetup(bin: string | undefined, env: Record<string, st
   rec('frontendDesign', 'frontend-design plugin', !!lookup.plugin('frontend-design'), 'Gives page and artifact tasks a deliberate visual design.', { action: 'installPlugin:frontend-design', label: 'Install' });
   rec('superpowers', 'superpowers plugin', !!lookup.plugin('superpowers'), 'Planning, debugging and review skills.', { action: 'installPlugin:superpowers', label: 'Install' });
   rec('playwright', 'Playwright', !!lookup.plugin('playwright'), 'Lets Claude open pages in a browser to check UI work.', { action: 'installPlaywright', label: 'Install' });
-  if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), 'A design brief (.justcode/design/DESIGN.md) keeps UI work consistent. Claude reads it from the styles your code already uses.', { action: 'designFromProject', label: 'Write from project' });
+  // Claude already read the code and found no UI to copy (a new project): offer the catalog or your own file instead.
+  if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), lookup.designTried?.(root)
+    ? 'Claude found no styles in the code yet (no UI to read), so it wrote nothing. Choose a design from the catalog or use your own file.'
+    : 'A design brief (.justcode/design/DESIGN.md) keeps UI work consistent. Claude reads it from the styles your code already uses.',
+    lookup.designTried?.(root) ? { action: 'designPick', label: 'Choose a design' } : { action: 'designFromProject', label: 'Write from project' });
 
   return { checks, ready: checks.every(c => c.ok || c.optional), remote, at: Date.now() };
 }
@@ -71,6 +75,14 @@ export async function checkSetup(bin: string | undefined, env: Record<string, st
 export const installCommand = () => process.platform === 'win32'
   ? 'irm https://claude.ai/install.ps1 | iex'
   : 'curl -fsSL https://claude.ai/install.sh | bash';
+
+// Did a "Write DESIGN.md from this project" task finish? (Read from the board file, so this stays a plain check.)
+function designTried(root: string): boolean {
+  try {
+    const b = JSON.parse(fs.readFileSync(path.join(root, '.justcode', 'board.json'), 'utf8'));
+    return (b.tasks || []).some((t: { init?: unknown; status?: string }) => t.init === 'design' && t.status === 'done');
+  } catch { return false; }
+}
 
 // Has the project a description (.justcode/project.md) and, optionally, a design (.justcode/design/DESIGN.md)?
 export function projectSetup(root: string) {

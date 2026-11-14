@@ -261,7 +261,7 @@
     const req = st.checks.filter(c => !c.optional || c.id === 'repo'), rec = st.checks.filter(c => !req.includes(c));
     const row = c => JC.h('div', { class: 'check' }, JC.h('span', { class: `ic ${c.ok ? 'ok' : c.optional ? 'opt' : 'bad'}` }, c.ok ? '✓' : c.optional ? '○' : '!'),
       JC.h('div', {}, JC.h('b', {}, c.label), JC.h('div', { class: 'muted small' }, c.detail)),
-      !c.ok && c.fix ? JC.btn(c.fix.label, () => JC.post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : JC.h('span'));
+      !c.ok && c.fix ? JC.btn(c.fix.label, () => c.fix.action === 'designPick' ? (JC.$('#dlg').close(), JC.post('designPick')) : JC.post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : JC.h('span'));
     dialog(st.ready ? '✓ All set' : `Get set up · ${req.filter(c => c.ok).length} of ${req.length}`,
       JC.h('p', { class: 'muted' }, 'JustCode checks what tasks need and fixes what is missing. Each fix runs in a terminal; the list checks again when it closes.'),
       ...req.map(row), rec.length ? JC.h('h4', {}, 'Recommended') : '', ...rec.map(row),

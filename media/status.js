@@ -40,8 +40,8 @@
     const resume = ['↻ Resume', () => post('say', { id, text: 'Continue the task.' })];
     const acc = accepted(r).length;
     if (t.status === 'done') return r?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn', actions: [] }
-      : acc ? { text: `${isDirect(t) ? 'Finished' : 'Merged'} with ${acc} accepted review issue(s)`, tone: 'warn', actions: [] }
-      : { text: isDirect(t) ? 'Finished' : 'Merged', tone: 'ok', actions: [] };
+      : acc ? { text: `${t.where === 'direct' ? 'Finished' : 'Merged'} with ${acc} accepted review issue(s)`, tone: 'warn', actions: [] }
+      : { text: t.where === 'direct' ? 'Finished' : 'Merged', tone: 'ok', actions: [] };
     if (t.asks?.length) return { text: t.asks[0].kind === 'question' ? 'Claude has a question for you' : t.asks[0].kind === 'plan' ? 'Plan ready for your OK' : 'Claude needs your approval', tone: 'warn', actions: [] };
     if (t.phase) return { text: t.phase, tone: 'run', actions: [] };
     if (t.run === 'starting') return { text: 'Starting Claude…', tone: 'run', actions: [] };
