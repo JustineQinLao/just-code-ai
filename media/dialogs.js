@@ -358,9 +358,9 @@
         e.kind === 'input' && src(e)?.copy ? JC.h('span', { class: 'spill ok' }, `✓ Saved${src(e).savedAt ? ` ${JC.savedAgo(src(e).savedAt)}` : ''}`) : '',
         JC.h('div', { class: 'spacer' }),
         e.kind === 'output' ? JC.btn('Open', () => JC.post('openUrl', { url: e.url }), 'ghost') : '',
-        JC.btn('Copy link', () => JC.post('copy', { text: e.url }), 'ghost'),
+        e.kind === 'output' ? JC.btn('Copy link', () => JC.post('copy', { text: e.url }), 'ghost') : '',
         e.kind === 'input' && isSource(e) ? JC.btn('Refresh copy', () => JC.post('refreshArtifact', { url: e.url }), 'ghost', 'Save the artifact\'s files again') : '',
-        !JC.REMOTE ? JC.btn('Use as source', () => JC.post('useArtifact', { url: e.url, sprintId: JC.sprintOf(JC.view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
+        !JC.REMOTE && e.kind === 'input' ? JC.btn('Use as source', () => JC.post('useArtifact', { url: e.url, sprintId: JC.sprintOf(JC.view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
       e.taskIds.length ? JC.h('p', { class: 'small' }, e.kind === 'output' ? 'Produced by: ' : 'Used by: ',
         ...e.taskIds.filter(title).map((id, i) => [i ? ', ' : '', JC.h('a', { onclick: () => { JC.$('#dlg').close(); JC.openTask(id, 'details'); } }, title(id))])) : '',
       JC.h('input', { class: 'grow', value: e.note || '', placeholder: 'Note (Claude reads it in briefs)', onchange: ev => JC.post('artifactNote', { url: e.url, note: ev.target.value }) }));
