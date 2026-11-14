@@ -444,3 +444,7 @@ dialog[data-kind="prefs"] .grid { grid-template-columns: 1fr 1fr; }
 .node .pill { margin-left: 0; cursor: default; }
 .kpis { grid-template-columns: repeat(4, 1fr); }
 .hitem .row .grow { flex: 1; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid2 label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+table.rep th { color: var(--muted); font-weight: 500; text-align: left; }
+table.rep th, table.rep td { padding: 5px 6px; }

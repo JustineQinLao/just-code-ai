@@ -10,6 +10,7 @@
     JC.post('history');
     drawHistory();
   }
+  function setHistory(items) { history = items; if (JC.$('#dlg').open && !sessionView) drawHistory(); }
   function drawHistory() {
     if (sessionView) {
       const { title, steps: list } = sessionView;
@@ -86,8 +87,7 @@
 
   function agentMap() {
     const groups = (JC.S.all || []).filter(g => g.tasks.length);
-    const n = groups.reduce((a, g) => a + g.tasks.reduce((b, t) => b + Math.max(1, t.agents?.length || 0) + (t.reviewing ? 1 : 0), 0), 0);
-    dialog('Agent map', JC.h('p', { class: 'muted' }, `${n} agent${n === 1 ? '' : 's'} across ${groups.length} project${groups.length === 1 ? '' : 's'} · click a task for details`), agentTree(groups, false));
+    dialog('Agent map', agentTree(groups, false));
   }
 
   /* ---------- dialogs ---------- */
@@ -263,7 +263,7 @@
       `first-try passes: ${reviewed.filter(r => r.first).length}/${reviewed.length} · time: ${tot('mins')} min`, '',
       '| Task | Status | Build | Review | Check rounds | Review rounds | Minutes |', '|---|---|---|---|---|---|---|',
       ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${JC.tokShort(r.build)} | ${JC.tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
-    const sp = JC.sprintOf(JC.view), cost = t => `$${(t.costUsd || 0).toFixed(2)}`;
+    const sp = JC.sprintOf(JC.view) || JC.S.board.sprints.find(s => s.active && !s.closed), cost =t => `$${(t.costUsd || 0).toFixed(2)}`;
     dialog(`Report · ${viewName}`,
       JC.h('div', { class: 'kpis' }, [['Tasks', rows.length], ['Cost', `$${JC.costOf(rows.map(r => r.t)).toFixed(2)}`], ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Minutes', tot('mins')]]
         .map(([k, v]) => JC.h('div', { class: 'kpi' }, JC.h('b', {}, v), JC.h('span', { class: 'muted small' }, k)))),
@@ -427,5 +427,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
 })();
