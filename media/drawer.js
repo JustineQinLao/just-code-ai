@@ -201,7 +201,7 @@
           JC.h('dt', {}, 'After'), JC.h('dd', {}, (t.dependsOn || []).map(id => JC.S.board.tasks.find(o => o.id === id)?.title).filter(Boolean).join(', ') || 'Nothing'),
           JC.h('dt', {}, 'Based on'), JC.h('dd', {}, t.sources ? (JC.S.sources || []).filter(s => t.sources.includes(s.id)).map(JC.srcLabel).join(', ') || 'No project sources' : 'Nothing'),
           JC.h('dt', {}, 'Cost'), JC.h('dd', {}, t.costUsd ? `~$${t.costUsd.toFixed(2)} at API prices` : '—', t.output ? ` · ${JC.tok(t.context + t.output)}` : '', t.modelUsed ? ` · ${JC.modelName(t.modelUsed)}` : ''),
-          JC.h('dt', {}, 'Files'), JC.h('dd', {}, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l], i) => [i ? ' · ' : '', JC.h('a', { onclick: () => JC.post('openArtifact', { id: t.id, which: k }) }, l)]))),
+          JC.h('dt', {}, 'Files'), JC.h('dd', {}, !Object.values(t.artifacts || {}).some(Boolean) ? '—' : [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l], i) => [i ? ' · ' : '', JC.h('a', { onclick: () => JC.post('openArtifact', { id: t.id, which: k }) }, l)]))),
         JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost')), JC.btn(`Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`, () => { JC.tab = 'agents'; JC.render(); }, 'ghost')),
         JC.h('label', { class: 'blk' }, 'Title', title = JC.h('input', { value: t.title, disabled: !editable })),
         JC.h('label', { class: 'blk' }, 'Details', desc = JC.h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
