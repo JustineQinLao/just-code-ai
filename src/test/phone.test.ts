@@ -46,6 +46,17 @@ test('phone: /sw.js is served without a token, state still needs one', async () 
   } finally { srv.close(); }
 });
 
+test('phone: /status.js needs a token and serves the shared lane() script', async () => {
+  const { srv, base } = await boot();
+  try {
+    assert.equal((await fetch(base + '/status.js')).status, 401);
+    const r = await fetch(base + '/status.js', { headers: { 'x-token': 'tok' } });
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-type')!, /javascript/);
+    assert.match(await r.text(), /JCStatus/);
+  } finally { srv.close(); }
+});
+
 // Runs the page script against a stub DOM and fake fetch/timers. Timers are captured, not run: call `fire()` to run the pending poll.
 async function runPage(responses: Array<() => any>) {
   const { srv, base } = await boot();
