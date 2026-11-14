@@ -232,7 +232,7 @@
     const tasks = visible();
     if (!S.board.tasks.some(t => !t.archived)) {
       $('#lanes').replaceChildren(h('div', { class: 'empty' }, h('b', {}, 'No tasks yet'), h('p', {}, 'Type what you want above. ⚡ Quick runs it now; Add puts it in To do. Or ✦ Plan a bigger goal with Claude.'),
-        btn('✦ Plan with Claude', () => (JC.openPlanner ? JC.openPlanner() : JC.planDialog([], undefined, false)), 'primary')));
+        btn('✦ Plan with Claude', () => (S.planner ? JC.openPlanner() : JC.planDialog([], undefined, false)), 'primary')));
       return;
     }
     $('#lanes').replaceChildren(...LANES.map(([id, name]) => {
