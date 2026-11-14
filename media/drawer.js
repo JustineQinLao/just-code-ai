@@ -104,6 +104,7 @@
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') JC.post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !JC.$('#dlg').open) closeTask(); });
 
   let menu = [];
+  let fullTitle = null;   // the task whose long title is shown in full (survives re-renders)
   function renderDrawer() {
     applyBtn.hidden = true;
     foot.hidden = false; doneFoot.hidden = true; stopBtn.hidden = false;   // the planner and running tasks use the message box
@@ -142,7 +143,7 @@
     const tags = [t.branch && `⎇ ${t.branch}`, t.mode && t.mode !== 'auto' && JC.modeName(t.mode)].filter(Boolean);
     head.replaceChildren(
       JC.h('div', { class: 'row' }, JC.h('span', { class: 'tags grow' }, tags.map(x => JC.h('span', { class: 'tag' }, x))), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
-      JC.h('h3', {}, t.title),
+      JC.h('h3', { class: `dtitle${fullTitle === t.id ? ' full' : ''}`, title: 'Click to show or hide the whole title', onclick: () => { fullTitle = fullTitle === t.id ? null : t.id; renderDrawer(); } }, t.title),
       JC.h('div', { class: 'stepper' }, window.JCStatus.STEPS.map((s, i) => JC.h('span', { class: i < st ? 'ok' : i === st ? 'now' : '' }, i < st ? `✓ ${s}` : s))),
       JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), nx.actions.length ? JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))) : ''),
       JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]

@@ -157,6 +157,10 @@ textarea { resize: vertical; width: 100%; }
 #drawer.on { display: flex; }
 .dhead { padding: 12px 14px 0; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
 .dhead h3 { margin: 0; font-size: 15px; }
+/* A long title must not push the tabs and body off screen: 3 lines, click for the rest (scrolls past 30% of the height). */
+.dtitle { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; cursor: pointer; }
+.dtitle.full { display: block; -webkit-line-clamp: unset; max-height: 30vh; overflow-y: auto; }
+.dhead { flex-shrink: 0; } .dbody { min-height: 0; }
 .dhead .next { margin: 0; }
 .tabs { display: flex; gap: 14px; margin-top: 4px; }
 .tabs a { padding: 6px 0; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
@@ -445,3 +449,6 @@ dialog[data-kind="prefs"] .grid { grid-template-columns: 1fr 1fr; }
 .grid2 label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
 table.rep th { color: var(--muted); font-weight: 500; text-align: left; }
 table.rep th, table.rep td { padding: 5px 6px; }
+
+/* Long task titles in dialogs wrap instead of widening the dialog. */
+.wrap { overflow-wrap: anywhere; white-space: normal; min-width: 0; }

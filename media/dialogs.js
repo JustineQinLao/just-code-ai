@@ -395,8 +395,8 @@
         e.kind === 'output' ? JC.btn('Copy link', () => JC.post('copy', { text: e.url }), 'ghost') : '',
         e.kind === 'input' && isSource(e) ? JC.btn('Refresh copy', () => JC.post('refreshArtifact', { url: e.url }), 'ghost', 'Save the artifact\'s files again') : '',
         !JC.REMOTE && e.kind === 'input' ? JC.btn('Use as source', () => JC.post('useArtifact', { url: e.url, sprintId: JC.sprintOf(JC.view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
-      e.taskIds.length ? JC.h('p', { class: 'small' }, e.kind === 'output' ? 'Produced by: ' : 'Used by: ',
-        ...e.taskIds.filter(title).map((id, i) => [i ? ', ' : '', JC.h('a', { onclick: () => { JC.$('#dlg').close(); JC.openTask(id, 'details'); } }, title(id))])) : '',
+      e.taskIds.length ? JC.h('p', { class: 'small wrap' }, e.kind === 'output' ? 'Produced by: ' : 'Used by: ',
+        ...e.taskIds.filter(title).map((id, i) => [i ? ', ' : '', JC.h('a', { title: title(id), onclick: () => { JC.$('#dlg').close(); JC.openTask(id, 'details'); } }, title(id).length > 70 ? `${title(id).slice(0, 70).replace(/\s+\S*$/, '')}…` : title(id))])) : '',
       JC.h('input', { class: 'grow', value: e.note || '', placeholder: 'Note (Claude reads it in briefs)', onchange: ev => JC.post('artifactNote', { url: e.url, note: ev.target.value }) }));
     const d = dialog('Artifacts',
       JC.h('p', { class: 'muted' }, 'Every claude.ai artifact this project used as input or published as a result. Briefs list them, so a later task can build on or update one instead of starting over.'),
