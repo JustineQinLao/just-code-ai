@@ -225,13 +225,15 @@ export async function revertFiles(repo: string, files: string[]) {
   }
 }
 
-export interface Change { status: string; file: string }
+export interface Change { status: string; file: string; add?: number; del?: number }
 
 // What the PR changes: base...branch, like a PR view, plus anything not committed yet.
 export async function changes(dir: string, base: string): Promise<Change[]> {
   const out = await git(dir, ['diff', '--name-status', `${base}...HEAD`]);
   const pending = await git(dir, ['status', '--porcelain']);
-  const list = out.split('\n').filter(Boolean).map(l => { const [s, ...f] = l.split('\t'); return { status: s[0], file: f[f.length - 1] }; });
+  const num = new Map<string, [number, number]>();
+  for (const l of (await git(dir, ['diff', '--numstat', '--no-renames', `${base}...HEAD`]).catch(() => '')).split('\n').filter(Boolean)) { const [a, d, ...f] = l.split('\t'); if (/^\d+$/.test(a)) num.set(f.join('\t'), [+a, +d]); }
+  const list: Change[] = out.split('\n').filter(Boolean).map(l => { const [s, ...f] = l.split('\t'); const file = f[f.length - 1]; return { status: s[0], file, add: num.get(file)?.[0], del: num.get(file)?.[1] }; });
   for (const l of pending.split('\n').filter(Boolean)) {
     const file = l.slice(3).split(' -> ').pop()!;
     if (!list.some(c => c.file === file)) list.push({ status: l.slice(0, 2).trim()[0] === '?' ? 'A' : l.slice(0, 2).trim()[0], file });
