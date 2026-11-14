@@ -50,7 +50,7 @@
         JC.h('div', {}, q.header ? JC.h('span', { class: 'tag' }, q.header) : '', ' ', JC.h('b', {}, q.question)),
         JC.h('div', { class: 'opts' }, q.options.map(o => JC.h('label', { class: `opt${/\(recommended\)/i.test(o.label) ? ' rec' : ''}` },
           JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, onchange: e => {
-            if (!q.multiSelect) picked[i].clear();
+            if (!q.multiSelect) { picked[i].clear(); other[i] = ''; const oi = e.target.closest('.q').querySelector('input.other'); if (oi) oi.value = ''; }
             e.target.checked ? picked[i].add(o.label) : picked[i].delete(o.label);
           } }),
           JC.h('span', { class: 'otext' }, JC.h('span', { class: 'olabel' }, o.label), o.description ? JC.h('span', { class: 'odesc' }, o.description) : '',
