@@ -10,6 +10,7 @@
     JC.post('history');
     drawHistory();
   }
+  function setHistory(items) { history = items; if (JC.$('#dlg').open && !sessionView) drawHistory(); }
   function drawHistory() {
     if (sessionView) {
       const { title, steps: list } = sessionView;
@@ -22,22 +23,16 @@
     const items = (history || []).filter(p => (!historyFor || p.taskId === historyFor) && (!q || `${p.title || ''}\n${p.text}`.toLowerCase().includes(q)));
     let search;
     const d = dialog(historyFor ? `History · ${(JC.S.board.tasks.find(t => t.id === historyFor) || {}).title || 'task'}` : 'Prompt history',
-      JC.h('div', { class: 'row' }, search = JC.h('input', { class: 'grow', placeholder: 'Search your prompts', value: historyQuery, 'aria-label': 'Search your prompts',
+      JC.h('div', { class: 'row' }, search = JC.h('input', { class: 'grow', placeholder: 'Search prompts', value: historyQuery, 'aria-label': 'Search prompts',
         oninput: e => { historyQuery = e.target.value; drawHistory(); } }),
         historyFor ? JC.btn('All tasks', () => { historyFor = undefined; drawHistory(); }, 'ghost') : ''),
       !history ? JC.h('p', { class: 'muted' }, 'Loading…') : !items.length ? JC.h('p', { class: 'muted' }, q ? 'No prompt matches.' : 'No prompts yet.') :
         JC.h('div', { class: 'hist' }, items.slice(0, 300).map(p => JC.h('div', { class: 'hitem' },
-          JC.h('div', { class: 'row small' }, JC.h('span', { class: `tag k-${p.kind}` }, kinds[p.kind] || p.kind),
-            p.kind !== 'task' && p.title ? JC.h('b', {}, p.title) : '',
-            JC.h('span', { class: 'muted' }, new Date(p.time).toLocaleString()),
-            p.taskId && !p.exists ? JC.h('span', { class: 'muted' }, '· task deleted') : p.status === 'done' ? JC.h('span', { class: 'muted' }, '· done') : ''),
           JC.h('div', { class: 'htext', title: 'Click to show all', onclick: e => e.currentTarget.classList.toggle('full') }, p.text),
-          JC.h('div', { class: 'acts' },
-            p.exists ? JC.btn('Open task', () => { JC.$('#dlg').close(); JC.openTask(p.taskId); }, 'ghost') : '',
-            ...p.sessions.map((sid, i) => JC.btn(p.sessions.length > 1 ? `Conversation ${i + 1}` : 'Conversation', () => {
+          JC.h('div', { class: 'row small muted' }, `${kinds[p.kind] || p.kind} · ${new Date(p.time).toLocaleString()}${p.taskId && !p.exists ? ' · task deleted' : ''}`, JC.h('span', { class: 'grow' }),
+            ...p.sessions.map((sid, i) => JC.btn(p.sessions.length > 1 ? `Session ${i + 1}` : 'Session', () => {
               sessionView = { id: sid, title: p.title || kinds[p.kind] }; JC.post('sessionLog', { sessionId: sid }); drawHistory();
             }, 'ghost', `Session ${sid.slice(0, 8)}`)),
-            JC.btn('Copy', () => JC.post('copy', { text: p.text }), 'ghost'),
             JC.btn('Use again', () => { JC.$('#dlg').close(); const [first, ...rest] = p.text.split('\n\n'); JC.$('#title').value = first; JC.$('#desc').value = rest.join('\n\n'); if (rest.length) JC.toggleMore(true); JC.$('#title').focus(); }, 'ghost', 'Put it in the add box to send again'))))));
     if (document.activeElement !== search && d.open) { search.focus(); search.setSelectionRange(search.value.length, search.value.length); }
   }
@@ -68,7 +63,7 @@
 
   function agentTree(groups, single) {
     const row = (n, depth, extra = '', t) => JC.h('div', { class: `node d${Math.min(depth, 4)} s-${n.status}${single && t ? ' click' : ''}`, onclick: single && t ? () => openAgent(t, n) : undefined, title: single && t ? 'Show its conversation' : undefined },
-      JC.h('span', { class: 'sdot' }), JC.h('div', { class: 'ninfo' }, JC.h('b', {}, n.name), n.description && n.description !== n.name ? JC.h('span', { class: 'muted' }, ` · ${n.description.slice(0, 90)}`) : '',
+      JC.h('span', { class: 'sdot' }), JC.h('div', { class: 'ninfo' }, JC.h('b', {}, n.name), ' ', JC.h('span', { class: `pill ${n.status === 'completed' ? 'ok' : n.status === 'waiting' ? 'warn' : n.status === 'failed' ? 'err' : ''}` }, n.status === 'completed' ? 'done' : n.status === 'waiting' ? 'needs you' : n.status || 'idle'), n.description && n.description !== n.name ? JC.h('span', { class: 'muted' }, ` · ${n.description.slice(0, 90)}`) : '',
         JC.h('div', { class: 'muted small' }, [n.ms || n.started ? (n.status === 'running' ? JC.ago(n.started) : JC.ago(Date.now() - (n.ms || 0))) : '', n.tokens ? JC.tok(n.tokens) : '', n.tools ? `${n.tools} tool uses` : '', n.last && n.status === 'running' ? `now: ${n.last}` : '', extra].filter(Boolean).join(' · ')),
         n.summary ? JC.h('div', { class: 'small' }, n.summary) : ''));
     const out = [];
@@ -92,8 +87,7 @@
 
   function agentMap() {
     const groups = (JC.S.all || []).filter(g => g.tasks.length);
-    const n = groups.reduce((a, g) => a + g.tasks.reduce((b, t) => b + Math.max(1, t.agents?.length || 0) + (t.reviewing ? 1 : 0), 0), 0);
-    dialog('Agent map', JC.h('p', { class: 'muted' }, `${n} agent${n === 1 ? '' : 's'} across ${groups.length} project${groups.length === 1 ? '' : 's'} · click a task for details`), agentTree(groups, false));
+    dialog('Agent map', agentTree(groups, false));
   }
 
   /* ---------- dialogs ---------- */
@@ -116,15 +110,17 @@
   function dialog(title, ...content) {
     const d = JC.$('#dlg');
     delete d.dataset.kind;
-    d.replaceChildren(JC.h('div', { class: 'dlghead' }, JC.h('h3', {}, title), JC.btn('×', () => d.close(), 'ghost icon', 'Close')), JC.h('div', { class: 'dlgbody' }, content));
+    d.replaceChildren(JC.h('div', { class: 'dlghead' }, JC.h('h3', {}, title), JC.btn('✕', () => d.close(), 'ghost icon', 'Close')), JC.h('div', { class: 'dlgbody' }, content));
     if (!d.open) d.showModal();
     return d;
   }
 
   function newSprint() {
     let name, goal;
-    dialog('New sprint', name = JC.h('input', { placeholder: 'Sprint name', value: `Sprint ${JC.S.board.sprints.length + 1}` }), goal = JC.h('input', { placeholder: 'Goal (optional)' }),
-      JC.h('div', { class: 'acts' }, JC.btn('Create', () => { if (name.value.trim()) { JC.post('addSprint', { name: name.value.trim(), goal: goal.value }); JC.$('#dlg').close(); } }, 'primary')));
+    const make = plan => { if (!name.value.trim()) return; const sp = { name: name.value.trim(), goal: goal.value.trim() || undefined }; JC.post('addSprint', sp); JC.$('#dlg').close(); if (plan) JC.planDialog([], sp); };
+    dialog('New sprint', JC.h('div', { class: 'grid2' }, JC.h('label', {}, 'Name', name = JC.h('input', { value: `Sprint ${JC.S.board.sprints.length + 1}` })), JC.h('label', {}, 'Goal', goal = JC.h('input', { placeholder: 'Goal (optional)' }))),
+      JC.h('p', { class: 'muted small' }, 'Its tasks merge into their own sprint branch; when the last one merges, the sprint merges into main.'),
+      JC.h('div', { class: 'acts' }, JC.btn('Create', () => make(false), 'primary'), JC.btn('Create and plan with Claude', () => make(true))));
     name.select();
   }
 
@@ -163,10 +159,11 @@
     goal.focus();
   }
 
-  function moreMenu() {
+  function moreMenu(extra = []) {
     const item = (label, help, fn) => JC.h('button', { class: 'menuitem', onclick: () => { JC.$('#dlg').close(); fn(); } }, JC.h('b', {}, label), JC.h('span', { class: 'muted small' }, help));
     dialog('More',
       JC.h('div', { class: 'menu' },
+        ...extra.map(([l, hlp, fn]) => item(l, hlp, fn)),
         item('Agent map', 'Every Claude session, subagent and reviewer at work', () => agentMap()),
         item('Report', 'Tokens, rounds and time per task', () => report()),
         item('Prompt history', 'Every prompt you sent and each session\'s conversation', () => historyDialog()),
@@ -178,7 +175,8 @@
   function settings() {
     const s = JC.S.settings;
     const f = {};
-    const field = (key, label, input, help) => JC.h('label', { class: 'blk' }, JC.h('span', {}, label), f[key] = input, help ? JC.h('span', { class: 'muted small' }, help) : '');
+    const els = {};
+    const field = (key, label, input, help) => els[key] = JC.h('label', { class: 'blk' }, JC.h('span', {}, label), f[key] = input, help ? JC.h('span', { class: 'muted small' }, help) : '');
     const sel = (v, opts) => JC.h('select', {}, opts.map(([k, l]) => JC.h('option', { value: k, selected: String(v) === String(k) }, l)));
     const effort = v => sel(v, [['low', 'Low (fewest tokens)'], ['medium', 'Medium'], ['high', 'High'], ['', 'Model default']]);
     // Every model in one dropdown (aliases follow the newest version); "Other…" takes any model id. Reads like an input: .value.
@@ -194,12 +192,11 @@
       return box;
     };
     let rules;
-    dialog('Settings',
-      JC.h('div', { class: 'grid' },
+    const build = () => [
         field('defaultMode', 'Permissions for new tasks', sel(s.defaultMode, JC.MODES.map(([k, l]) => [k, l])), 'Auto lets Claude approve what is safe; the card asks only when unsure.'),
         field('notifications', 'Notifications', sel(s.notifications || 'actionable', [['actionable', 'When a task needs me, is ready or failed'], ['errors', 'Only errors'], ['off', 'Off']]), 'The board and the JustCode output log always show everything.'),
-        field('maxParallel', 'Tasks running at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
-        field('taskModel', 'Task model', models(s.taskModel)),
+        field('maxParallel', 'Tasks at once', sel(s.maxParallel, [1, 2, 3, 4, 5, 6].map(n => [n, n === 1 ? '1 · one after another' : String(n)]))),
+        field('taskModel', 'Model for tasks', models(s.taskModel)),
         field('taskEffort', 'Task thinking', effort(s.taskEffort)),
         field('reviewModel', 'Reviewer model', models(s.review.model)),
         field('reviewEffort', 'Reviewer thinking', effort(s.review.effort)),
@@ -208,10 +205,10 @@
         field('allowSubagents', 'Subagents in tasks', sel(s.subagents, [[false, 'Off (saves the most tokens)'], [true, 'On (they run on Haiku)']])),
         field('maxReviews', 'Review rounds before it waits for you', sel(s.review.maxAttempts, [1, 2, 3, 4, 5].map(n => [n, String(n)]))),
         field('autoReview', 'AI review', sel(s.review.auto, [[true, 'On: review every finished task'], [false, 'Off']])),
-        field('autoMerge', 'When the review passes', sel(s.review.autoMerge, [[false, 'Wait for me to merge'], [true, 'Merge automatically (not critical ones)']])),
+        field('autoMerge', 'Merge automatically after review', sel(s.review.autoMerge, [[false, 'Off'], [true, 'On (not critical ones)']])),
         field('mergeIfReviewCannotRun', 'When the review cannot run (twice)', sel(s.review.mergeIfCannotRun, [[true, 'Merge anyway (with automatic merging)'], [false, 'Wait for me']])),
         field('idleMinutes', 'Close idle Claude processes after (minutes)', JC.h('input', { type: 'number', min: 1, value: s.idleMinutes })),
-        field('checks', 'Checks after each turn (no tokens)', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${JC.S.detectedChecks?.length ? `: ${JC.S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
+        field('checks', 'Checks', sel(s.checks === '' ? 'off' : s.checks === 'auto' ? 'auto' : 'custom', [['auto', `Auto${JC.S.detectedChecks?.length ? `: ${JC.S.detectedChecks.map(c => c.cmd).join(' · ')}` : ' (none found here)'}`], ['off', 'Off'], ['custom', 'My commands (below)']]),
           'Failures go back to Claude before the AI review.'),
         field('checksCustom', 'My check commands (one per line)', JC.h('textarea', { rows: 2, placeholder: 'npm test\nnpx tsc --noEmit' }, s.checks !== 'auto' ? s.checks : '')),
         field('folderSetup', 'Task folder setup', sel(s.setup === '' ? 'off' : s.setup === 'auto' ? 'auto' : 'custom', [['auto', 'Auto: link node_modules, use .venv'], ['off', 'Off'], ['custom', 'My command (below)']])),
@@ -220,16 +217,23 @@
         field('reviewLightModel', 'Model for small reviews', models(s.review.lightModel)),
         field('superpowers', 'superpowers plugin in sessions', sel(s.superpowers, [[true, 'On (when installed)'], [false, 'Off: saves tokens on every step']])),
         field('personalSetup', 'Your personal Claude setup in tasks', sel(s.personalSetup, [[false, 'Off: project setup only (saves ~7k tokens per step)'], [true, 'On: plugins, skills, MCP, memory']])),
-        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')),
+        field('freshSessionTokens', 'Fresh session for fixes above (tokens of context)', JC.h('input', { type: 'number', min: 0, step: 10000, value: s.freshAfterTokens }), '0 = never. Fix rounds then start from the brief, handoff and review notes.')
+    ];
+    build();
+    const MAIN = ['defaultMode', 'maxParallel', 'taskModel', 'maxReviews', 'autoMerge', 'checks'];
+    dialog('Settings',
+      JC.h('div', { class: 'grid' }, MAIN.map(k => els[k])),
+      JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More settings'), JC.h('div', { class: 'grid' }, Object.keys(els).filter(k => !MAIN.includes(k)).map(k => els[k]))),
+      JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'More: always-allowed rules and API key'),
       JC.h('label', { class: 'blk' }, JC.h('span', {}, `Always allowed in ${JC.S.roots.find(r => r.path === JC.S.root)?.name ?? 'this project'}`),
         rules = JC.h('textarea', { rows: 4, placeholder: 'One rule per line, e.g. Bash(npm run:*)' }, (JC.S.board.rules || []).join('\n')),
         JC.h('span', { class: 'muted small' }, 'Added when you press "Always allow…" on a card. Every task in this project gets them.')),
       f.allowedTools = JC.h('textarea', { rows: 3, placeholder: 'One rule per line, for every project' }, (s.allowedTools || []).join('\n')),
       JC.h('span', { class: 'muted small' }, 'Always allowed in every project.'),
+        JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost')),
       policySection(),
       phoneSection(),
-      JC.h('div', { class: 'row' }, JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost'), JC.btn('Setup checklist', () => { JC.showSetup = true; JC.$('#dlg').close(); JC.render(); }, 'ghost')),
-      JC.h('div', { class: 'acts' }, JC.btn('Save', () => {
+      JC.h('div', { class: 'row' }, JC.btn('Setup checklist', () => { JC.$('#dlg').close(); JC.setupDialog(); }, 'ghost'), JC.h('span', { class: 'grow' }), JC.btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         JC.post('settings', { values: {
           defaultMode: f.defaultMode.value, notifications: f.notifications.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
@@ -243,10 +247,27 @@
         JC.post('rules', { rules: lines(rules) });
         JC.$('#mode').dataset.set = '';
         JC.$('#dlg').close();
-      }, 'primary')));
+      }, 'primary'))).dataset.kind = 'prefs';
   }
 
   // Per task: tokens (build/review), check and review rounds, first-try pass, time. Totals for the current view.
+  // "Get set up": what tasks need, each missing row with a fix that opens a terminal; the list re-checks when it closes.
+  function setupDialog() {
+    const st = JC.S.setup;
+    if (!st) return;
+    const d0 = JC.$('#dlg'), top = d0.open && d0.dataset.kind === 'setup' ? d0.scrollTop : 0;   // a redraw on each state message keeps the scroll place
+    const req = st.checks.filter(c => !c.optional || c.id === 'repo'), rec = st.checks.filter(c => !req.includes(c));
+    const row = c => JC.h('div', { class: 'check' }, JC.h('span', { class: `ic ${c.ok ? 'ok' : c.optional ? 'opt' : 'bad'}` }, c.ok ? '✓' : c.optional ? '○' : '!'),
+      JC.h('div', {}, JC.h('b', {}, c.label), JC.h('div', { class: 'muted small' }, c.detail)),
+      !c.ok && c.fix ? JC.btn(c.fix.label, () => JC.post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : JC.h('span'));
+    dialog(st.ready ? '✓ All set' : `Get set up · ${req.filter(c => c.ok).length} of ${req.length}`,
+      JC.h('p', { class: 'muted' }, 'JustCode checks what tasks need and fixes what is missing. Each fix runs in a terminal; the list checks again when it closes.'),
+      ...req.map(row), rec.length ? JC.h('h4', {}, 'Recommended') : '', ...rec.map(row),
+      JC.h('div', { class: 'row' }, JC.h('span', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : '📱 Remote Control needs a Claude account login.'),
+        JC.h('span', { class: 'grow' }), JC.btn('Check again', () => JC.post('fix', { action: 'recheck' })))).dataset.kind = 'setup';
+    d0.scrollTop = top;
+  }
+
   function report() {
     const tasks = JC.visible().filter(t => t.startedAt || JC.usageTotal(t));
     const mins = t => t.startedAt ? Math.round(((t.doneAt || Date.now()) - t.startedAt) / 60000) : 0;
@@ -259,16 +280,14 @@
       `first-try passes: ${reviewed.filter(r => r.first).length}/${reviewed.length} · time: ${tot('mins')} min`, '',
       '| Task | Status | Build | Review | Check rounds | Review rounds | Minutes |', '|---|---|---|---|---|---|---|',
       ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${JC.tokShort(r.build)} | ${JC.tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
-    dialog('Report',
-      JC.h('div', { class: 'kpis' }, [['Tasks', rows.length], ['New tokens', JC.tokShort(tot('build') + tot('review'))], ['Cached re-reads', JC.tokShort(tot('cached'))], ['Build / review', `${JC.tokShort(tot('build'))} / ${JC.tokShort(tot('review'))}`],
-        ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? JC.tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')],
-        ['Project cost (est.)', `$${(JC.costOf(JC.S.board.tasks) + (JC.S.board.plannerCostUsd || 0)).toFixed(2)}${JC.S.policy?.policy.maxCostUsd.project ? ` / $${JC.S.policy.policy.maxCostUsd.project}` : ''}`]]
+    const sp = JC.sprintOf(JC.view) || JC.S.board.sprints.find(s => s.active && !s.closed), cost =t => `$${(t.costUsd || 0).toFixed(2)}`;
+    dialog(`Report · ${viewName}`,
+      JC.h('div', { class: 'kpis' }, [['Tasks', rows.length], ['Cost', `$${JC.costOf(rows.map(r => r.t)).toFixed(2)}`], ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Minutes', tot('mins')]]
         .map(([k, v]) => JC.h('div', { class: 'kpi' }, JC.h('b', {}, v), JC.h('span', { class: 'muted small' }, k)))),
-      rows.length ? JC.h('table', { class: 'rep' }, JC.h('tr', {}, ['Task', 'Status', 'Build', 'Review', 'Checks', 'Reviews', 'Min'].map(x => JC.h('th', {}, x))),
-        rows.sort((a, b) => (b.build + b.review) - (a.build + a.review)).map(r => JC.h('tr', { onclick: () => { JC.$('#dlg').close(); JC.openTask(r.t.id, 'details'); } },
-          JC.h('td', {}, r.t.title), JC.h('td', {}, r.t.status), JC.h('td', {}, JC.tokShort(r.build)), JC.h('td', {}, JC.tokShort(r.review)), JC.h('td', {}, r.checks), JC.h('td', {}, r.reviews), JC.h('td', {}, r.mins)))) : JC.h('p', { class: 'muted' }, 'No task has run in this view yet.'),
-      JC.h('p', { class: 'muted small' }, 'New tokens = written plus input not already cached. Cached re-reads are context re-sent at each step (about a tenth of the cost). First-try pass: passed checks and review without a fix round.'),
-      JC.h('div', { class: 'acts' }, JC.btn('Copy as Markdown', () => JC.post('copy', { text: md }))));
+      rows.length ? JC.h('div', { class: 'tscroll' }, JC.h('table', { class: 'rep' }, JC.h('tr', {}, ['Task', 'Status', 'Cost', 'Reviews', 'Files'].map(x => JC.h('th', {}, x))),
+        rows.sort((a, b) => (b.t.costUsd || 0) - (a.t.costUsd || 0)).map(r => JC.h('tr', { onclick: () => { JC.$('#dlg').close(); JC.openTask(r.t.id, 'details'); } },
+          JC.h('td', {}, r.t.title), JC.h('td', {}, r.t.status), JC.h('td', {}, cost(r.t)), JC.h('td', {}, r.reviews), JC.h('td', {}, (r.t.directFiles || []).length || '–'))))) : JC.h('p', { class: 'muted' }, 'No task has run in this view yet.'),
+      JC.h('div', { class: 'acts' }, !JC.REMOTE && sp ? JC.btn('Export to .justcode/reports', () => JC.post('sprintReport', { sprintId: sp.id }), 'primary') : '', JC.btn('Copy as Markdown', () => JC.post('copy', { text: md }))));
   }
 
   // In a sprint view: the sources that sprint uses, then the rest of the project's library to pick from.
@@ -312,12 +331,27 @@
     const P = JC.S.phone;
     if (!P || JC.REMOTE) return '';
     const day = ms => new Date(ms).toLocaleDateString();
-    return JC.h('details', { class: 'adv' }, JC.h('summary', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
+    return JC.h('div', { class: 'gsec' }, JC.h('h4', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
       JC.h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code from JustCode: Show Phone Pairing.` : 'Turn on justCode.phoneServer to use the phone page or the Android app.'),
       P.devices.length ? JC.h('ul', { class: 'small' }, P.devices.map(d => JC.h('li', { class: 'row' },
         JC.h('span', { class: 'grow' }, `Device …${d.id} · paired ${day(d.created)} · ${d.lastUsed ? `last used ${JC.savedAgo(d.lastUsed)}` : 'not used yet'} · expires ${day(d.expires)}`),
         JC.btn('Revoke', () => JC.post('phoneRevoke', { id: d.id }), 'ghost small')))) : '',
-      P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : '');
+      JC.h('div', { class: 'row' }, P.on ? JC.btn('Pair a phone…', () => JC.post('phonePairing'), 'ghost') : '', P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : ''));
+  }
+
+  // Phone pairing: QR code, one-time code, how to use it, HTTPS fingerprint.
+  function pairingDialog(m) {
+    if (!m.on) { JC.toast('Turn on the justCode.phoneServer setting first.'); return; }
+    const code = `${m.code.slice(0, 3)} ${m.code.slice(3)}`;
+    const qr = JC.h('div', { class: 'qr', role: 'img', 'aria-label': 'QR code' });
+    qr.innerHTML = m.qr;
+    const d = dialog('Pair a phone',
+      JC.h('div', { class: 'row pair' }, qr,
+        JC.h('div', { class: 'paircode' }, JC.h('div', {}, 'Pairing code'), JC.h('b', {}, code),
+          JC.h('span', { class: 'muted small' }, `One use, valid 10 minutes. Scan with the JustCode app, or open ${m.url} on the same Wi-Fi and type the code.`),
+          m.fingerprint ? JC.h('span', { class: 'muted small' }, `HTTPS on · fingerprint ${m.fingerprint}`) : '')),
+      JC.h('div', { class: 'row' }, JC.btn('New code', () => JC.post('phonePairing')), JC.btn('Unpair all devices', () => JC.post('phoneUnpair'), 'danger')));
+    d.dataset.kind = 'pairing';
   }
 
   // ⚙ → Policy: what .justcode/policy.json enforces in this project, and what it denied today.
@@ -326,8 +360,8 @@
     if (!P) return '';
     const p = P.policy, list = a => a.length ? a.join(', ') : 'none';
     const cost = k => p.maxCostUsd[k] ? `$${p.maxCostUsd[k]}` : 'no limit';
-    return JC.h('details', { class: 'adv', open: !!P.errors.length },
-      JC.h('summary', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
+    return JC.h('div', { class: 'gsec' },
+      JC.h('h4', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
       JC.h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Edit the file to change them; they apply at once.'),
       ...P.errors.map(e => JC.h('p', { class: 'err small' }, e)),
       JC.h('ul', { class: 'small' },
@@ -356,9 +390,10 @@
         e.changedAt ? JC.h('span', { class: 'spill warn', title: 'The last refresh found different content' }, `changed ${JC.savedAgo(e.changedAt)}`) : '',
         e.kind === 'input' && src(e)?.copy ? JC.h('span', { class: 'spill ok' }, `✓ Saved${src(e).savedAt ? ` ${JC.savedAgo(src(e).savedAt)}` : ''}`) : '',
         JC.h('div', { class: 'spacer' }),
-        JC.btn('Copy link', () => JC.post('copy', { text: e.url }), 'ghost'),
+        e.kind === 'output' ? JC.btn('Open', () => JC.post('openUrl', { url: e.url }), 'ghost') : '',
+        e.kind === 'output' ? JC.btn('Copy link', () => JC.post('copy', { text: e.url }), 'ghost') : '',
         e.kind === 'input' && isSource(e) ? JC.btn('Refresh copy', () => JC.post('refreshArtifact', { url: e.url }), 'ghost', 'Save the artifact\'s files again') : '',
-        !JC.REMOTE ? JC.btn('Use as source', () => JC.post('useArtifact', { url: e.url, sprintId: JC.sprintOf(JC.view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
+        !JC.REMOTE && e.kind === 'input' ? JC.btn('Use as source', () => JC.post('useArtifact', { url: e.url, sprintId: JC.sprintOf(JC.view)?.id }), 'ghost', 'Adds it to 📎 Sources and ticks it for the next task') : ''),
       e.taskIds.length ? JC.h('p', { class: 'small' }, e.kind === 'output' ? 'Produced by: ' : 'Used by: ',
         ...e.taskIds.filter(title).map((id, i) => [i ? ', ' : '', JC.h('a', { onclick: () => { JC.$('#dlg').close(); JC.openTask(id, 'details'); } }, title(id))])) : '',
       JC.h('input', { class: 'grow', value: e.note || '', placeholder: 'Note (Claude reads it in briefs)', onchange: ev => JC.post('artifactNote', { url: e.url, note: ev.target.value }) }));
@@ -375,12 +410,13 @@
     const d = dialog('Design', JC.h('p', { class: 'muted' }, has
       ? 'DESIGN.md is set (.justcode/design/DESIGN.md). UI and artifact tasks follow it.'
       : 'UI and artifact tasks follow .justcode/design/DESIGN.md. By default Claude writes it from the styles, theme and components your code already uses. For a project with no UI yet, pick one from the catalog or use your own file.'),
-      JC.h('div', { class: 'acts' },
+      JC.h('div', { class: 'acts row' },
         JC.btn(has ? 'Rewrite from project' : 'From this project', () => { d.close(); JC.post('designFromProject'); }, has ? 'ghost' : 'primary', 'Claude reads the code\'s colors, type, spacing and components into DESIGN.md'),
         JC.btn('Catalog or my own file…', () => { d.close(); JC.post('designPick'); }, 'ghost', 'Pick a design from VoltAgent/awesome-design-md, or use a file you have'),
         has ? JC.btn('Show as artifact', () => { d.close(); JC.post('designArtifact'); }, 'ghost', 'A claude.ai page showing the palette, type and components; listed under ⧉ Artifacts and updated in place') : '',
         has ? JC.btn('Open', () => { d.close(); JC.post('openJustcodeFile', { file: 'design/DESIGN.md' }); }, 'ghost') : '',
-        has ? JC.btn('Remove', () => { d.close(); JC.post('designRemove'); }, 'ghost') : ''));
+        has ? JC.btn('Remove', () => { d.close(); JC.post('designRemove'); }, 'ghost') : ''),
+      has ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Current: '), 'DESIGN.md in .justcode/design') : '');
   }
 
   function guide() {
@@ -408,5 +444,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, setupDialog, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
 })();

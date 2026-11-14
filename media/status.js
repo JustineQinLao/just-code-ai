@@ -103,6 +103,19 @@
     return '';
   }
 
-  const api = { lane, nextStep, roundLimit, elapsed };
+  // Board columns, left to right: id and name.
+  const LANES = [['todo', 'To do'], ['needs', 'Needs you'], ['work', 'Working'], ['review', 'Review'], ['done', 'Done']];
+  // Panel step tracker: Plan, Build, Checks, Review, Merge. Returns the current step 0-4, or 5 when all are done.
+  const STEPS = ['Plan', 'Build', 'Checks', 'Review', 'Merge'];
+  function stepOf(t) {
+    if (t.status === 'done') return 5;
+    if (t.status === 'todo' && !t.run) return 0;
+    if (t.asks?.some(a => a.kind === 'plan')) return 0;
+    if (t.status !== 'review' && !t.reviewing) return 1;
+    if (t.reviewing) return 3;
+    if (t.review) return t.review.state === 'pass' ? 4 : 3;
+    return t.checks?.state === 'fail' || /check/i.test(t.phase || '') ? 2 : t.checks?.state === 'pass' ? 3 : 2;
+  }
+  const api = { LANES, STEPS, stepOf, lane, nextStep, roundLimit, elapsed };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.JCStatus = api;
 })(typeof window !== 'undefined' ? window : this);

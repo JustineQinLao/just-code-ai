@@ -7,12 +7,12 @@
     if (a.kind === 'plan') return planBox(t, a);
     let reason;
     const box = JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      JC.h('div', { class: 'askhead' }, JC.h('b', {}, a.tool), a.reason ? JC.h('span', { class: 'muted small' }, ` · ${a.reason}`) : ''),
+      JC.h('div', { class: 'askhead' }, JC.h('b', {}, a.tool === 'Bash' ? 'Claude asks to run' : `Claude asks to use ${a.tool}`), a.reason ? JC.h('span', { class: 'muted small' }, ` · ${a.reason}`) : ''),
       a.detail ? JC.h('pre', { class: 'askdetail' }, a.detail) : '',
       JC.h('div', { class: 'acts' },
         JC.btn('Allow', () => JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }), 'primary'),
-        a.always ? JC.btn(a.always, () => JC.post('answer', { id: t.id, ask: a.id, choice: 'always' }), '', 'Remembered for every task in this project (⚙ Settings lists them)') : '',
-        JC.btn('Deny…', () => { reason.hidden = !reason.hidden; reason.querySelector('input').focus(); }, 'danger')),
+        a.always ? JC.btn('Always allow (this project)', () => JC.post('answer', { id: t.id, ask: a.id, choice: 'always' }), '', 'Remembered for every task in this project (⚙ Settings lists them)') : '',
+        JC.btn('Deny with a reason…', () => { reason.hidden = !reason.hidden; reason.querySelector('input').focus(); }, 'danger')),
       reason = JC.h('div', { class: 'row', hidden: true },
         JC.h('input', { class: 'grow', placeholder: 'Tell Claude why, or what to do instead (optional)', onkeydown: e => { if (e.key === 'Enter') send(); } }),
         JC.btn('Deny', () => send(), 'danger')));
@@ -21,15 +21,20 @@
   }
 
   // Plan mode: Claude's plan, to build as is or send back with changes.
+  function buildMode() {
+    const forbid = JC.S.policy?.policy.forbidModes || [];
+    return JC.S.settings.defaultMode === 'plan' || forbid.includes(JC.S.settings.defaultMode) ? 'auto' : JC.S.settings.defaultMode;
+  }
+  const buildIt = (t, a) => { JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }); JC.post('setMode', { id: t.id, mode: buildMode() }); };
+
   function planBox(t, a) {
     let note;
-    const forbid = JC.S.policy?.policy.forbidModes || [];
-    const build = JC.S.settings.defaultMode === 'plan' || forbid.includes(JC.S.settings.defaultMode) ? 'auto' : JC.S.settings.defaultMode;
+    const build = buildMode();
     return JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      JC.h('div', { class: 'askhead' }, JC.h('b', {}, 'Plan ready'), JC.h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
+      JC.h('div', { class: 'askhead' }, JC.h('b', {}, 'Claude\'s plan'), JC.h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
       JC.h('pre', { class: 'askdetail plan' }, a.plan || '(empty plan)'),
       JC.h('div', { class: 'acts' },
-        JC.btn(`Build it (${JC.modeName(build)})`, () => { JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }); JC.post('setMode', { id: t.id, mode: build }); }, 'primary'),
+        JC.btn(`Build it (${JC.modeName(build)})`, () => buildIt(t, a), 'primary'),
         JC.btn('Revise…', () => { note.hidden = !note.hidden; note.querySelector('input').focus(); })),
       note = JC.h('div', { class: 'row', hidden: true },
         JC.h('input', { class: 'grow', placeholder: 'What should change in the plan?', onkeydown: e => { if (e.key === 'Enter') send(); } }), JC.btn('Send', () => send())));
@@ -43,14 +48,16 @@
     const box = JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       a.questions.map((q, i) => JC.h('div', { class: 'q' },
         JC.h('div', {}, q.header ? JC.h('span', { class: 'tag' }, q.header) : '', ' ', JC.h('b', {}, q.question)),
-        JC.h('div', { class: 'opts' }, q.options.map(o => JC.h('label', { class: 'opt' },
+        JC.h('div', { class: 'opts' }, q.options.map(o => JC.h('label', { class: `opt${/\(recommended\)/i.test(o.label) ? ' rec' : ''}` },
           JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, onchange: e => {
-            if (!q.multiSelect) picked[i].clear();
+            if (!q.multiSelect) { picked[i].clear(); other[i] = ''; const oi = e.target.closest('.q').querySelector('input.other'); if (oi) oi.value = ''; }
             e.target.checked ? picked[i].add(o.label) : picked[i].delete(o.label);
           } }),
           JC.h('span', { class: 'otext' }, JC.h('span', { class: 'olabel' }, o.label), o.description ? JC.h('span', { class: 'odesc' }, o.description) : '',
             o.preview ? JC.h('pre', { class: 'opreview' }, o.preview) : '')))),
-        JC.h('input', { class: 'other', placeholder: 'Or type your own answer', oninput: e => { other[i] = e.target.value; } }))),
+        JC.h('label', { class: 'opt other-row' }, JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, tabindex: -1, onchange: e => { if (!q.multiSelect) picked[i].clear(); e.target.nextSibling.querySelector('input').focus(); } }),
+          JC.h('span', { class: 'otext' }, JC.h('input', { class: 'other', placeholder: 'Other…', 'aria-label': 'Other answer', oninput: e => { other[i] = e.target.value; const r = e.target.closest('label').querySelector('input'); r.checked = !!e.target.value; if (!q.multiSelect && e.target.value) picked[i].clear(); } })))
+      )),
       JC.h('div', { class: 'acts' },
         JC.btn('Answer', () => {
           const answers = {};
@@ -87,18 +94,29 @@
   }
   const body = JC.h('div', { class: 'dbody' });
   const head = JC.h('div', { class: 'dhead' });
-  drawer.append(head, body, JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, JC.btn('Send', sendMsg, 'primary'), JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
+  const applyBtn = JC.btn('Apply', () => {}, 'primary');
+  applyBtn.hidden = true;
+  drawer.append(head, body, JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, applyBtn, JC.btn('Send', sendMsg), JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') JC.post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !JC.$('#dlg').open) closeTask(); });
 
+  let menu = [];
   function renderDrawer() {
+    applyBtn.hidden = true;
     if (open === '__planner') return renderPlanner();
     const t = open && JC.S.board.tasks.find(x => x.id === open);
     drawer.classList.toggle('on', !!t);
     document.body.classList.toggle('drawer-open', !!t);
     if (!t) return;
     const nx = JC.next(t);
+    const a0 = t.asks?.[0];
+    if (a0) {
+      const goAsk = () => { JC.tab = 'activity'; JC.render(); requestAnimationFrame(() => body.querySelector('.ask')?.scrollIntoView({ block: 'start' })); };
+      nx.actions = a0.kind === 'question' ? [['Answer', goAsk]]
+        : a0.kind === 'plan' ? [[`Build it (${JC.modeName(buildMode())})`, () => buildIt(t, a0)], ['Revise…', goAsk]]
+        : [['Allow', () => JC.post('answer', { id: t.id, ask: a0.id, choice: 'allow' })], ...(a0.always ? [['Always allow', () => JC.post('answer', { id: t.id, ask: a0.id, choice: 'always' })]] : []), ['Deny…', goAsk]];
+    }
     const live = t.run && t.run !== 'idle';
-    const menu = [
+    menu = [
       t.status === 'todo' && ['▶ Run', () => JC.post('run', { id: t.id })],
       live && ['■ Stop', () => JC.post('stop', { id: t.id })],
       t.sessionId && !t.remote && ['📱 Continue on phone', () => JC.post('remote', { id: t.id })],
@@ -115,20 +133,15 @@
       [t.archived ? 'Unarchive' : 'Archive', () => JC.post('archive', { id: t.id })],
       ['Delete', () => JC.post('delete', { id: t.id }), 'danger'],
     ].filter(Boolean);
+    const st = window.JCStatus.stepOf(t);
+    const tags = [t.branch && `⎇ ${t.branch}`, t.mode && t.mode !== 'auto' && JC.modeName(t.mode)].filter(Boolean);
     head.replaceChildren(
-      JC.h('div', { class: 'row' }, JC.h('h3', { class: 'grow' }, t.title), JC.btn('×', closeTask, 'ghost icon', 'Close (Esc)')),
-      JC.h('div', { class: `next ${nx.tone}` }, nx.text, ...nx.actions.slice(0, 2).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))),
-      JC.h('div', { class: 'row small' },
-        JC.h('label', {}, 'Permissions ', JC.h('select', { onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
-          JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); }))),
-        t.modeNote ? JC.h('span', { class: 'warn' }, t.modeNote) : '',
-        t.branch ? JC.h('span', { class: 'muted' }, `⎇ ${t.branch}`) : '',
-        t.modelUsed ? JC.h('span', { class: 'muted', title: t.modelUsed }, JC.modelName(t.modelUsed)) : '',
-        t.output ? JC.h('span', { class: 'muted' }, `${JC.tok(t.context + t.output)}`) : ''),
-      JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost'))),
-      ...(t.asks || []).map(a => askBox(t, a)),
-      JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['agents', `Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]
-        .map(([k, l]) => JC.h('a', { class: JC.tab === k ? 'on' : '', onclick: () => { JC.tab = k; if (k === 'changes') JC.post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) JC.post('shots', { id: t.id }); JC.render(); } }, l))));
+      JC.h('div', { class: 'row' }, JC.h('span', { class: 'tags grow' }, tags.map(x => JC.h('span', { class: 'tag' }, x))), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
+      JC.h('h3', {}, t.title),
+      JC.h('div', { class: 'stepper' }, window.JCStatus.STEPS.map((s, i) => JC.h('span', { class: i < st ? 'ok' : i === st ? 'now' : '' }, i < st ? `✓ ${s}` : s))),
+      JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), nx.actions.length ? JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))) : ''),
+      JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]
+        .map(([k, l]) => JC.h('a', { class: (JC.tab === k || (k === 'details' && JC.tab === 'agents')) ? 'on' : '', onclick: () => { JC.tab = k; if (k === 'changes') JC.post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) JC.post('shots', { id: t.id }); JC.render(); } }, l))));
     body.replaceChildren(...drawerBody(t));
     msg.placeholder = t.status === 'todo' ? 'Run the task first, or edit it under Details' : t.remote ? 'This task is in Remote Control' : 'Message Claude…  Enter sends · Shift+Enter new line';
   }
@@ -140,7 +153,7 @@
       if (!JC.agentsSaved[t.id]) JC.post('savedAgents', { id: t.id });
       const extra = (JC.agentsSaved[t.id] || []).filter(a => !live.some(n => n.toolUseId && n.toolUseId === a.toolUseId))
         .map(a => ({ id: `saved-${a.id}`, parent: 'main', name: a.name, description: a.description, status: a.finished ? 'completed' : 'stopped', key: a.id, sessionId: a.sessionId }));
-      return [JC.agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
+      return [JC.btn('← Details', () => { JC.tab = 'details'; JC.render(); }, 'ghost small'), JC.agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
         JC.h('p', { class: 'muted small' }, 'Click an agent for its whole conversation.')];
     }
     if (JC.tab === 'changes') {
@@ -149,9 +162,13 @@
       if (!t.worktree && !merged) return [JC.h('p', { class: 'muted' }, t.where === 'direct' ? 'This task runs in the project folder: its changes are in your working tree.' : 'No changes yet.')];
       if (!files) return [JC.h('p', { class: 'muted' }, 'Loading…')];
       if (!files.length) return [JC.h('p', { class: 'muted' }, merged ? 'Could not find this task\'s merge in git history.' : 'No changes on this branch yet.')];
-      return [merged ? JC.h('p', { class: 'muted small' }, 'What the merge changed. Click a file for its diff; Open shows it from the project folder.') : '',
-        JC.h('ul', { class: 'files' }, files.map(f => JC.h('li', { onclick: () => JC.post('diff', { id: t.id, file: f.file }), title: 'Open side-by-side diff (PDFs and other documents open in their app)' },
+      return [t.conflicts?.length ? JC.h('div', { class: 'note conflict' }, JC.h('b', {}, `Conflicts in ${t.conflicts.length} file${t.conflicts.length > 1 ? 's' : ''}: `), t.conflicts.join(', '),
+          JC.h('div', { class: 'acts' }, JC.btn('Resolve with Claude', () => JC.post('resolve', { id: t.id }), 'primary small'), JC.btn('Mark resolved', () => JC.post('resolved', { id: t.id }), 'ghost small'))) : '',
+        merged ? JC.h('p', { class: 'muted small' }, 'What the merge changed. Click a file for its diff; Open shows it from the project folder.') : '',
+        JC.h('ul', { class: 'files' }, files.map(f => JC.h('li', { class: t.conflicts?.includes(f.file) ? 'conflict' : '', onclick: () => JC.post('diff', { id: t.id, file: f.file }), title: 'Open side-by-side diff (PDFs and other documents open in their app)' },
           JC.h('span', { class: `st st-${f.status}` }, f.status), JC.h('span', { class: 'grow' }, f.file),
+          f.add != null ? JC.h('span', { class: 'muted small cnt' }, JC.h('span', { class: 'plus' }, `+${f.add}`), ' ', JC.h('span', { class: 'minus' }, `−${f.del}`)) : '',
+          JC.btn('Diff', e => { e.stopPropagation(); JC.post('diff', { id: t.id, file: f.file }); }, 'ghost small', 'Open side-by-side diff'),
           f.status !== 'D' ? JC.btn('Open', e => { e.stopPropagation(); JC.post('openFile', { id: t.id, file: f.file }); }, 'ghost small', 'Open the file') : '')))];
     }
     if (JC.tab === 'review') {
@@ -161,13 +178,13 @@
         JC.h('p', {}, JC.h('b', {}, { pass: '✓ Passed', fail: '✗ Issues found', error: 'Review could not run', running: 'Reviewing…' }[r.state]), r.risk === 'critical' ? JC.h('span', { class: 'warn' }, ' · flagged critical') : '', JC.h('span', { class: 'muted' }, ` · round ${r.attempts || 1}`)),
         r.level ? JC.h('p', { class: 'muted small' }, r.level === 'none' ? `No AI review needed: ${r.why}.` : `${r.level === 'light' ? 'Light review (lighter model)' : 'Full review'}${r.why ? `: ${r.why}` : ''}.`) : '',
         r.error ? JC.h('pre', { class: 'err' }, r.error) : '',
-        r.fixNote ? JC.h('details', { class: 'fixnote' }, JC.h('summary', {}, 'Claude\'s reply to the last round'), JC.h('p', { class: 'small' }, r.fixNote)) : '',
+        r.fixNote ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Claude\'s reply to the last round: '), r.fixNote) : '',
         r.issues?.length ? JC.h('ol', { class: 'issues' }, r.issues.map(i => JC.h('li', { class: i.accepted ? 'accepted' : '' },
-          JC.h('div', {}, i.text),
+          JC.h('div', { class: 'itxt' }, i.text),
           JC.h('div', { class: 'row small' },
-            JC.h('span', { class: 'muted' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Seen in ${i.rounds} rounds` : 'New this round'),
+            JC.h('span', { class: 'muted grow' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Came back ${i.rounds} rounds` : 'New this round'),
             !i.accepted && r.state === 'fail' && !JC.REMOTE ? JC.btn('Accept', () => JC.post('acceptIssues', { id: t.id, keys: [i.key] }), 'ghost small', 'Does not block the merge: the reviewer stops reporting it') : '',
-            !i.accepted && r.state === 'fail' ? JC.btn('Ask Claude to fix this one', () => JC.post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
+            !i.accepted && r.state === 'fail' ? JC.btn('Fix this one', () => JC.post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
         r.tested?.length ? JC.h('p', { class: 'muted small' }, 'Tested: ', r.tested.join(' · ')) : '',
         r.state === 'fail' ? JC.h('div', { class: 'row' },
           JC.btn('Send open issues to Claude', () => JC.post('sendIssues', { id: t.id }), 'primary'),
@@ -179,6 +196,16 @@
       const editable = t.status === 'todo';
       let title, desc;
       return [
+        JC.h('dl', { class: 'kv' },
+          JC.h('dt', {}, 'Runs in'), JC.h('dd', {}, t.where === 'direct' && !t.init ? 'Workspace (no branch)' : t.branch ? `Own branch ${t.branch}` : 'Own branch, merged when done'),
+          JC.h('dt', {}, 'Permissions'), JC.h('dd', {}, JC.h('select', { 'aria-label': 'Permissions', onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
+            JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); })),
+            t.modeNote ? JC.h('span', { class: 'warn' }, ` ${t.modeNote}`) : ''),
+          JC.h('dt', {}, 'After'), JC.h('dd', {}, (t.dependsOn || []).map(id => JC.S.board.tasks.find(o => o.id === id)?.title).filter(Boolean).join(', ') || 'Nothing'),
+          JC.h('dt', {}, 'Based on'), JC.h('dd', {}, t.sources ? (JC.S.sources || []).filter(s => t.sources.includes(s.id)).map(JC.srcLabel).join(', ') || 'No project sources' : 'Nothing'),
+          JC.h('dt', {}, 'Cost'), JC.h('dd', {}, t.costUsd ? `~$${t.costUsd.toFixed(2)} at API prices` : '—', t.output ? ` · ${JC.tok(t.context + t.output)}` : '', t.modelUsed ? ` · ${JC.modelName(t.modelUsed)}` : ''),
+          JC.h('dt', {}, 'Files'), JC.h('dd', {}, !Object.values(t.artifacts || {}).some(Boolean) ? '—' : [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l], i) => [i ? ' · ' : '', JC.h('a', { onclick: () => JC.post('openArtifact', { id: t.id, which: k }) }, l)]))),
+        JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost')), JC.btn(`Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`, () => { JC.tab = 'agents'; JC.render(); }, 'ghost')),
         JC.h('label', { class: 'blk' }, 'Title', title = JC.h('input', { value: t.title, disabled: !editable })),
         JC.h('label', { class: 'blk' }, 'Details', desc = JC.h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
         editable ? (() => {
@@ -200,7 +227,6 @@
           t.status !== 'todo' ? JC.btn(t.artifactUrl ? 'Publish again' : 'Publish', () => JC.post('publishArtifact', { id: t.id }), 'ghost') : '') : '',
         t.files?.length ? JC.h('p', { class: 'small' }, 'Attached: ', t.files.map(JC.base).join(', ')) : '',
         (arts => arts.length ? JC.h('p', { class: 'small' }, 'Artifacts: ', ...arts.map((e, i) => [i ? ', ' : '', JC.h('a', { onclick: () => JC.post('openUrl', { url: e.url }), title: e.url }, `${e.title || e.url.replace(/^https?:\/\//, '')} (${e.kind === 'output' ? 'published' : 'used'})`)])) : '')((JC.S.registry || []).filter(e => e.taskIds.includes(t.id))),
-        t.sources ? JC.h('p', { class: 'small' }, 'Based on: ', (JC.S.sources || []).filter(s => t.sources.includes(s.id)).map(JC.srcLabel).join(', ') || 'no project sources') : '',
         JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'Files Claude wrote, logs and tokens'),
           JC.h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => JC.btn(l, () => JC.post('openArtifact', { id: t.id, which: k }), 'ghost')),
             t.worktree ? JC.btn('Setup log', () => JC.post('openArtifact', { id: t.id, which: 'setup' }), 'ghost') : ''),
@@ -210,8 +236,23 @@
       ];
     }
     const list = JC.steps[t.id] || [];
-    if (!list.length) return [JC.h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
-    return [logEl(list)];
+    const asks = (t.asks || []).map(a => askBox(t, a));
+    if (!list.length) return [...asks, JC.h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
+    return [...asks, timeline(t, list)];
+  }
+
+  // Activity: what Claude did as a timeline, finished steps green, the last one live while it works.
+  function timeline(t, list) {
+    const live = t.run && t.run !== 'idle';
+    const shown = list.filter(s => s.kind !== 'result');
+    const el = JC.h('div', { class: 'tl' }, shown.map((s, i) => {
+      const last = live && i === shown.length - 1;
+      const txt = s.kind === 'tool' ? `${s.agent ? `↳ ${s.agent}: ` : ''}${s.text}` : s.text;
+      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : txt);
+    }));
+    // Keep the ask boxes (above the timeline) in view while Claude waits for an answer.
+    requestAnimationFrame(() => { body.scrollTop = t.asks?.length ? 0 : body.scrollHeight; });
+    return el;
   }
 
   function logEl(list) {
@@ -224,6 +265,11 @@
 
   /* ---------- planner / editor chat ---------- */
   // What the planner is doing this turn: a moving bar while it works, then where the plan stands.
+  function planProgressText(p, running) {
+    const since = p.turnAt || 0;
+    const tools = (p.steps || []).filter(x => x.time && Date.parse(x.time) >= since && x.kind === 'tool');
+    return p.asks?.length ? 'Claude has a question for you (below).' : running ? `Claude is reading the code…${tools.length ? ` ${tools.length} tool uses` : ''}` : 'Your turn: message Claude to refine, or apply the tasks.';
+  }
   function planProgress(p, running) {
     const since = p.turnAt || 0;
     const turn = (p.steps || []).filter(x => x.time && Date.parse(x.time) >= since);
@@ -240,6 +286,14 @@
         running && tools.length ? ` · now: ${tools[tools.length - 1].text.slice(0, 60)}` : ''));
   }
 
+  function fileHint(c) { return (c.description || '').match(/[\w@.-]+(?:\/[\w@.-]+)+\.\w+/g)?.slice(0, 2).join(', ') || ''; }
+  // The planning chat as you / Claude bubbles; tool noise stays out of it.
+  function chatEl(list) {
+    const el = JC.h('div', { class: 'chat' }, list.filter(s => s.kind === 'user' || s.kind === 'say' || s.kind === 'error').map(s =>
+      JC.h('div', { class: `msg ${s.kind === 'user' ? 'you' : 'claude'}${s.kind === 'error' ? ' err' : ''}` }, s.text)));
+    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    return el;
+  }
   const pKeep = {}; // which proposals the user has unticked
   function renderPlanner() {
     const p = JC.S.planner;
@@ -252,13 +306,15 @@
       return;
     }
     const running = p.run && p.run !== 'idle';
+    const stepsNow = p.asks?.length ? 1 : running ? 0 : p.proposals ? 2 : 0;
+    const asked = (p.steps || []).some(x => x.kind === 'tool' && /^AskUserQuestion/.test(x.text || ''));
+    const stepNames = ['Reading code', 'Asked you', 'Proposal ready'];
     head.replaceChildren(
-      JC.h('div', { class: 'row' }, JC.h('h3', { class: 'grow' }, p.sprint ? `Editing ${p.sprint}` : p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'}` : 'Planning tasks'),
-        JC.btn('×', closeTask, 'ghost icon', 'Close (the chat keeps running)')),
-      JC.h('div', { class: `next ${p.asks?.length ? 'warn' : running ? 'run' : 'muted'}` }, p.asks?.length ? 'Claude has a question for you (below).' : running ? 'Claude is reading the code…' : 'Your turn: message Claude to refine, or apply the tasks below.',
-        p.model ? JC.h('span', { class: 'muted small', title: p.model }, ` · ${JC.modelName(p.model)}`) : '',
-        p.context ? JC.h('span', { class: 'muted small' }, ` · ${JC.tok(p.context)}`) : ''),
-      planProgress(p, running));
+      JC.h('div', { class: 'row' }, JC.h('h2', { class: 'grow' }, '✦ Plan with Claude'),
+        JC.btn('✕', closeTask, 'ghost', 'Close (the chat keeps running)')),
+      JC.h('div', { class: 'steps' }, stepNames.map((n, i) => JC.h('span', { class: i < stepsNow || (i === 1 && asked && stepsNow === 2) ? 'ok' : i === stepsNow ? 'now' : '' }, i < stepsNow || (i === 1 && asked && stepsNow === 2) ? `✓ ${n}` : n))),
+      JC.h('div', { class: 'small muted' }, p.sprint ? `Editing ${p.sprint} · ` : p.targets?.length ? `Editing ${p.targets.length} To do task${p.targets.length === 1 ? '' : 's'} · ` : '', planProgressText(p, running),
+        p.model ? ` · ${JC.modelName(p.model)}` : '', p.context ? ` · ${JC.tok(p.context)}` : ''));
     const prop = p.proposals;
     const panel = [];
     if (p.note) panel.push(JC.h('div', { class: 'applied' }, '✓ ', p.note));
@@ -279,22 +335,26 @@
       const all = [...changes, ...removes];
       all.forEach(c => { if (!(c.key in pKeep)) pKeep[c.key] = c.kind !== 'same'; });
       const nChange = all.filter(c => c.kind !== 'same').length;
+      // 'after N': positions among the proposed tasks (changes), skipping titles that are not in the list.
+      const afterNums = c => (c.after || []).map(a => changes.findIndex(x => x.title === a) + 1).filter(n => n && n !== changes.indexOf(c) + 1);
+      const apply = () => {
+        JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
+        for (const k in pKeep) delete pKeep[k];
+      };
+      const nTick = all.filter(c => c.kind !== 'same' && pKeep[c.key]).length;
+      applyBtn.textContent = `Apply ${nTick} task${nTick === 1 ? '' : 's'}`;
+      applyBtn.onclick = apply; applyBtn.disabled = !nTick; applyBtn.hidden = false;
       panel.push(JC.h('div', { class: 'proppanel' },
-        JC.h('div', { class: 'row' }, JC.h('h4', { class: 'grow' }, `Proposed tasks (${prop.length})`), nChange ? JC.h('span', { class: 'muted small' }, `${nChange} change${nChange === 1 ? '' : 's'}`) : ''),
         JC.h('div', { class: 'reflist' }, all.map(c => JC.h('label', { class: `refrow ${c.kind}` },
-          c.kind === 'same' ? JC.h('span', { class: 'rspace' }) : JC.h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; } }),
-          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : ''),
+          c.kind === 'same' ? JC.h('span', { class: 'rspace' }) : JC.h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; const n = all.filter(x => x.kind !== 'same' && pKeep[x.key]).length; applyBtn.textContent = `Apply ${n} task${n === 1 ? '' : 's'}`; applyBtn.disabled = !n; } }),
+          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : '', afterNums(c).length ? JC.h('span', { class: 'pill' }, `after ${afterNums(c).join(', ')}`) : ''),
+            fileHint(c) ? JC.h('div', { class: 'small muted fhint' }, fileHint(c)) : '',
             c.kind === 'reopen' ? JC.h('div', { class: 'small warn' }, 'Done, but must change: goes back to To do and is built again on top of the merged work.') : '',
             c.kind === 'amend' ? JC.h('div', { class: 'small warn' }, 'Already started: the new text is saved and sent to its Claude as a message.') : '',
             c.before && c.before !== c.title ? JC.h('div', { class: 'small muted strike' }, c.before) : '',
-            c.description ? JC.h('div', { class: 'small muted' }, c.description) : '')))),
-        JC.h('div', { class: 'acts' },
-          nChange ? JC.btn('Apply the ticked tasks', () => {
-            JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
-            for (const k in pKeep) delete pKeep[k];
-          }, 'primary') : JC.h('span', { class: 'muted small' }, 'No changes to apply yet.'))));
+            c.description && c.description !== fileHint(c) ? JC.h('div', { class: 'small muted' }, c.description) : ''))))));
     }
-    body.replaceChildren(logEl(p.steps || []), ...panel);
+    body.replaceChildren(chatEl(p.steps || []), ...panel);
     msg.placeholder = 'Message Claude to refine the tasks…  Enter sends';
   }
 

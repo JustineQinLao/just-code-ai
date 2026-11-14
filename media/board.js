@@ -17,12 +17,8 @@
   let changes = {};                        // task id → changed files
   let shots = {};                          // task id → screenshots
   let agentView, agentsSaved = {};         // agent shown in the Agents tab; finished agents from transcripts
-  let showSetup = false;
+  let showSetup = false, setupAsked = false;
   const HEALTH = new Set(['board', 'policy', 'registry', 'worktrees', 'sources', 'transcripts']);   // checklist rows about the project's .justcode files
-  let more = false;                        // new-task details open
-  let images = [];                         // pasted screenshots for the new task
-  let files = [];                          // files attached to the new task
-  let srcOff = new Set();                  // project sources unticked for the new task
   let dragId;
   let initLater = saved.initLater || {};   // project root → the user chose "Not now" on the setup banner
   let artSeen = saved.artSeen || 0;             // newest artifact change you have seen in the Artifacts dialog
@@ -96,163 +92,13 @@
       h('div', { id: 'projects', class: 'projects' }),
       h('div', { class: 'spacer' }),
       h('div', { id: 'meter', class: 'meter' }),
-      btn('⚙', () => JC.settings(), 'ghost icon', 'Settings'),
-      btn('?', () => JC.guide(), 'ghost icon', 'Guide')),
+      btn('?', () => JC.guide(), 'ghost icon', 'How JustCode works'),
+      btn('⚙', () => JC.settings(), 'ghost icon', 'Settings, policy, phone, setup checklist')),
     h('div', { id: 'banners' }),
-    h('section', { class: 'add' },
-      h('div', { class: 'addrow' },
-        complete(h('input', { id: 'title', class: 'grow', placeholder: 'What should Claude do?  / skills · @ files · Enter adds · ⌘/Ctrl+Enter adds and runs', oninput: e => {
-          // A lone /command runs in the project folder; anything more is a normal task again.
-          if (acRooted && !/^\/\S+\s*$/.test(e.target.value)) { $('#where').value = ''; acRooted = false; }
-        }, onkeydown: e => {
-          if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTask(e.metaKey || e.ctrlKey); }
-        }, onpaste: pasteImages })),
-        btn('Details ▾', () => toggleMore(), 'ghost', 'Details, a "Done when" checklist, files, sprint'),
-        btn('⚡ Quick', () => addTask(true, true), '', 'Run it now in your workspace: no branch, no checks, no AI review. Then Finish (commit) or Discard. For questions and small edits.'),
-        btn('Add', () => addTask(false), 'primary', 'Adds to To do: its own branch or the workspace, checked and reviewed. ⌘/Ctrl+Enter adds and runs it.')),
-      h('div', { id: 'more', class: 'more', hidden: true },
-        complete(h('textarea', { id: 'desc', rows: 2, placeholder: 'Goal and details. / skills · @ files · paste screenshots', onpaste: pasteImages })),
-        h('textarea', { id: 'done', rows: 2, placeholder: 'Done when (one check per line), e.g.\nthe toggle persists after a reload\nnpm test passes' }),
-        h('div', { id: 'imgs', class: 'imgs' }),
-        h('div', { class: 'row' }, btn('📎 Attach files…', () => post('pickFiles'), 'ghost', 'Files or folders this task is based on (specs, designs, data)'), h('span', { id: 'files', class: 'chips' }),
-          h('label', {}, 'Goes to ', h('select', { id: 'sprintSel' }))),
-        h('div', { id: 'srcpick', class: 'chips' }),
-        h('div', { id: 'skills', class: 'chips' }),
-        h('details', { class: 'adv' }, h('summary', {}, 'Advanced'),
-          h('div', { class: 'row' },
-            h('label', {}, 'Agent ', h('select', { id: 'agent' })),
-            h('label', {}, 'Permissions ', h('select', { id: 'mode' }, MODES.map(([v, l, d]) => h('option', { value: v, title: d }, l)))),
-            h('label', { title: 'Code change: Claude edits the project. Artifact page: Claude designs one web page (with the frontend-design skill) and JustCode publishes it to claude.ai and puts the link on the card. Tasks that say "artifact" pick this by themselves.' }, 'Result ',
-              h('select', { id: 'output' }, h('option', { value: '' }, 'Automatic (a mockup or page: artifact)'), h('option', { value: 'code' }, 'Code change'), h('option', { value: 'artifact' }, 'Artifact page (link)'))),
-            h('label', { title: 'Own branch: an isolated copy you review and merge. Workspace: runs in your checkout, reviewed, then Finish commits its files.' }, 'Runs in ',
-              h('select', { id: 'where' }, h('option', { value: '' }, 'Automatic (backlog: workspace, sprint: own branch)'), h('option', { value: 'branch' }, 'Own branch (reviewed, merged)'), h('option', { value: 'direct' }, 'Workspace (direct, reviewed)'))))))),
+    h('div', { id: 'composer' }),
     h('div', { id: 'toolbar', class: 'toolbar' }),
     h('div', { id: 'progress' }),
     h('main', { id: 'lanes', class: 'lanes' }));
-
-  function toggleMore(on = !more) { more = on; $('#more').hidden = !more; }
-
-  // Pasted screenshots: read as data URLs into `list`, shown as removable thumbnails in `box`. Text pastes as usual.
-  /* ---------- / and @ menu on text boxes ---------- */
-  let acData = { files: [], commands: [] }, acLoaded = false;
-  let acField, acItems = [], acSel = 0, acDismissed = -1, acRooted = false;
-  const acMenu = h('div', { class: 'ac', role: 'listbox', hidden: true });
-  const acToken = el => {
-    const m = el.value.slice(0, el.selectionStart).match(/(?:^|\s)([/@])([^\s]*)$/);
-    return m && { kind: m[1], query: m[2].toLowerCase(), start: el.selectionStart - m[2].length - 1 };
-  };
-  // Commands match by substring only, so "/users" or "/Users/me" in a sentence closes the menu and Enter still submits.
-  function acScore(q, name, fuzzy) {
-    if (!q) return 1;
-    const s = name.toLowerCase(), base = s.replace(/\/$/, '').split(/[/:]/).pop();
-    if (base.startsWith(q)) return 5;
-    if (base.includes(q)) return 4;
-    if (s.includes(q)) return 3;
-    if (!fuzzy) return 0;
-    let i = 0;
-    for (const ch of s) if (ch === q[i]) i++;
-    return i === q.length ? 1 : 0;
-  }
-  function acMatches(t) {
-    if (t.kind === '/') {
-      const all = acLoaded ? acData.commands : S?.skills || [];
-      return all.map(c => ({ c, score: acScore(t.query, c.name) })).filter(x => x.score).sort((a, b) => b.score - a.score)
-        .map(({ c }) => ({ label: `/${c.name}`, hint: c.description, insert: `/${c.name} ` })).slice(0, 40);
-    }
-    const depth = p => p.replace(/\/$/, '').split('/').length;
-    return acData.files.filter(f => f.toLowerCase() !== t.query).map(f => ({ f, score: acScore(t.query, f, true) })).filter(x => x.score)
-      .sort((a, b) => b.score - a.score || depth(a.f) - depth(b.f) || a.f.localeCompare(b.f)).slice(0, 40)
-      .map(({ f }) => ({ label: f, dir: f.endsWith('/') && !f.includes(' '), insert: f.endsWith('/') && !f.includes(' ') ? `@${f}` : f.includes(' ') ? `@"${f}" ` : `@${f} ` }));
-  }
-  function acHide() { acMenu.hidden = true; acField = undefined; acItems = []; }
-  function acDraw() {
-    const t = acField && acToken(acField);
-    if (!t) return acHide();
-    acItems = acMatches(t);
-    acSel = Math.min(acSel, Math.max(acItems.length - 1, 0));
-    const waiting = !acLoaded && t.kind === '@';
-    if (!acItems.length && !waiting) { acMenu.hidden = true; return; }
-    const rows = acItems.map((it, i) => h('div', { class: `acitem${i === acSel ? ' on' : ''}`, role: 'option', 'aria-selected': i === acSel ? 'true' : 'false', title: it.hint || it.label,
-      onmousedown: e => { e.preventDefault(); acPick(i); } }, h('b', {}, it.label), it.hint ? h('span', { class: 'muted small' }, it.hint) : ''));
-    acMenu.replaceChildren(...rows,
-      waiting ? h('div', { class: 'acnote muted small' }, 'Loading files…') : '',
-      t.kind === '/' && !S?.settings?.personalSetup ? h('div', { class: 'acnote muted small' }, 'Your personal skills and plugins are off for tasks. Turn on "Your personal Claude setup in tasks" in ⚙ to list them.') : '');
-    (acField.closest('dialog') || document.body).append(acMenu); // a modal dialog covers anything outside it
-    acMenu.hidden = false;
-    const r = acField.getBoundingClientRect(), width = Math.min(Math.max(r.width, 340), innerWidth - 16), above = r.bottom + 270 > innerHeight && r.top > innerHeight - r.bottom;
-    acMenu.style.cssText = `left:${Math.max(8, Math.min(r.left, innerWidth - width - 8))}px;width:${width}px;${above ? `bottom:${innerHeight - r.top + 4}px` : `top:${r.bottom + 4}px`}`;
-    acMenu.querySelector('.on')?.scrollIntoView({ block: 'nearest' });
-  }
-  function acUpdate(el) {
-    const t = acToken(el);
-    if (!t || t.start === acDismissed) { if (!t) acDismissed = -1; if (acField === el) acHide(); return; }
-    if (acField !== el) { acField = el; acSel = 0; post('completions'); }
-    acDraw();
-  }
-  function acPick(i) {
-    const el = acField, t = el && acToken(el), it = acItems[i];
-    if (!t || !it) return acHide();
-    const end = el.selectionStart;
-    el.setRangeText(it.insert, t.start, end, 'end');
-    if (el.id === 'title' && el.value.trim() === it.label) { $('#where').value = 'direct'; acRooted = true; }
-    acSel = 0;
-    it.dir ? acDraw() : acHide();
-  }
-  function complete(el) {
-    el.addEventListener('input', () => { acSel = 0; acUpdate(el); });
-    el.addEventListener('click', () => acUpdate(el));
-    el.addEventListener('keyup', e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) acUpdate(el); });
-    el.addEventListener('blur', () => { if (acField === el) acHide(); });
-    el.addEventListener('keydown', e => { // capture: runs before the box's own Enter handler
-      if (acField !== el || acMenu.hidden || e.isComposing) return;
-      if (e.key === 'ArrowDown' && acItems.length) { acSel = (acSel + 1) % acItems.length; acDraw(); }
-      else if (e.key === 'ArrowUp' && acItems.length) { acSel = (acSel - 1 + acItems.length) % acItems.length; acDraw(); }
-      else if ((e.key === 'Enter' || e.key === 'Tab') && acItems.length) acPick(acSel);
-      else if (e.key === 'Escape') { acDismissed = acToken(el)?.start ?? -1; acHide(); }
-      else return;
-      e.preventDefault(); e.stopImmediatePropagation();
-    }, true);
-    return el;
-  }
-
-  function imagePaste(list, box) {
-    const draw = () => box.replaceChildren(...list.map((im, i) => h('span', { class: 'thumb' }, h('img', { src: im.data }), btn('×', () => { list.splice(i, 1); draw(); }, 'x', 'Remove'))));
-    return {
-      draw,
-      onpaste: e => {
-        const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
-        if (!files.length) return false;
-        e.preventDefault();
-        for (const f of files) {
-          const rd = new FileReader();
-          rd.onload = () => { list.push({ name: f.name || 'pasted.png', data: rd.result }); draw(); };
-          rd.readAsDataURL(f);
-        }
-        return true;
-      },
-    };
-  }
-  function pasteImages(e) {
-    if (imagePaste(images, $('#imgs')).onpaste(e)) toggleMore(true);
-  }
-  function drawImages() { imagePaste(images, $('#imgs')).draw(); }
-
-  const base = f => f.split(/[\\/]/).filter(Boolean).pop() || f;
-  function drawFiles() {
-    $('#files').replaceChildren(...files.map((f, i) => h('span', { class: 'chip', title: f }, base(f), btn('×', () => { files.splice(i, 1); drawFiles(); }, 'x', 'Remove'))));
-  }
-  function addTask(start, quick = false) {
-    const title = $('#title').value.trim();
-    if (!title) return $('#title').focus();
-    const sprint = $('#sprintSel').value;
-    const done = $('#done').value.split('\n').map(x => x.trim().replace(/^[-*]\s*/, '')).filter(Boolean);
-    const description = [$('#desc').value.trim(), done.length ? `Done when:\n${done.map(d => `- ${d}`).join('\n')}` : ''].filter(Boolean).join('\n');
-    // "make an artifact…", "artifact of the API": the result is a published page, not a code change.
-    const output = $('#output').value;   // '' = automatic: the host decides from the text (resolveOutput)
-    post('addTask', { title, description, output, agent: $('#agent').value, mode: $('#mode').value, where: $('#where').value,
-      sprintId: sprint || undefined, images, files, sources: sprintSrcs(sprint).map(s => s.id).filter(id => !srcOff.has(id)), start, ...(quick ? { quick: true } : {}) });
-    $('#title').value = ''; $('#desc').value = ''; $('#done').value = ''; $('#output').value = ''; images = []; files = []; srcOff = new Set(); drawImages(); drawFiles(); renderAddOptions();
-  }
 
   /* ---------- render ---------- */
   function render() {
@@ -263,12 +109,12 @@
         btn('+ Add a project folder', () => post('addProject'), 'primary')));
       return;
     }
-    renderProjects(); renderMeter(); renderBanners(); renderAddOptions(); renderToolbar(); renderProgress(); renderLanes(); JC.renderDrawer();
+    renderProjects(); renderMeter(); renderBanners(); JC.renderAddOptions(); renderToolbar(); renderProgress(); renderLanes(); JC.renderDrawer();
   }
 
   function renderProjects() {
-    $('#projects').replaceChildren(...S.roots.map(p => h('span', { class: `proj${p.path === S.root ? ' on' : ''}`, title: p.path, onclick: () => { open = undefined; post('root', { root: p.path }); } },
-      p.name, p.running ? h('b', { class: 'badge run' }, `▶${p.running}`) : '', p.waiting ? h('b', { class: 'badge warn' }, `●${p.waiting}`) : '',
+    $('#projects').replaceChildren(...S.roots.map(p => h('span', { class: `proj${p.path === S.root ? ' on' : ''}${p.waiting ? ' dot' : ''}`, title: p.path, onclick: () => { open = undefined; post('root', { root: p.path }); } },
+      p.name, p.running ? h('b', { class: 'badge run' }, `▶${p.running}`) : '',
       p.removable ? btn('×', () => post('removeProject', { root: p.path }), 'x', 'Remove from JustCode (files are kept)') : '')),
       btn('+', () => post('addProject'), 'ghost icon', 'Add a project folder'),
       setupPill());
@@ -295,52 +141,28 @@
     const l = S.limit || {};
     if (S.settings?.bypassAll) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Bypass all is ON. '), 'Every task runs with no approvals and can run any command. Turn off justCode.bypassAll to go back.'));
     if (l.held) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Usage limit reached. '),
-      `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString()}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
+      `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
     const st = S.setup;
-    if (st && (!st.ready || showSetup)) {
-      const req = st.checks.filter(c => !c.optional || c.id === 'repo'), done = req.filter(c => c.ok).length;
-      out.push(h('div', { class: 'setup' },
-        h('div', { class: 'row' }, h('h3', {}, st.ready ? '✓ All set' : `Get set up · ${done} of ${req.length}`), h('div', { class: 'spacer' }),
-          btn('Check again', () => post('fix', { action: 'recheck' }), 'ghost'), st.ready ? btn('Hide', () => { showSetup = false; render(); }, 'ghost') : ''),
-        h('ul', {}, st.checks.map(c => h('li', { class: c.ok ? 'ok' : c.optional ? 'opt' : 'bad' },
-          h('span', { class: 'dot' }, c.ok ? '✓' : c.optional ? '○' : '✗'), h('b', {}, c.label), h('span', { class: 'muted' }, c.detail),
-          !c.ok && c.fix ? btn(c.fix.label, () => post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : ''))),
-        h('p', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : 'Remote Control (continue on your phone) needs a Claude account login.')));
-    } else if (!st) out.push(h('div', { class: 'banner' }, 'Checking your setup…'));
-    else if (!REMOTE) {
+    if (st && !st.ready && !setupAsked && !$('#dlg').open) { setupAsked = true; showSetup = true; }
+    if (st && showSetup && !$('#dlg').open) { showSetup = false; JC.setupDialog(); }
+    if (!st) out.push(h('div', { class: 'banner info' }, 'Checking your setup…'));
+    if (st && !st.ready && !REMOTE) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Setup is not finished. '), 'Some things tasks need are missing.'), btn('Get set up', () => JC.setupDialog(), 'primary')));
+    if (st?.ready && !REMOTE) {
       const sick = st.checks.filter(c => !c.ok && HEALTH.has(c.id));
-      if (sick.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
-        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : (showSetup = true, render()), 'ghost')));
+      if (sick.length) out.push(h('div', { class: `banner ${sick.some(c => c.id === 'registry') ? 'err' : 'warn'}` }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
+        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : JC.setupDialog(), 'ghost')));
     }
+    const over = S.board.tasks.find(t => !t.archived && /^Budget reached/.test(t.error || ''));
+    if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in policy.json, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => JC.openTask(init.running.id), 'primary')));
     else if (st?.ready && !init.done && !init.running && !initLater[S.root]) out.push(h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'This project is not set up for Claude yet. '),
-      `It is missing ${andList(init.missing)}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. Tasks then follow your conventions and come with a "Done when" checklist.`),
-      btn('Set up project', () => post('initialize'), 'primary'), btn('Not now', () => { initLater[S.root] = true; remember(); render(); }, 'ghost', 'Hide for this project. The "Not set up" label at the top still sets it up.')));
+      'Claude reads the code, asks a few questions, and writes .justcode/project.md and DESIGN.md.'),
+      btn('Set up project', () => post('initialize'), 'primary'), btn('Later', () => { initLater[S.root] = true; remember(); render(); }, 'ghost', 'Hide for this project. The "Not set up" label at the top still sets it up.')));
     if (st?.ready && !S.guideSeen) out.push(h('div', { class: 'banner info' }, h('b', {}, 'New here? '), 'Add a task above and press ⌘/Ctrl+Enter. Claude works on its own branch; you answer on the card and merge when it passes review.',
       btn('2-minute guide', () => JC.guide(), 'ghost'), btn('Got it', () => { S.guideSeen = true; post('guideSeen'); render(); }, 'ghost')));
     $('#banners').replaceChildren(...out);
-  }
-
-  function renderAddOptions() {
-    const ag = $('#agent'), cur = ag.value;
-    ag.replaceChildren(h('option', { value: '' }, 'Default'), ...S.agents.map(a => h('option', { value: a.name, title: a.description }, `${a.name}${a.scope === 'user' ? ' (yours)' : ''}`)));
-    ag.value = S.agents.some(a => a.name === cur) ? cur : '';
-    if (!$('#where').dataset.set) { $('#where').value = ['direct', 'branch'].includes(S.settings.defaultWhere) ? S.settings.defaultWhere : ''; $('#where').dataset.set = '1'; }
-    if (!$('#mode').dataset.set) { $('#mode').value = S.settings.defaultMode; $('#mode').dataset.set = '1'; }
-    const sp = $('#sprintSel'), sc = sp.value, active = S.board.sprints.find(s => s.active && !s.closed);
-    sp.replaceChildren(h('option', { value: '' }, 'Backlog'), ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id }, s.name)));
-    sp.value = sc && S.board.sprints.some(s => s.id === sc) ? sc : (view !== 'all' && view !== 'backlog' ? view : active?.id ?? '');
-    sp.onchange = () => { srcOff = new Set(); renderAddOptions(); };
-    const srcs = sprintSrcs(sp.value);
-    $('#srcpick').replaceChildren(...(srcs.length ? [h('span', { class: 'muted small' }, 'Based on:')] : []), ...srcs.map(s => h('label', { class: 'chip', title: s.note || s.ref },
-      h('input', { type: 'checkbox', checked: !srcOff.has(s.id), onchange: e => { e.target.checked ? srcOff.delete(s.id) : srcOff.add(s.id); } }), ' ', srcLabel(s))));
-    $('#skills').replaceChildren(...(S.skills.length ? [h('span', { class: 'muted small', title: 'Skills this task can use. Your personal skills appear when "Your personal Claude setup in tasks" is on (⚙).' }, 'Skills:')] : []),
-      ...S.skills.map(({ name: n, description: d }) => h('span', { class: 'chip', title: `${d || 'No description'}\n\nClick to use it in this task.`, onclick: () => {
-        const t = $('#title'); if (!t.value.trim()) t.value = `/${n}`; else $('#desc').value += `${$('#desc').value ? '\n' : ''}/${n}`;
-        if (t.value.trim() === `/${n}`) $('#where').value = 'direct';
-      } }, `/${n}`)));
   }
 
   const visible = () => S.board.tasks.filter(t => (showArchived ? t.archived : !t.archived) &&
@@ -353,31 +175,31 @@
     const q = S.queue;
     const sprint = S.board.sprints.find(s => s.id === view);
     const editable = tasks.filter(t => t.status === 'todo' && !t.worktree && !t.queued);
+    const extra = [
+      ['+ Sprint', 'Start a new sprint', () => JC.newSprint()],
+      sprint && editable.length && ['✦ Edit sprint (' + editable.length + ')', `Edit every not-started task in ${sprint.name} with one prompt`, () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint, true)],
+      sprint && !sprint.active && ['Set active', `Make ${sprint.name} the active sprint`, () => post('activateSprint', { sprintId: sprint.id })],
+      sprint && ['Close sprint', `Close ${sprint.name}`, () => post('closeSprint', { sprintId: sprint.id })],
+      sprint?.branch && tasks.length && tasks.every(t => t.status === 'done') && [`Merge sprint into ${sprint.target}`, `${sprint.branch} → ${sprint.target}`, () => post('mergeSprint', { sprintId: sprint.id })],
+      sprint && ['Delete sprint…', 'Asks first. Its tasks move to the Backlog', () => post('deleteSprint', { sprintId: sprint.id })],
+      ready.length && [`✓ Merge ready (${ready.length})`, 'Merge every task whose review passed', () => post('mergeReady', { ids: ready.map(t => t.id) })],
+      view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') && ['Clear backlog…', 'Archive every idle backlog task (asks first)', () => post('clearBacklog')],
+    ].filter(Boolean);
     $('#toolbar').replaceChildren(
       h('select', { onchange: e => { view = e.target.value; remember(); render(); } },
         h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
         ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
-      btn('+ Sprint', () => JC.newSprint(), 'ghost'),
-      sprint && !sprint.active ? btn('Set active', () => post('activateSprint', { sprintId: sprint.id }), 'ghost') : '',
-      sprint ? btn('Close sprint', () => post('closeSprint', { sprintId: sprint.id }), 'ghost') : '',
-      sprint?.branch ? h('span', { class: 'muted small', title: `Tasks in ${sprint.name} merge into ${sprint.branch}. When the last one merges, it merges into ${sprint.target}.` }, `⎇ ${sprint.branch} → ${sprint.target}`) : '',
-      sprint?.branch && tasks.length && tasks.every(t => t.status === 'done') ? btn(`Merge sprint into ${sprint.target}`, () => post('mergeSprint', { sprintId: sprint.id }), 'ghost') : '',
-      view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') ? btn('Clear backlog…', () => post('clearBacklog'), 'ghost', 'Archive every idle backlog task (asks first; undo with Show archived tasks)') : '',
-      sprint ? btn('Delete sprint…', () => post('deleteSprint', { sprintId: sprint.id }), 'ghost', 'Remove this sprint (asks first). Its tasks move to the Backlog') : '',
       btn('✦ Plan', () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
-      sprint && editable.length ? btn(`✦ Edit sprint (${editable.length})`, () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint, true), 'ghost', `Edit every not-started task in ${sprint.name} with one prompt`) : '',
-      btn('🎨 Design', () => JC.designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
+      (n => btn(`📎 Sources${n ? ` ${n}` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => JC.artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
-      (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
+      btn('🎨 Design', () => JC.designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
       h('div', { class: 'spacer' }),
       q.queued.length || q.blocker ? h('span', { class: 'queue' }, q.queued.length ? `${q.queued.length} queued` : '', q.blocker ? [' · next waits: ', h('a', { href: '#', title: 'Open this task', onclick: e => { e.preventDefault(); JC.openTask(q.blocker.id); } }, `“${q.blocker.title.slice(0, 40)}”`), ` ${q.blocker.why}`] : '',
         (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
-      ready.length ? btn(`✓ Merge ready (${ready.length})`, () => post('mergeReady', { ids: ready.map(t => t.id) })) : '',
-      btn(`▶ Run all${todo.length ? ` (${todo.length})` : ''}`, () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
-      btn('🕘', () => JC.historyDialog(), 'ghost icon', 'Prompt history: every prompt you sent, and each session'),
-      btn('⋯', () => JC.moreMenu(), 'ghost icon', 'Agent map, report, history, archived tasks'));
+      btn('▶ Run all', () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
+      btn(ready.length ? '⋯ •' : '⋯', () => JC.moreMenu(extra), 'ghost icon', ready.length ? `${ready.length} task${ready.length === 1 ? '' : 's'} ready to merge: open this menu` : 'Sprints, merge, agent map, report, history, archived tasks'));
   }
 
   const costOf = l => l.reduce((n, t) => n + (t.costUsd || 0), 0);
@@ -391,28 +213,33 @@
     const n = id => tasks.filter(t => lane(t) === id).length;
     const parts = [['done', 'done', n('done')], ['review', 'in review', n('review')], ['work', 'working', n('work')], ['needs', 'need you', n('needs')], ['todo', 'to do', n('todo')]];
     const done = n('done'), pct = Math.round(done / tasks.length * 100);
-    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') },
-      h('div', { class: 'row' }, h('b', {}, sp.name), sp.goal ? h('span', { class: 'muted grow' }, sp.goal) : h('span', { class: 'grow' }),
-        h('span', { class: 'small' }, `${done} of ${tasks.length} done · ${pct}%`),
-        !REMOTE ? btn('Report', () => post('sprintReport', { sprintId: sp.id }), 'ghost small', 'Export this sprint\'s report (tasks, merges, cost, audit highlights, artifacts) to .justcode/reports') : '',
-        (b => b ? h('span', { class: `small${b.max && b.spent >= b.max ? ' err' : ''}`, title: 'Estimated cost of this sprint\'s tasks and reviews, against maxCostUsd.sprint in .justcode/policy.json' }, ` · $${b.spent.toFixed(2)}${b.max ? ` / $${b.max}` : ''}`) : '')(sprintBudget(sp.id))),
+    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') + (sp.branch ? ` — ⎇ ${sp.branch} → ${sp.target}` : '') },
+      h('b', {}, sp.name),
       h('div', { class: 'bar', role: 'progressbar', 'aria-label': `${sp.name} progress`, 'aria-valuemin': '0', 'aria-valuemax': String(tasks.length), 'aria-valuenow': String(done) },
         parts.filter(([, , c]) => c).map(([id, , c]) => h('i', { class: `seg ${id}`, style: `flex:${c}` }))),
-      h('div', { class: 'legend small muted' }, parts.filter(([, , c]) => c).map(([id, l, c]) => h('span', {}, h('i', { class: `dot ${id}` }), ` ${c} ${l}`)),
-        S.queue.queued.length ? h('span', {}, ` · ▶ ${S.queue.queued.length} queued`) : '')));
+      h('span', { class: 'muted small' }, `${done} of ${tasks.length} done`),
+      (b => b ? h('span', { class: `small cost${b.max && b.spent >= b.max ? ' err' : ''}`, title: 'Estimated cost of this sprint\'s tasks and reviews, against maxCostUsd.sprint in .justcode/policy.json' }, `$${b.spent.toFixed(2)}${b.max ? ` / $${b.max}` : ''}`) : '')(sprintBudget(sp.id)),
+      h('div', { class: 'spacer' }),
+      !REMOTE ? btn('Report', () => post('sprintReport', { sprintId: sp.id }), 'ghost small', 'Export this sprint\'s report (tasks, merges, cost, audit highlights, artifacts) to .justcode/reports') : ''));
   }
 
-  const LANES = [['todo', 'To do'], ['work', 'Working'], ['needs', 'Needs you'], ['review', 'Review'], ['done', 'Done']];
+  const LANES = window.JCStatus.LANES;
   function renderLanes() {
     const tasks = visible();
+    if (!S.board.tasks.some(t => !t.archived)) {
+      $('#lanes').replaceChildren(h('div', { class: 'empty' }, h('b', {}, 'No tasks yet'), h('p', {}, 'Type what you want above. ⚡ Quick runs it now; Add puts it in To do. Or ✦ Plan a bigger goal with Claude.'),
+        btn('✦ Plan with Claude', () => (S.planner ? JC.openPlanner() : JC.planDialog([], undefined, false)), 'primary')));
+      return;
+    }
     $('#lanes').replaceChildren(...LANES.map(([id, name]) => {
       const list = tasks.filter(t => lane(t) === id);
       if (id === 'done') list.reverse();
       return h('section', { class: `lane ${id}`, ondragover: e => { e.preventDefault(); e.currentTarget.classList.add('over'); },
         ondragleave: e => e.currentTarget.classList.remove('over'),
         ondrop: e => { e.currentTarget.classList.remove('over'); if (dragId && id === 'done') post('move', { id: dragId, status: 'done' }); else if (dragId && id === 'todo') post('reorder', { id: dragId }); } },
-        h('h2', {}, name, h('span', { class: 'count' }, list.length)),
-        list.length ? list.map((t, i) => card(t, id === 'todo' ? i + 1 : 0)) : h('p', { class: 'muted small hint' }, hint(id)));
+        h('h2', {}, h('span', { class: 'ldot' }), name, h('span', { class: 'count' }, list.length)),
+        list.length ? list.map((t, i) => card(t, id === 'todo' ? i + 1 : 0)) : h('p', { class: 'muted small hint' }, hint(id)),
+        id === 'todo' ? h('button', { class: 'addtask', onclick: () => $('#title')?.focus() }, '+ Add task') : '');
     }));
   }
   const hint = id => ({ todo: 'Add a task above.', work: 'Running tasks show here.', needs: 'Approvals and questions land here.', review: 'Finished work waits here for review and merge.', done: 'Merged tasks.' })[id];
@@ -435,6 +262,7 @@
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
+      nx.tone === 'run' ? h('div', { class: 'pulsebar' }) : '',
       ...(t.asks || []).map(a => JC.askBox(t, a)),
       nx.actions.length ? h('div', { class: 'acts' }, nx.actions.map(([l, fn, style], i) => btn(l, fn, i === 0 ? 'primary' : style || 'ghost'))) : '');
     return el;
@@ -458,10 +286,6 @@
     get agentsSaved() { return agentsSaved; }, set agentsSaved(v) { agentsSaved = v; },
     get showSetup() { return showSetup; }, set showSetup(v) { showSetup = v; },
     HEALTH,
-    get more() { return more; }, set more(v) { more = v; },
-    get images() { return images; }, set images(v) { images = v; },
-    get files() { return files; }, set files(v) { files = v; },
-    get srcOff() { return srcOff; }, set srcOff(v) { srcOff = v; },
     get dragId() { return dragId; }, set dragId(v) { dragId = v; },
     get initLater() { return initLater; }, set initLater(v) { initLater = v; },
     get artSeen() { return artSeen; }, set artSeen(v) { artSeen = v; },
@@ -493,35 +317,11 @@
     next,
     lastTool,
     app,
-    toggleMore,
-    get acData() { return acData; }, set acData(v) { acData = v; },
-    get acLoaded() { return acLoaded; }, set acLoaded(v) { acLoaded = v; },
-    get acField() { return acField; }, set acField(v) { acField = v; },
-    get acItems() { return acItems; }, set acItems(v) { acItems = v; },
-    get acSel() { return acSel; }, set acSel(v) { acSel = v; },
-    get acDismissed() { return acDismissed; }, set acDismissed(v) { acDismissed = v; },
-    get acRooted() { return acRooted; }, set acRooted(v) { acRooted = v; },
-    acMenu,
-    acToken,
-    acScore,
-    acMatches,
-    acHide,
-    acDraw,
-    acUpdate,
-    acPick,
-    complete,
-    imagePaste,
-    pasteImages,
-    drawImages,
-    base,
-    drawFiles,
-    addTask,
     render,
     renderProjects,
     setupPill,
     renderMeter,
     renderBanners,
-    renderAddOptions,
     visible,
     renderToolbar,
     costOf,
@@ -539,11 +339,12 @@
       S = m;
       if (view !== 'all' && view !== 'backlog' && !S.board?.sprints.some(s => s.id === view)) { view = 'all'; remember(); } // its sprint was deleted if (open && open !== '__planner' && !S.board?.tasks.some(t => t.id === open)) open = undefined;
       render();
+      if ($('#dlg').open && $('#dlg').dataset.kind === 'setup') JC.setupDialog();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'sources') JC.sourcesDialog();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') JC.artifactsDialog();
     }
-    else if (m.type === 'completions') { acData = m; acLoaded = true; if (acField) acDraw(); }
-    else if (m.type === 'history') { history = m.items; if ($('#dlg').open && !JC.sessionView) JC.drawHistory(); }
+    else if (m.type === 'completions') JC.completions(m);
+    else if (m.type === 'history') JC.setHistory(m.items);
     else if (m.type === 'sessionLog') { if (JC.sessionView?.id === m.sessionId) { JC.sessionView.steps = m.steps; JC.drawHistory(); } }
     else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') JC.renderDrawer(); }
     else if (m.type === 'savedAgents') { agentsSaved[m.id] = m.nodes; if (m.id === open && tab === 'agents' && !agentView) JC.renderDrawer(); }
@@ -551,9 +352,10 @@
     else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) JC.renderDrawer(); }
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) JC.renderDrawer(); }
     else if (m.type === 'focus') JC.openTask(m.id);
-    else if (m.type === 'usedSource') { srcOff.delete(m.sourceId); renderAddOptions(); }
-    else if (m.type === 'picked') { files.push(...m.files.filter(f => !files.includes(f))); toggleMore(true); drawFiles(); }
+    else if (m.type === 'usedSource') { JC.srcOff.delete(m.sourceId); JC.renderAddOptions(); }
+    else if (m.type === 'picked') JC.addPicked(m.files);
     else if (m.type === 'dialog') JC.bridged(m);
+    else if (m.type === 'pairing') JC.pairingDialog(m);
     else if (m.type === 'toast') JC.toast(m.text);
     else if (m.type === 'open') window.open(m.url, '_blank', 'noopener');
     else if (m.type === 'copy') { (navigator.clipboard?.writeText(m.text) ?? Promise.reject()).then(() => JC.toast('Copied.'), () => JC.toast('Could not copy.')); }

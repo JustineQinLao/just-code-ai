@@ -114,6 +114,9 @@ test('health: corrupted registry, stale links, leftover folders, policy errors a
   const rows = checkHealth({ ...base, staleSources: ['s'], unarchived: ['t1'] }, ['denyTools must be a list of strings']);
   const by = Object.fromEntries(rows.map(r => [r.id, r]));
   assert.equal(by.registry.fix!.label, 'Reset registry');
+  fs.writeFileSync(jc('artifacts.json'), '{}');
+  assert.equal(checkHealth(base, []).find(r => r.id === 'registry')!.detail, '.justcode/artifacts.json is not a valid list.');
+  fs.writeFileSync(jc('artifacts.json'), '{oops');
   assert.match(by.board.detail, /1 broken task\(s\), duplicate ids \(t1\)/);
   assert.equal(by.policy.fix!.action, 'openPolicy');
   assert.match(by.worktrees.detail, /1 folder\(s\) no task uses: abc/);
