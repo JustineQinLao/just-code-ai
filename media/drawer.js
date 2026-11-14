@@ -7,12 +7,12 @@
     if (a.kind === 'plan') return planBox(t, a);
     let reason;
     const box = JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      JC.h('div', { class: 'askhead' }, JC.h('b', {}, a.tool), a.reason ? JC.h('span', { class: 'muted small' }, ` · ${a.reason}`) : ''),
+      JC.h('div', { class: 'askhead' }, JC.h('b', {}, a.tool === 'Bash' ? 'Claude asks to run' : `Claude asks to use ${a.tool}`), a.reason ? JC.h('span', { class: 'muted small' }, ` · ${a.reason}`) : ''),
       a.detail ? JC.h('pre', { class: 'askdetail' }, a.detail) : '',
       JC.h('div', { class: 'acts' },
         JC.btn('Allow', () => JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }), 'primary'),
-        a.always ? JC.btn(a.always, () => JC.post('answer', { id: t.id, ask: a.id, choice: 'always' }), '', 'Remembered for every task in this project (⚙ Settings lists them)') : '',
-        JC.btn('Deny…', () => { reason.hidden = !reason.hidden; reason.querySelector('input').focus(); }, 'danger')),
+        a.always ? JC.btn('Always allow (this project)', () => JC.post('answer', { id: t.id, ask: a.id, choice: 'always' }), '', 'Remembered for every task in this project (⚙ Settings lists them)') : '',
+        JC.btn('Deny with a reason…', () => { reason.hidden = !reason.hidden; reason.querySelector('input').focus(); }, 'danger')),
       reason = JC.h('div', { class: 'row', hidden: true },
         JC.h('input', { class: 'grow', placeholder: 'Tell Claude why, or what to do instead (optional)', onkeydown: e => { if (e.key === 'Enter') send(); } }),
         JC.btn('Deny', () => send(), 'danger')));
@@ -26,7 +26,7 @@
     const forbid = JC.S.policy?.policy.forbidModes || [];
     const build = JC.S.settings.defaultMode === 'plan' || forbid.includes(JC.S.settings.defaultMode) ? 'auto' : JC.S.settings.defaultMode;
     return JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
-      JC.h('div', { class: 'askhead' }, JC.h('b', {}, 'Plan ready'), JC.h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
+      JC.h('div', { class: 'askhead' }, JC.h('b', {}, 'Claude\'s plan'), JC.h('span', { class: 'muted small' }, ' · saved as the task\'s plan.md')),
       JC.h('pre', { class: 'askdetail plan' }, a.plan || '(empty plan)'),
       JC.h('div', { class: 'acts' },
         JC.btn(`Build it (${JC.modeName(build)})`, () => { JC.post('answer', { id: t.id, ask: a.id, choice: 'allow' }); JC.post('setMode', { id: t.id, mode: build }); }, 'primary'),
@@ -43,7 +43,7 @@
     const box = JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       a.questions.map((q, i) => JC.h('div', { class: 'q' },
         JC.h('div', {}, q.header ? JC.h('span', { class: 'tag' }, q.header) : '', ' ', JC.h('b', {}, q.question)),
-        JC.h('div', { class: 'opts' }, q.options.map(o => JC.h('label', { class: 'opt' },
+        JC.h('div', { class: 'opts' }, q.options.map(o => JC.h('label', { class: `opt${/\(recommended\)/i.test(o.label) ? ' rec' : ''}` },
           JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, onchange: e => {
             if (!q.multiSelect) picked[i].clear();
             e.target.checked ? picked[i].add(o.label) : picked[i].delete(o.label);
@@ -123,7 +123,6 @@
       JC.h('h3', {}, t.title),
       JC.h('div', { class: 'stepper' }, window.JCStatus.STEPS.map((s, i) => JC.h('span', { class: i < st ? 'ok' : i === st ? 'now' : '' }, i < st ? `✓ ${s}` : s))),
       JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), nx.actions.length ? JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))) : ''),
-      ...(t.asks || []).map(a => askBox(t, a)),
       JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]
         .map(([k, l]) => JC.h('a', { class: (JC.tab === k || (k === 'details' && JC.tab === 'agents')) ? 'on' : '', onclick: () => { JC.tab = k; if (k === 'changes') JC.post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) JC.post('shots', { id: t.id }); JC.render(); } }, l))));
     body.replaceChildren(...drawerBody(t));
@@ -214,8 +213,21 @@
       ];
     }
     const list = JC.steps[t.id] || [];
-    if (!list.length) return [JC.h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
-    return [logEl(list)];
+    const asks = (t.asks || []).map(a => askBox(t, a));
+    if (!list.length) return [...asks, JC.h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
+    return [...asks, timeline(t, list)];
+  }
+
+  // Activity: what Claude did as a timeline, finished steps green, the last one live while it works.
+  function timeline(t, list) {
+    const live = t.run && t.run !== 'idle';
+    const el = JC.h('div', { class: 'tl' }, list.map((s, i) => {
+      const last = live && i === list.length - 1;
+      const txt = s.kind === 'tool' ? `${s.agent ? `↳ ${s.agent}: ` : ''}${s.text}` : s.text;
+      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : 'ok'} ${s.kind}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : txt);
+    }));
+    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    return el;
   }
 
   function logEl(list) {
