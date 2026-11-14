@@ -64,7 +64,11 @@
         },
         "justCode.defaultWhere": {
           "type": "string",
-          "enum": ["auto", "direct", "branch"],
+          "enum": [
+            "auto",
+            "direct",
+            "branch"
+          ],
           "enumDescriptions": [
             "Backlog tasks run in the workspace; sprint tasks get their own branch.",
             "New tasks run in the workspace (direct, reviewed).",
@@ -356,6 +360,18 @@
           "description": "Port for the mobile board server."
         }
       }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "justCode.phoneLink",
+          "when": "false"
+        },
+        {
+          "command": "justCode.showPhonePairing",
+          "when": "false"
+        }
+      ]
     }
   },
   "scripts": {

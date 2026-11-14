@@ -1,6 +1,8 @@
 // JustCode board: dialogs (settings, plan, report, sources, artifacts, design, guide), prompt history and the agent map.
 // Shares the board's state and helpers through window.JC (set by board.js, which loads first).
 (() => {
+  // Phone pairing (the phone page and Android app) is not offered on the board yet: its settings section stays hidden.
+  const PHONE_UI = false;
   /* ---------- prompt history ---------- */
   // Every prompt you sent (new task, message to a task, planning request), newest first, with each session's
   // conversation one click away. Kept after a task is merged or deleted.
@@ -232,7 +234,7 @@
       JC.h('span', { class: 'muted small' }, 'Always allowed in every project.'),
         JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost')),
       policySection(),
-      phoneSection(),
+      PHONE_UI ? phoneSection() : '',
       JC.h('div', { class: 'row' }, JC.btn('Setup checklist', () => { JC.$('#dlg').close(); JC.setupDialog(); }, 'ghost'), JC.h('span', { class: 'grow' }), JC.btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         JC.post('settings', { values: {
@@ -332,16 +334,15 @@
     if (!P || JC.REMOTE) return '';
     const day = ms => new Date(ms).toLocaleDateString();
     return JC.h('div', { class: 'gsec' }, JC.h('h4', {}, `Phone${P.on ? ` · ${P.devices.length} paired` : ' · server off'}`),
-      JC.h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code from JustCode: Show Phone Pairing.` : 'Turn on justCode.phoneServer to use the phone page or the Android app.'),
+      JC.h('p', { class: 'muted small' }, P.on ? `A paired phone stays signed in for ${P.days} day(s) (justCode.phoneTokenDays), then pairs again with a new code.` : 'Phone access is off. Pair a phone turns it on (your network only).'),
       P.devices.length ? JC.h('ul', { class: 'small' }, P.devices.map(d => JC.h('li', { class: 'row' },
         JC.h('span', { class: 'grow' }, `Device …${d.id} · paired ${day(d.created)} · ${d.lastUsed ? `last used ${JC.savedAgo(d.lastUsed)}` : 'not used yet'} · expires ${day(d.expires)}`),
         JC.btn('Revoke', () => JC.post('phoneRevoke', { id: d.id }), 'ghost small')))) : '',
-      JC.h('div', { class: 'row' }, P.on ? JC.btn('Pair a phone…', () => JC.post('phonePairing'), 'ghost') : '', P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : ''));
+      JC.h('div', { class: 'row' }, JC.btn('Pair a phone…', () => JC.post('phonePairing'), 'ghost'), P.devices.length > 1 ? JC.btn('Revoke all', () => JC.post('phoneRevoke', { id: 'all' }), 'ghost') : ''));
   }
 
   // Phone pairing: QR code, one-time code, how to use it, HTTPS fingerprint.
   function pairingDialog(m) {
-    if (!m.on) { JC.toast('Turn on the justCode.phoneServer setting first.'); return; }
     const code = `${m.code.slice(0, 3)} ${m.code.slice(3)}`;
     const qr = JC.h('div', { class: 'qr', role: 'img', 'aria-label': 'QR code' });
     qr.innerHTML = m.qr;

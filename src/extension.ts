@@ -73,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
       void recheck();
     }),
     vscode.commands.registerCommand('justCode.phoneLink', async () => {
-      if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
+      if (!setting('phoneServer', false)) return;   // phone access is off (and not offered on the board yet)
       await syncPhone();
       const panel = vscode.window.createWebviewPanel('justCodePhoneLink', 'JustCode: Phone Link', vscode.ViewColumn.Active, { enableScripts: true });
       const render = () => {
@@ -106,7 +106,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (pick) void vscode.window.showTextDocument(vscode.Uri.file(await writeSprintReport(r.root, pick, r.store.data.tasks)));
     }),
     vscode.commands.registerCommand('justCode.showPhonePairing', async () => {
-      if (!setting('phoneServer', false)) { vscode.window.showInformationMessage('Turn on the justCode.phoneServer setting first.'); return; }
+      if (!setting('phoneServer', false)) return;   // phone access is off (and not offered on the board yet)
       await syncPhone();
       const port = setting('phoneServerPort', 7878);
       const code = issuePairingCode();
