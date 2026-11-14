@@ -54,6 +54,24 @@ const EXERCISE = `async () => {
   for (const d of ['settings', 'sourcesDialog', 'artifactsDialog', 'report', 'guide', 'designDialog', 'moreMenu', 'agentMap', 'newSprint']) await run(d, () => { document.querySelector('#dlg').open && document.querySelector('#dlg').close(); return JC[d](); });
   await run('history', () => { document.querySelector('#dlg').close(); JC.historyDialog(); window.postMessage({ type: 'history', items: [] }, '*'); });
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });
+  // Setup checklist: auto-opens when setup is not ready, counts required rows, splits Required / Recommended, redraws on state, keeps scroll.
+  try {
+    const dlg = document.querySelector('#dlg'); dlg.open && dlg.close();
+    const ck = (id, ok, optional) => ({ id, ok, optional, label: id, detail: 'd', fix: ok ? undefined : { label: 'Fix ' + id, action: id } });
+    const bad = { ...S, setup: { ready: false, remote: false, at: 0, checks: [ck('a', true), ck('b', false), ck('repo', true, true), ck('r1', false, true)] } };
+    window.postMessage(bad, '*'); await wait(250);
+    const txt = dlg.innerText;
+    if (!dlg.open || dlg.dataset.kind !== 'setup') errs.push('setup dialog did not auto-open');
+    else {
+      if (!txt.includes('Get set up · 2 of 3')) errs.push('setup count: ' + txt.slice(0, 60));
+      if (!(txt.indexOf('RECOMMENDED') > txt.indexOf('b') && txt.indexOf('r1') > txt.indexOf('RECOMMENDED'))) errs.push('setup groups');
+      if (![...dlg.querySelectorAll('button')].some(b => b.innerText === 'Fix b' && b.classList.contains('primary'))) errs.push('required fix not primary');
+      if (![...dlg.querySelectorAll('button')].some(b => b.innerText === 'Fix r1' && !b.classList.contains('primary'))) errs.push('recommended fix is primary');
+      window.postMessage({ ...bad, setup: { ...bad.setup, checks: bad.setup.checks.map(c => c.id === 'b' ? { ...c, ok: true } : c) } }, '*'); await wait(250);
+      if (!dlg.innerText.includes('Get set up · 3 of 3')) errs.push('setup did not redraw on state');
+    }
+    dlg.close(); window.postMessage(S, '*'); await wait(150);
+  } catch (e) { errs.push('setup dialog: ' + e.message); }
   document.querySelector('#dlg').open && document.querySelector('#dlg').close();
   // The new-task box: Details toggles, Quick and Add each post addTask with the typed title.
   try {

@@ -74,16 +74,15 @@ textarea { resize: vertical; width: 100%; }
 
 /* banners and setup */
 .banner { margin: 10px 0 0; padding: 8px 12px; border-radius: var(--r); background: color-mix(in srgb, var(--run) 12%, transparent); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.banner.info { background: color-mix(in srgb, var(--run) 12%, var(--card)); }
 .banner.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); }
-.setup { margin: 12px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); }
-.setup h3 { margin: 0; font-size: 14px; }
-.setup ul { list-style: none; margin: 8px 0 4px; padding: 0; display: grid; gap: 6px; }
-.setup li { display: grid; grid-template-columns: 20px minmax(150px, max-content) 1fr auto; gap: 10px; align-items: center; }
-.setup .dot { text-align: center; font-weight: 700; }
-.setup li.ok .dot { color: var(--ok); }
-.setup li.bad .dot { color: var(--err); }
-.setup li.opt .dot { color: var(--muted); }
-.setup p { margin: 6px 0 0; }
+.banner.err { background: var(--errbg); }
+.check { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; }
+.check .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+.check .ic.ok { background: var(--okbg); color: var(--ok); }
+.check .ic.bad { background: var(--errbg); color: var(--err); }
+.check .ic.opt { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--muted); }
+.dlgbody h4 { margin: 4px 0 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 
 /* add bar */
 .composer { margin: 12px 0 0; display: grid; gap: 8px; }
@@ -328,8 +327,6 @@ details.adv[open] > summary { margin-bottom: 6px; }
   .proj { flex: none; }
   .meter { display: none; }
   .banner .grow { min-width: 0; }
-  .setup li { grid-template-columns: 20px 1fr; }
-  .setup li > :nth-child(n+3) { grid-column: 2; }
   .composer .box { flex-wrap: wrap; }
   .composer input.ask { flex: 1 1 100%; }
   .composer .box button { flex: 1; }

@@ -17,7 +17,7 @@
   let changes = {};                        // task id → changed files
   let shots = {};                          // task id → screenshots
   let agentView, agentsSaved = {};         // agent shown in the Agents tab; finished agents from transcripts
-  let showSetup = false;
+  let showSetup = false, setupAsked = false;
   const HEALTH = new Set(['board', 'policy', 'registry', 'worktrees', 'sources', 'transcripts']);   // checklist rows about the project's .justcode files
   let dragId;
   let initLater = saved.initLater || {};   // project root → the user chose "Not now" on the setup banner
@@ -141,29 +141,25 @@
     const l = S.limit || {};
     if (S.settings?.bypassAll) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Bypass all is ON. '), 'Every task runs with no approvals and can run any command. Turn off justCode.bypassAll to go back.'));
     if (l.held) out.push(h('div', { class: 'banner warn' }, h('b', {}, 'Usage limit reached. '),
-      `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString()}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
+      `Tasks pause and continue by themselves${l.reached?.resetsAt ? ` at ${new Date(l.reached.resetsAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : ' after the reset'}.`, btn('Try now', () => post('resumeNow'))));
     const st = S.setup;
-    if (st && (!st.ready || showSetup)) {
-      const req = st.checks.filter(c => !c.optional || c.id === 'repo'), done = req.filter(c => c.ok).length;
-      out.push(h('div', { class: 'setup' },
-        h('div', { class: 'row' }, h('h3', {}, st.ready ? '✓ All set' : `Get set up · ${done} of ${req.length}`), h('div', { class: 'spacer' }),
-          btn('Check again', () => post('fix', { action: 'recheck' }), 'ghost'), st.ready ? btn('Hide', () => { showSetup = false; render(); }, 'ghost') : ''),
-        h('ul', {}, st.checks.map(c => h('li', { class: c.ok ? 'ok' : c.optional ? 'opt' : 'bad' },
-          h('span', { class: 'dot' }, c.ok ? '✓' : c.optional ? '○' : '✗'), h('b', {}, c.label), h('span', { class: 'muted' }, c.detail),
-          !c.ok && c.fix ? btn(c.fix.label, () => post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : ''))),
-        h('p', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : 'Remote Control (continue on your phone) needs a Claude account login.')));
-    } else if (!st) out.push(h('div', { class: 'banner' }, 'Checking your setup…'));
-    else if (!REMOTE) {
+    if (st && !st.ready && !setupAsked && !$('#dlg').open) { setupAsked = true; showSetup = true; }
+    if (st && showSetup && !$('#dlg').open) { showSetup = false; JC.setupDialog(); }
+    if (!st) out.push(h('div', { class: 'banner info' }, 'Checking your setup…'));
+    if (st && !st.ready && !REMOTE) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Setup is not finished. '), 'Some things tasks need are missing.'), btn('Get set up', () => JC.setupDialog(), 'primary')));
+    if (st?.ready && !REMOTE) {
       const sick = st.checks.filter(c => !c.ok && HEALTH.has(c.id));
-      if (sick.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
-        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : (showSetup = true, render()), 'ghost')));
+      if (sick.length) out.push(h('div', { class: `banner ${sick.some(c => c.id === 'registry') ? 'err' : 'warn'}` }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
+        btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post('fix', { action: sick[0].fix.action }) : JC.setupDialog(), 'ghost')));
     }
+    const over = S.board.tasks.find(t => !t.archived && /^Budget reached/.test(t.error || ''));
+    if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in policy.json, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => JC.openTask(init.running.id), 'primary')));
     else if (st?.ready && !init.done && !init.running && !initLater[S.root]) out.push(h('div', { class: 'banner info' }, h('div', { class: 'grow' }, h('b', {}, 'This project is not set up for Claude yet. '),
-      `It is missing ${andList(init.missing)}. Claude reads the code, asks you a few questions, shows the files it will write, and writes them after you approve. Tasks then follow your conventions and come with a "Done when" checklist.`),
-      btn('Set up project', () => post('initialize'), 'primary'), btn('Not now', () => { initLater[S.root] = true; remember(); render(); }, 'ghost', 'Hide for this project. The "Not set up" label at the top still sets it up.')));
+      'Claude reads the code, asks a few questions, and writes .justcode/project.md and DESIGN.md.'),
+      btn('Set up project', () => post('initialize'), 'primary'), btn('Later', () => { initLater[S.root] = true; remember(); render(); }, 'ghost', 'Hide for this project. The "Not set up" label at the top still sets it up.')));
     if (st?.ready && !S.guideSeen) out.push(h('div', { class: 'banner info' }, h('b', {}, 'New here? '), 'Add a task above and press ⌘/Ctrl+Enter. Claude works on its own branch; you answer on the card and merge when it passes review.',
       btn('2-minute guide', () => JC.guide(), 'ghost'), btn('Got it', () => { S.guideSeen = true; post('guideSeen'); render(); }, 'ghost')));
     $('#banners').replaceChildren(...out);
@@ -343,6 +339,7 @@
       S = m;
       if (view !== 'all' && view !== 'backlog' && !S.board?.sprints.some(s => s.id === view)) { view = 'all'; remember(); } // its sprint was deleted if (open && open !== '__planner' && !S.board?.tasks.some(t => t.id === open)) open = undefined;
       render();
+      if ($('#dlg').open && $('#dlg').dataset.kind === 'setup') JC.setupDialog();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'sources') JC.sourcesDialog();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') JC.artifactsDialog();
     }

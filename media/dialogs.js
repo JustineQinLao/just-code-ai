@@ -233,7 +233,7 @@
         JC.btn(s.apiKey ? 'Change or remove API key' : 'Use an API key instead of my Claude login', () => JC.post('apiKey'), 'ghost')),
       policySection(),
       phoneSection(),
-      JC.h('div', { class: 'row' }, JC.btn('Setup checklist', () => { JC.showSetup = true; JC.$('#dlg').close(); JC.render(); }, 'ghost'), JC.h('span', { class: 'grow' }), JC.btn('Save', () => {
+      JC.h('div', { class: 'row' }, JC.btn('Setup checklist', () => { JC.$('#dlg').close(); JC.setupDialog(); }, 'ghost'), JC.h('span', { class: 'grow' }), JC.btn('Save', () => {
         const lines = el => el.value.split('\n').map(x => x.trim()).filter(Boolean);
         JC.post('settings', { values: {
           defaultMode: f.defaultMode.value, notifications: f.notifications.value, maxParallel: +f.maxParallel.value, taskModel: f.taskModel.value.trim(), reviewModel: f.reviewModel.value.trim(),
@@ -251,6 +251,23 @@
   }
 
   // Per task: tokens (build/review), check and review rounds, first-try pass, time. Totals for the current view.
+  // "Get set up": what tasks need, each missing row with a fix that opens a terminal; the list re-checks when it closes.
+  function setupDialog() {
+    const st = JC.S.setup;
+    if (!st) return;
+    const d0 = JC.$('#dlg'), top = d0.open && d0.dataset.kind === 'setup' ? d0.scrollTop : 0;   // a redraw on each state message keeps the scroll place
+    const req = st.checks.filter(c => !c.optional || c.id === 'repo'), rec = st.checks.filter(c => !req.includes(c));
+    const row = c => JC.h('div', { class: 'check' }, JC.h('span', { class: `ic ${c.ok ? 'ok' : c.optional ? 'opt' : 'bad'}` }, c.ok ? '✓' : c.optional ? '○' : '!'),
+      JC.h('div', {}, JC.h('b', {}, c.label), JC.h('div', { class: 'muted small' }, c.detail)),
+      !c.ok && c.fix ? JC.btn(c.fix.label, () => JC.post('fix', { action: c.fix.action }), c.optional ? '' : 'primary') : JC.h('span'));
+    dialog(st.ready ? '✓ All set' : `Get set up · ${req.filter(c => c.ok).length} of ${req.length}`,
+      JC.h('p', { class: 'muted' }, 'JustCode checks what tasks need and fixes what is missing. Each fix runs in a terminal; the list checks again when it closes.'),
+      ...req.map(row), rec.length ? JC.h('h4', {}, 'Recommended') : '', ...rec.map(row),
+      JC.h('div', { class: 'row' }, JC.h('span', { class: 'muted small' }, st.remote ? '📱 Remote Control is available: any task can continue on your phone.' : '📱 Remote Control needs a Claude account login.'),
+        JC.h('span', { class: 'grow' }), JC.btn('Check again', () => JC.post('fix', { action: 'recheck' })))).dataset.kind = 'setup';
+    d0.scrollTop = top;
+  }
+
   function report() {
     const tasks = JC.visible().filter(t => t.startedAt || JC.usageTotal(t));
     const mins = t => t.startedAt ? Math.round(((t.doneAt || Date.now()) - t.startedAt) / 60000) : 0;
@@ -427,5 +444,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, setupDialog, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
 })();
