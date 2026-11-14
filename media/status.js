@@ -91,7 +91,7 @@
     if (!r && t.reply && !busy(t) && (!isDirect(t) || !(t.directFiles || []).length)) return { text: `Claude finished without changing project files: "${t.reply.slice(0, 140)}"`, tone: 'warn',
       actions: [['Reply', () => c.open(id, 'activity')], ['Finish (no changes)', () => post('merge', { id }), 'ghost'], discard] };
     if (!s.review.auto) return { text: `Finished. Look at the changes, then ${fin.toLowerCase()}.`, tone: 'ok', actions: [[`✓ ${fin}`, () => post('merge', { id })]] };
-    return { text: 'Waiting for the AI reviewer', tone: 'muted', actions: [] };
+    return { text: 'Waiting for the AI reviewer', tone: 'muted', actions: r ? [['↻ Review now', () => post('review', { id })]] : [] };
   }
 
   // A short cause for the common failures, so the card says what to do about it.

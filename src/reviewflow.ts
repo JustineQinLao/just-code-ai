@@ -141,7 +141,9 @@ export const reviewMethods = {
     try {
       const diff = direct ? await g.workingDiff(cwd, t.startHead!, t.directFiles!) : await g.git(cwd, ['diff', `${t.base}...HEAD`]).catch(() => '');
       const head = direct ? sha(diff) : await g.git(cwd, ['rev-parse', 'HEAD']).catch(() => '');
-      if (!force && t.review?.head === head && t.review.state !== 'error') return;
+      // Same commit as the last review: skip only a pass. After a fix round that changed no code (Claude explained why,
+      // or wrote screenshots outside the branch) the reviewer still has to judge the reply, or the task waits forever.
+      if (!force && t.review?.head === head && t.review.state === 'pass') return;
       if (!diff.trim()) { this.emptyAt.add(id); return; }
       const attempts = t.review?.state === 'fail' ? t.review.attempts : 0;
       // Accepted issues and extra rounds belong to the task, not to one review: every new review keeps them.
