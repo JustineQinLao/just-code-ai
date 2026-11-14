@@ -146,7 +146,6 @@
     if (st && !st.ready && !setupAsked && !$('#dlg').open) { setupAsked = true; showSetup = true; }
     if (st && showSetup && !$('#dlg').open) { showSetup = false; JC.setupDialog(); }
     if (!st) out.push(h('div', { class: 'banner info' }, 'Checking your setup…'));
-    if (st && !st.ready && !REMOTE) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Setup is not finished. '), 'Some things tasks need are missing.'), btn('Get set up', () => JC.setupDialog(), 'primary')));
     if (st?.ready && !REMOTE) {
       const sick = st.checks.filter(c => !c.ok && HEALTH.has(c.id));
       if (sick.length) out.push(h('div', { class: `banner ${sick.some(c => c.id === 'registry') ? 'err' : 'warn'}` }, h('div', { class: 'grow' }, h('b', {}, `${sick.length === 1 ? sick[0].label : `${sick.length} project file problems`}: `), sick[0].detail),
