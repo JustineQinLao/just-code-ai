@@ -307,7 +307,7 @@
     }
     const running = p.run && p.run !== 'idle';
     const stepsNow = p.asks?.length ? 1 : running ? 0 : p.proposals ? 2 : 0;
-    const asked = (p.steps || []).some(x => x.kind === 'user') && (p.asks?.length || p.proposals || (p.steps || []).some(x => /^(AskUserQuestion)/.test(x.text || '')));
+    const asked = (p.steps || []).some(x => x.kind === 'tool' && /^AskUserQuestion/.test(x.text || ''));
     const stepNames = ['Reading code', 'Asked you', 'Proposal ready'];
     head.replaceChildren(
       JC.h('div', { class: 'row' }, JC.h('h2', { class: 'grow' }, '✦ Plan with Claude'),
@@ -335,6 +335,8 @@
       const all = [...changes, ...removes];
       all.forEach(c => { if (!(c.key in pKeep)) pKeep[c.key] = c.kind !== 'same'; });
       const nChange = all.filter(c => c.kind !== 'same').length;
+      // 'after N': positions among the proposed tasks (changes), skipping titles that are not in the list.
+      const afterNums = c => (c.after || []).map(a => changes.findIndex(x => x.title === a) + 1).filter(n => n && n !== changes.indexOf(c) + 1);
       const apply = () => {
         JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
         for (const k in pKeep) delete pKeep[k];
@@ -345,12 +347,12 @@
       panel.push(JC.h('div', { class: 'proppanel' },
         JC.h('div', { class: 'reflist' }, all.map(c => JC.h('label', { class: `refrow ${c.kind}` },
           c.kind === 'same' ? JC.h('span', { class: 'rspace' }) : JC.h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; const n = all.filter(x => x.kind !== 'same' && pKeep[x.key]).length; applyBtn.textContent = `Apply ${n} task${n === 1 ? '' : 's'}`; applyBtn.disabled = !n; } }),
-          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : '', c.after?.length ? JC.h('span', { class: 'pill' }, `after ${c.after.map(a => { const i = all.findIndex(x => x.title === a); return i >= 0 ? i + 1 : a; }).join(', ')}`) : ''),
+          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : '', afterNums(c).length ? JC.h('span', { class: 'pill' }, `after ${afterNums(c).join(', ')}`) : ''),
             fileHint(c) ? JC.h('div', { class: 'small muted fhint' }, fileHint(c)) : '',
             c.kind === 'reopen' ? JC.h('div', { class: 'small warn' }, 'Done, but must change: goes back to To do and is built again on top of the merged work.') : '',
             c.kind === 'amend' ? JC.h('div', { class: 'small warn' }, 'Already started: the new text is saved and sent to its Claude as a message.') : '',
             c.before && c.before !== c.title ? JC.h('div', { class: 'small muted strike' }, c.before) : '',
-            c.description ? JC.h('div', { class: 'small muted' }, c.description) : ''))))));
+            c.description && c.description !== fileHint(c) ? JC.h('div', { class: 'small muted' }, c.description) : ''))))));
     }
     body.replaceChildren(chatEl(p.steps || []), ...panel);
     msg.placeholder = 'Message Claude to refine the tasks…  Enter sends';

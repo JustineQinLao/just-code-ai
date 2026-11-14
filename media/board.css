@@ -424,3 +424,5 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .proppanel { border-top: 0; padding-top: 0; }
 .refrow .pill { margin-left: 6px; float: right; }
 .fhint { font-family: var(--mono); }
+.proppanel .rtag.add { display: none; } /* design shows no NEW tag */
+.refrow b { font-family: var(--vscode-font-family); }
