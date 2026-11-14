@@ -409,3 +409,20 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .kv dd a { cursor: pointer; }
 .issues { margin: 0 0 10px; padding: 0; list-style: none; display: grid; gap: 8px; }
 .issues li { border: 1px solid var(--line, var(--vscode-panel-border)); border-radius: 9px; padding: 9px 10px; display: grid; gap: 6px; margin: 0; }
+
+/* ✦ Plan with Claude panel */
+.dhead .steps { display: flex; gap: 4px; }
+.dhead .steps span { flex: 1; text-align: center; padding: 3px; border-radius: 6px; background: var(--panel); color: var(--muted); font-size: 11px; }
+.dhead .steps .ok { color: var(--done); }
+.dhead .steps .now { background: var(--accent); color: var(--accent-fg, #fff); font-weight: 600; }
+.dhead h2 { margin: 0; font-size: 16px; }
+.chat { display: grid; gap: 10px; }
+.chat .msg { border-radius: 10px; padding: 9px 11px; max-width: 92%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat .msg.you { background: color-mix(in srgb, var(--accent) 14%, var(--card, var(--panel))); justify-self: end; }
+.chat .msg.claude { background: var(--panel); }
+.chat .msg.err { color: var(--err); }
+.proppanel { border-top: 0; padding-top: 0; }
+.refrow .pill { margin-left: 6px; float: right; }
+.fhint { font-family: var(--mono); }
+.proppanel .rtag.add { display: none; } /* design shows no NEW tag */
+.refrow b { font-family: var(--vscode-font-family); }
