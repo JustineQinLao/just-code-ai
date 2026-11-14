@@ -159,9 +159,13 @@
       if (!t.worktree && !merged) return [JC.h('p', { class: 'muted' }, t.where === 'direct' ? 'This task runs in the project folder: its changes are in your working tree.' : 'No changes yet.')];
       if (!files) return [JC.h('p', { class: 'muted' }, 'Loading…')];
       if (!files.length) return [JC.h('p', { class: 'muted' }, merged ? 'Could not find this task\'s merge in git history.' : 'No changes on this branch yet.')];
-      return [merged ? JC.h('p', { class: 'muted small' }, 'What the merge changed. Click a file for its diff; Open shows it from the project folder.') : '',
-        JC.h('ul', { class: 'files' }, files.map(f => JC.h('li', { onclick: () => JC.post('diff', { id: t.id, file: f.file }), title: 'Open side-by-side diff (PDFs and other documents open in their app)' },
+      return [t.conflicts?.length ? JC.h('div', { class: 'note conflict' }, JC.h('b', {}, `Conflicts in ${t.conflicts.length} file${t.conflicts.length > 1 ? 's' : ''}: `), t.conflicts.join(', '),
+          JC.h('div', { class: 'acts' }, JC.btn('Resolve with Claude', () => JC.post('resolve', { id: t.id }), 'primary small'), JC.btn('Mark resolved', () => JC.post('resolved', { id: t.id }), 'ghost small'))) : '',
+        merged ? JC.h('p', { class: 'muted small' }, 'What the merge changed. Click a file for its diff; Open shows it from the project folder.') : '',
+        JC.h('ul', { class: 'files' }, files.map(f => JC.h('li', { class: t.conflicts?.includes(f.file) ? 'conflict' : '', onclick: () => JC.post('diff', { id: t.id, file: f.file }), title: 'Open side-by-side diff (PDFs and other documents open in their app)' },
           JC.h('span', { class: `st st-${f.status}` }, f.status), JC.h('span', { class: 'grow' }, f.file),
+          f.add != null ? JC.h('span', { class: 'muted small cnt' }, JC.h('span', { class: 'plus' }, `+${f.add}`), ' ', JC.h('span', { class: 'minus' }, `−${f.del}`)) : '',
+          JC.btn('Diff', e => { e.stopPropagation(); JC.post('diff', { id: t.id, file: f.file }); }, 'ghost small', 'Open side-by-side diff'),
           f.status !== 'D' ? JC.btn('Open', e => { e.stopPropagation(); JC.post('openFile', { id: t.id, file: f.file }); }, 'ghost small', 'Open the file') : '')))];
     }
     if (JC.tab === 'review') {
@@ -171,13 +175,13 @@
         JC.h('p', {}, JC.h('b', {}, { pass: '✓ Passed', fail: '✗ Issues found', error: 'Review could not run', running: 'Reviewing…' }[r.state]), r.risk === 'critical' ? JC.h('span', { class: 'warn' }, ' · flagged critical') : '', JC.h('span', { class: 'muted' }, ` · round ${r.attempts || 1}`)),
         r.level ? JC.h('p', { class: 'muted small' }, r.level === 'none' ? `No AI review needed: ${r.why}.` : `${r.level === 'light' ? 'Light review (lighter model)' : 'Full review'}${r.why ? `: ${r.why}` : ''}.`) : '',
         r.error ? JC.h('pre', { class: 'err' }, r.error) : '',
-        r.fixNote ? JC.h('details', { class: 'fixnote' }, JC.h('summary', {}, 'Claude\'s reply to the last round'), JC.h('p', { class: 'small' }, r.fixNote)) : '',
+        r.fixNote ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Claude\'s reply to the last round: '), r.fixNote) : '',
         r.issues?.length ? JC.h('ol', { class: 'issues' }, r.issues.map(i => JC.h('li', { class: i.accepted ? 'accepted' : '' },
-          JC.h('div', {}, i.text),
+          JC.h('div', { class: 'itxt' }, i.text),
           JC.h('div', { class: 'row small' },
-            JC.h('span', { class: 'muted' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Seen in ${i.rounds} rounds` : 'New this round'),
+            JC.h('span', { class: 'muted grow' }, i.accepted ? 'Accepted by you' : i.rounds > 1 ? `Came back ${i.rounds} rounds` : 'New this round'),
             !i.accepted && r.state === 'fail' && !JC.REMOTE ? JC.btn('Accept', () => JC.post('acceptIssues', { id: t.id, keys: [i.key] }), 'ghost small', 'Does not block the merge: the reviewer stops reporting it') : '',
-            !i.accepted && r.state === 'fail' ? JC.btn('Ask Claude to fix this one', () => JC.post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
+            !i.accepted && r.state === 'fail' ? JC.btn('Fix this one', () => JC.post('sendIssues', { id: t.id, key: i.key }), 'ghost small') : '')))) : '',
         r.tested?.length ? JC.h('p', { class: 'muted small' }, 'Tested: ', r.tested.join(' · ')) : '',
         r.state === 'fail' ? JC.h('div', { class: 'row' },
           JC.btn('Send open issues to Claude', () => JC.post('sendIssues', { id: t.id }), 'primary'),
@@ -189,13 +193,16 @@
       const editable = t.status === 'todo';
       let title, desc;
       return [
+        JC.h('dl', { class: 'kv' },
+          JC.h('dt', {}, 'Runs in'), JC.h('dd', {}, t.where === 'direct' && !t.init ? 'Workspace (no branch)' : t.branch ? `Own branch ${t.branch}` : 'Own branch, merged when done'),
+          JC.h('dt', {}, 'Permissions'), JC.h('dd', {}, JC.h('select', { 'aria-label': 'Permissions', onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
+            JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); })),
+            t.modeNote ? JC.h('span', { class: 'warn' }, ` ${t.modeNote}`) : ''),
+          JC.h('dt', {}, 'After'), JC.h('dd', {}, (t.dependsOn || []).map(id => JC.S.board.tasks.find(o => o.id === id)?.title).filter(Boolean).join(', ') || 'Nothing'),
+          JC.h('dt', {}, 'Based on'), JC.h('dd', {}, t.sources ? (JC.S.sources || []).filter(s => t.sources.includes(s.id)).map(JC.srcLabel).join(', ') || 'No project sources' : 'Nothing'),
+          JC.h('dt', {}, 'Cost'), JC.h('dd', {}, t.costUsd ? `~$${t.costUsd.toFixed(2)} at API prices` : '—', t.output ? ` · ${JC.tok(t.context + t.output)}` : '', t.modelUsed ? ` · ${JC.modelName(t.modelUsed)}` : ''),
+          JC.h('dt', {}, 'Files'), JC.h('dd', {}, !Object.values(t.artifacts || {}).some(Boolean) ? '—' : [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l], i) => [i ? ' · ' : '', JC.h('a', { onclick: () => JC.post('openArtifact', { id: t.id, which: k }) }, l)]))),
         JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost')), JC.btn(`Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`, () => { JC.tab = 'agents'; JC.render(); }, 'ghost')),
-        JC.h('div', { class: 'row small' },
-          JC.h('label', {}, 'Permissions ', JC.h('select', { onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
-            JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); }))),
-          t.modeNote ? JC.h('span', { class: 'warn' }, t.modeNote) : '',
-          t.modelUsed ? JC.h('span', { class: 'muted', title: t.modelUsed }, JC.modelName(t.modelUsed)) : '',
-          t.output ? JC.h('span', { class: 'muted' }, `${JC.tok(t.context + t.output)}`) : ''),
         JC.h('label', { class: 'blk' }, 'Title', title = JC.h('input', { value: t.title, disabled: !editable })),
         JC.h('label', { class: 'blk' }, 'Details', desc = JC.h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
         editable ? (() => {
@@ -217,7 +224,6 @@
           t.status !== 'todo' ? JC.btn(t.artifactUrl ? 'Publish again' : 'Publish', () => JC.post('publishArtifact', { id: t.id }), 'ghost') : '') : '',
         t.files?.length ? JC.h('p', { class: 'small' }, 'Attached: ', t.files.map(JC.base).join(', ')) : '',
         (arts => arts.length ? JC.h('p', { class: 'small' }, 'Artifacts: ', ...arts.map((e, i) => [i ? ', ' : '', JC.h('a', { onclick: () => JC.post('openUrl', { url: e.url }), title: e.url }, `${e.title || e.url.replace(/^https?:\/\//, '')} (${e.kind === 'output' ? 'published' : 'used'})`)])) : '')((JC.S.registry || []).filter(e => e.taskIds.includes(t.id))),
-        t.sources ? JC.h('p', { class: 'small' }, 'Based on: ', (JC.S.sources || []).filter(s => t.sources.includes(s.id)).map(JC.srcLabel).join(', ') || 'no project sources') : '',
         JC.h('details', { class: 'adv' }, JC.h('summary', {}, 'Files Claude wrote, logs and tokens'),
           JC.h('div', { class: 'row' }, [['brief', 'Brief'], ['plan', 'Plan'], ['handoff', 'Handoff'], ['review', 'Review notes'], ['transcript', 'Transcript']].filter(([k]) => t.artifacts?.[k]).map(([k, l]) => JC.btn(l, () => JC.post('openArtifact', { id: t.id, which: k }), 'ghost')),
             t.worktree ? JC.btn('Setup log', () => JC.post('openArtifact', { id: t.id, which: 'setup' }), 'ghost') : ''),
