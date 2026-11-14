@@ -57,12 +57,14 @@ textarea { resize: vertical; width: 100%; }
 .top { position: sticky; top: 0; z-index: 5; display: flex; gap: 10px; align-items: center; padding: 10px 0; background: var(--bg); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
 .brand { font-weight: 700; letter-spacing: .2px; display: flex; align-items: center; gap: 6px; }
 .logo { color: var(--accent); }
-.projects { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-.proj { padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); cursor: pointer; display: inline-flex; gap: 5px; align-items: center; }
-.proj.on { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.brand { font-size: 15px; }
+.projects { display: flex; gap: 3px; flex-wrap: wrap; align-items: center; background: var(--panel); padding: 3px; border-radius: 9px; }
+.proj { padding: 3px 11px; border-radius: 7px; color: var(--muted); cursor: pointer; display: inline-flex; gap: 5px; align-items: center; }
+.proj.dot::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--needs); }
+.proj.on { background: var(--card); color: var(--fg); box-shadow: 0 1px 2px #0002; }
 .proj.on .x { color: inherit; }
 .badge { font-weight: 600; font-size: 11px; }
-.badge.warn { color: var(--warn); }
+.badge.warn { display: none; }
 .proj.on .badge { color: inherit; }
 .meter { display: flex; gap: 10px; }
 .win { display: inline-flex; gap: 5px; align-items: center; font-size: 11.5px; color: var(--muted); }
@@ -85,11 +87,15 @@ textarea { resize: vertical; width: 100%; }
 .setup p { margin: 6px 0 0; }
 
 /* add bar */
-.add { margin: 12px 0 0; padding: 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--card); }
-.addrow { display: flex; gap: 6px; align-items: center; }
-.addrow input { font-size: 14px; padding: 7px 10px; }
-.more { margin-top: 8px; display: grid; gap: 8px; }
-.more label { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
+.composer { margin: 12px 0 0; display: grid; gap: 8px; }
+.composer .box { display: flex; gap: 8px; align-items: center; }
+.composer input.ask { font-size: 14px; padding: 9px 12px; }
+.details { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; background: var(--panel); border-radius: var(--r); padding: 12px; }
+.details[hidden] { display: none; }
+.details > label { display: grid; gap: 4px; align-content: start; color: var(--muted); font-size: 12px; }
+.details textarea { min-height: 54px; resize: vertical; }
+.details .wide { grid-column: 1 / -1; display: grid; gap: 8px; }
+.details .row label { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
 .imgs { display: flex; gap: 6px; flex-wrap: wrap; }
 .thumb { position: relative; }
 .thumb img { height: 56px; border-radius: 4px; border: 1px solid var(--line); }
@@ -221,7 +227,7 @@ dialog::backdrop { background: var(--backdrop); }
 .empty { grid-column: 1 / -1; text-align: center; padding: 60px 0; }
 
 @media (max-width: 1100px) { .lanes { grid-template-columns: repeat(5, 230px); } }
-@media (max-width: 700px) { body.drawer-open { padding-right: 16px; } #drawer { width: 100vw; } .addrow { flex-wrap: wrap; } }
+@media (max-width: 700px) { body.drawer-open { padding-right: 16px; } #drawer { width: 100vw; } .composer .box { flex-wrap: wrap; } .details { grid-template-columns: 1fr; } }
 .ask button { white-space: normal; text-align: left; max-width: 100%; word-break: break-word; }
 .srclist { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .srclist li.src { display: grid; gap: 6px; padding: 10px; border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent); border-radius: 8px; }
@@ -324,9 +330,10 @@ details.adv[open] > summary { margin-bottom: 6px; }
   .banner .grow { min-width: 0; }
   .setup li { grid-template-columns: 20px 1fr; }
   .setup li > :nth-child(n+3) { grid-column: 2; }
-  .addrow { flex-wrap: wrap; }
-  .addrow input { flex: 1 1 100%; }
-  .addrow button { flex: 1; }
+  .composer .box { flex-wrap: wrap; }
+  .composer input.ask { flex: 1 1 100%; }
+  .composer .box button { flex: 1; }
+  .details { grid-template-columns: 1fr; }
   /* lanes: one column; Needs you first so approvals are never buried */
   .lanes { display: flex; flex-direction: column; overflow: visible; }
   .lane { min-height: 0; }
