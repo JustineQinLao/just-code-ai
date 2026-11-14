@@ -90,6 +90,7 @@
   drawer.append(head, body, JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, JC.btn('Send', sendMsg, 'primary'), JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)'))));
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') JC.post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !JC.$('#dlg').open) closeTask(); });
 
+  let menu = [];
   function renderDrawer() {
     if (open === '__planner') return renderPlanner();
     const t = open && JC.S.board.tasks.find(x => x.id === open);
@@ -98,7 +99,7 @@
     if (!t) return;
     const nx = JC.next(t);
     const live = t.run && t.run !== 'idle';
-    const menu = [
+    menu = [
       t.status === 'todo' && ['▶ Run', () => JC.post('run', { id: t.id })],
       live && ['■ Stop', () => JC.post('stop', { id: t.id })],
       t.sessionId && !t.remote && ['📱 Continue on phone', () => JC.post('remote', { id: t.id })],
@@ -115,20 +116,16 @@
       [t.archived ? 'Unarchive' : 'Archive', () => JC.post('archive', { id: t.id })],
       ['Delete', () => JC.post('delete', { id: t.id }), 'danger'],
     ].filter(Boolean);
+    const st = window.JCStatus.stepOf(t);
+    const tags = [t.branch && `⎇ ${t.branch}`, t.mode && t.mode !== 'auto' && JC.modeName(t.mode)].filter(Boolean);
     head.replaceChildren(
-      JC.h('div', { class: 'row' }, JC.h('h3', { class: 'grow' }, t.title), JC.btn('×', closeTask, 'ghost icon', 'Close (Esc)')),
-      JC.h('div', { class: `next ${nx.tone}` }, nx.text, ...nx.actions.slice(0, 2).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))),
-      JC.h('div', { class: 'row small' },
-        JC.h('label', {}, 'Permissions ', JC.h('select', { onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
-          JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); }))),
-        t.modeNote ? JC.h('span', { class: 'warn' }, t.modeNote) : '',
-        t.branch ? JC.h('span', { class: 'muted' }, `⎇ ${t.branch}`) : '',
-        t.modelUsed ? JC.h('span', { class: 'muted', title: t.modelUsed }, JC.modelName(t.modelUsed)) : '',
-        t.output ? JC.h('span', { class: 'muted' }, `${JC.tok(t.context + t.output)}`) : ''),
-      JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost'))),
+      JC.h('div', { class: 'row' }, JC.h('span', { class: 'tags grow' }, tags.map(x => JC.h('span', { class: 'tag' }, x))), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
+      JC.h('h3', {}, t.title),
+      JC.h('div', { class: 'stepper' }, window.JCStatus.STEPS.map((s, i) => JC.h('span', { class: i < st ? 'ok' : i === st ? 'now' : '' }, i < st ? `✓ ${s}` : s))),
+      JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), nx.actions.length ? JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))) : ''),
       ...(t.asks || []).map(a => askBox(t, a)),
-      JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['agents', `Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]
-        .map(([k, l]) => JC.h('a', { class: JC.tab === k ? 'on' : '', onclick: () => { JC.tab = k; if (k === 'changes') JC.post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) JC.post('shots', { id: t.id }); JC.render(); } }, l))));
+      JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]
+        .map(([k, l]) => JC.h('a', { class: (JC.tab === k || (k === 'details' && JC.tab === 'agents')) ? 'on' : '', onclick: () => { JC.tab = k; if (k === 'changes') JC.post('changes', { id: t.id }); if (k === 'review' && t.review?.screenshots?.length) JC.post('shots', { id: t.id }); JC.render(); } }, l))));
     body.replaceChildren(...drawerBody(t));
     msg.placeholder = t.status === 'todo' ? 'Run the task first, or edit it under Details' : t.remote ? 'This task is in Remote Control' : 'Message Claude…  Enter sends · Shift+Enter new line';
   }
@@ -140,7 +137,7 @@
       if (!JC.agentsSaved[t.id]) JC.post('savedAgents', { id: t.id });
       const extra = (JC.agentsSaved[t.id] || []).filter(a => !live.some(n => n.toolUseId && n.toolUseId === a.toolUseId))
         .map(a => ({ id: `saved-${a.id}`, parent: 'main', name: a.name, description: a.description, status: a.finished ? 'completed' : 'stopped', key: a.id, sessionId: a.sessionId }));
-      return [JC.agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
+      return [JC.btn('← Details', () => { JC.tab = 'details'; JC.render(); }, 'ghost small'), JC.agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
         JC.h('p', { class: 'muted small' }, 'Click an agent for its whole conversation.')];
     }
     if (JC.tab === 'changes') {
@@ -179,6 +176,13 @@
       const editable = t.status === 'todo';
       let title, desc;
       return [
+        JC.h('div', { class: 'acts wrap' }, menu.map(([l, f, c]) => JC.btn(l, f, c || 'ghost')), JC.btn(`Agents${t.agents?.length > 1 ? ` (${t.agents.length})` : ''}`, () => { JC.tab = 'agents'; JC.render(); }, 'ghost')),
+        JC.h('div', { class: 'row small' },
+          JC.h('label', {}, 'Permissions ', JC.h('select', { onchange: e => JC.post('setMode', { id: t.id, mode: e.target.value }), disabled: !!JC.S.settings?.bypassAll, title: JC.S.settings?.bypassAll ? 'Bypass all is on: every task runs with Bypass permissions' : undefined },
+            JC.MODES.map(([v, l, d]) => { const no = (JC.S.policy?.policy.forbidModes || []).includes(v); return JC.h('option', { value: v, title: no ? 'Forbidden by this project\'s policy (.justcode/policy.json, forbidModes)' : d, disabled: no, selected: (JC.S.settings?.bypassAll ? 'bypassPermissions' : t.mode) === v }, no ? `${l} (policy)` : l); }))),
+          t.modeNote ? JC.h('span', { class: 'warn' }, t.modeNote) : '',
+          t.modelUsed ? JC.h('span', { class: 'muted', title: t.modelUsed }, JC.modelName(t.modelUsed)) : '',
+          t.output ? JC.h('span', { class: 'muted' }, `${JC.tok(t.context + t.output)}`) : ''),
         JC.h('label', { class: 'blk' }, 'Title', title = JC.h('input', { value: t.title, disabled: !editable })),
         JC.h('label', { class: 'blk' }, 'Details', desc = JC.h('textarea', { rows: 8, disabled: !editable }, t.description || '')),
         editable ? (() => {
