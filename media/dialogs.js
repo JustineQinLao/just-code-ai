@@ -163,10 +163,11 @@
     goal.focus();
   }
 
-  function moreMenu() {
+  function moreMenu(extra = []) {
     const item = (label, help, fn) => JC.h('button', { class: 'menuitem', onclick: () => { JC.$('#dlg').close(); fn(); } }, JC.h('b', {}, label), JC.h('span', { class: 'muted small' }, help));
     dialog('More',
       JC.h('div', { class: 'menu' },
+        ...extra.map(([l, hlp, fn]) => item(l, hlp, fn)),
         item('Agent map', 'Every Claude session, subagent and reviewer at work', () => agentMap()),
         item('Report', 'Tokens, rounds and time per task', () => report()),
         item('Prompt history', 'Every prompt you sent and each session\'s conversation', () => historyDialog()),
