@@ -10,6 +10,7 @@
     JC.post('history');
     drawHistory();
   }
+  function setHistory(items) { history = items; if (JC.$('#dlg').open && !sessionView) drawHistory(); }
   function drawHistory() {
     if (sessionView) {
       const { title, steps: list } = sessionView;
@@ -22,22 +23,16 @@
     const items = (history || []).filter(p => (!historyFor || p.taskId === historyFor) && (!q || `${p.title || ''}\n${p.text}`.toLowerCase().includes(q)));
     let search;
     const d = dialog(historyFor ? `History · ${(JC.S.board.tasks.find(t => t.id === historyFor) || {}).title || 'task'}` : 'Prompt history',
-      JC.h('div', { class: 'row' }, search = JC.h('input', { class: 'grow', placeholder: 'Search your prompts', value: historyQuery, 'aria-label': 'Search your prompts',
+      JC.h('div', { class: 'row' }, search = JC.h('input', { class: 'grow', placeholder: 'Search prompts', value: historyQuery, 'aria-label': 'Search prompts',
         oninput: e => { historyQuery = e.target.value; drawHistory(); } }),
         historyFor ? JC.btn('All tasks', () => { historyFor = undefined; drawHistory(); }, 'ghost') : ''),
       !history ? JC.h('p', { class: 'muted' }, 'Loading…') : !items.length ? JC.h('p', { class: 'muted' }, q ? 'No prompt matches.' : 'No prompts yet.') :
         JC.h('div', { class: 'hist' }, items.slice(0, 300).map(p => JC.h('div', { class: 'hitem' },
-          JC.h('div', { class: 'row small' }, JC.h('span', { class: `tag k-${p.kind}` }, kinds[p.kind] || p.kind),
-            p.kind !== 'task' && p.title ? JC.h('b', {}, p.title) : '',
-            JC.h('span', { class: 'muted' }, new Date(p.time).toLocaleString()),
-            p.taskId && !p.exists ? JC.h('span', { class: 'muted' }, '· task deleted') : p.status === 'done' ? JC.h('span', { class: 'muted' }, '· done') : ''),
           JC.h('div', { class: 'htext', title: 'Click to show all', onclick: e => e.currentTarget.classList.toggle('full') }, p.text),
-          JC.h('div', { class: 'acts' },
-            p.exists ? JC.btn('Open task', () => { JC.$('#dlg').close(); JC.openTask(p.taskId); }, 'ghost') : '',
-            ...p.sessions.map((sid, i) => JC.btn(p.sessions.length > 1 ? `Conversation ${i + 1}` : 'Conversation', () => {
+          JC.h('div', { class: 'row small muted' }, `${kinds[p.kind] || p.kind} · ${new Date(p.time).toLocaleString()}${p.taskId && !p.exists ? ' · task deleted' : ''}`, JC.h('span', { class: 'grow' }),
+            ...p.sessions.map((sid, i) => JC.btn(p.sessions.length > 1 ? `Session ${i + 1}` : 'Session', () => {
               sessionView = { id: sid, title: p.title || kinds[p.kind] }; JC.post('sessionLog', { sessionId: sid }); drawHistory();
             }, 'ghost', `Session ${sid.slice(0, 8)}`)),
-            JC.btn('Copy', () => JC.post('copy', { text: p.text }), 'ghost'),
             JC.btn('Use again', () => { JC.$('#dlg').close(); const [first, ...rest] = p.text.split('\n\n'); JC.$('#title').value = first; JC.$('#desc').value = rest.join('\n\n'); if (rest.length) JC.toggleMore(true); JC.$('#title').focus(); }, 'ghost', 'Put it in the add box to send again'))))));
     if (document.activeElement !== search && d.open) { search.focus(); search.setSelectionRange(search.value.length, search.value.length); }
   }
@@ -68,7 +63,7 @@
 
   function agentTree(groups, single) {
     const row = (n, depth, extra = '', t) => JC.h('div', { class: `node d${Math.min(depth, 4)} s-${n.status}${single && t ? ' click' : ''}`, onclick: single && t ? () => openAgent(t, n) : undefined, title: single && t ? 'Show its conversation' : undefined },
-      JC.h('span', { class: 'sdot' }), JC.h('div', { class: 'ninfo' }, JC.h('b', {}, n.name), n.description && n.description !== n.name ? JC.h('span', { class: 'muted' }, ` · ${n.description.slice(0, 90)}`) : '',
+      JC.h('span', { class: 'sdot' }), JC.h('div', { class: 'ninfo' }, JC.h('b', {}, n.name), ' ', JC.h('span', { class: `pill ${n.status === 'completed' ? 'ok' : n.status === 'waiting' ? 'warn' : n.status === 'failed' ? 'err' : ''}` }, n.status === 'completed' ? 'done' : n.status === 'waiting' ? 'needs you' : n.status || 'idle'), n.description && n.description !== n.name ? JC.h('span', { class: 'muted' }, ` · ${n.description.slice(0, 90)}`) : '',
         JC.h('div', { class: 'muted small' }, [n.ms || n.started ? (n.status === 'running' ? JC.ago(n.started) : JC.ago(Date.now() - (n.ms || 0))) : '', n.tokens ? JC.tok(n.tokens) : '', n.tools ? `${n.tools} tool uses` : '', n.last && n.status === 'running' ? `now: ${n.last}` : '', extra].filter(Boolean).join(' · ')),
         n.summary ? JC.h('div', { class: 'small' }, n.summary) : ''));
     const out = [];
@@ -92,8 +87,7 @@
 
   function agentMap() {
     const groups = (JC.S.all || []).filter(g => g.tasks.length);
-    const n = groups.reduce((a, g) => a + g.tasks.reduce((b, t) => b + Math.max(1, t.agents?.length || 0) + (t.reviewing ? 1 : 0), 0), 0);
-    dialog('Agent map', JC.h('p', { class: 'muted' }, `${n} agent${n === 1 ? '' : 's'} across ${groups.length} project${groups.length === 1 ? '' : 's'} · click a task for details`), agentTree(groups, false));
+    dialog('Agent map', agentTree(groups, false));
   }
 
   /* ---------- dialogs ---------- */
@@ -123,8 +117,10 @@
 
   function newSprint() {
     let name, goal;
-    dialog('New sprint', name = JC.h('input', { placeholder: 'Sprint name', value: `Sprint ${JC.S.board.sprints.length + 1}` }), goal = JC.h('input', { placeholder: 'Goal (optional)' }),
-      JC.h('div', { class: 'acts' }, JC.btn('Create', () => { if (name.value.trim()) { JC.post('addSprint', { name: name.value.trim(), goal: goal.value }); JC.$('#dlg').close(); } }, 'primary')));
+    const make = plan => { if (!name.value.trim()) return; const sp = { name: name.value.trim(), goal: goal.value.trim() || undefined }; JC.post('addSprint', sp); JC.$('#dlg').close(); if (plan) JC.planDialog([], sp); };
+    dialog('New sprint', JC.h('div', { class: 'grid2' }, JC.h('label', {}, 'Name', name = JC.h('input', { value: `Sprint ${JC.S.board.sprints.length + 1}` })), JC.h('label', {}, 'Goal', goal = JC.h('input', { placeholder: 'Goal (optional)' }))),
+      JC.h('p', { class: 'muted small' }, 'Its tasks merge into their own sprint branch; when the last one merges, the sprint merges into main.'),
+      JC.h('div', { class: 'acts' }, JC.btn('Create', () => make(false), 'primary'), JC.btn('Create and plan with Claude', () => make(true))));
     name.select();
   }
 
@@ -267,16 +263,14 @@
       `first-try passes: ${reviewed.filter(r => r.first).length}/${reviewed.length} · time: ${tot('mins')} min`, '',
       '| Task | Status | Build | Review | Check rounds | Review rounds | Minutes |', '|---|---|---|---|---|---|---|',
       ...rows.map(r => `| ${r.t.title.replace(/\|/g, '/')} | ${r.t.status} | ${JC.tokShort(r.build)} | ${JC.tokShort(r.review)} | ${r.checks} | ${r.reviews} | ${r.mins} |`)].join('\n');
-    dialog('Report',
-      JC.h('div', { class: 'kpis' }, [['Tasks', rows.length], ['New tokens', JC.tokShort(tot('build') + tot('review'))], ['Cached re-reads', JC.tokShort(tot('cached'))], ['Build / review', `${JC.tokShort(tot('build'))} / ${JC.tokShort(tot('review'))}`],
-        ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Avg per task', rows.length ? JC.tokShort((tot('build') + tot('review')) / rows.length) : '–'], ['Minutes', tot('mins')],
-        ['Project cost (est.)', `$${(JC.costOf(JC.S.board.tasks) + (JC.S.board.plannerCostUsd || 0)).toFixed(2)}${JC.S.policy?.policy.maxCostUsd.project ? ` / $${JC.S.policy.policy.maxCostUsd.project}` : ''}`]]
+    const sp = JC.sprintOf(JC.view) || JC.S.board.sprints.find(s => s.active && !s.closed), cost =t => `$${(t.costUsd || 0).toFixed(2)}`;
+    dialog(`Report · ${viewName}`,
+      JC.h('div', { class: 'kpis' }, [['Tasks', rows.length], ['Cost', `$${JC.costOf(rows.map(r => r.t)).toFixed(2)}`], ['First-try passes', `${reviewed.filter(r => r.first).length} / ${reviewed.length}`], ['Minutes', tot('mins')]]
         .map(([k, v]) => JC.h('div', { class: 'kpi' }, JC.h('b', {}, v), JC.h('span', { class: 'muted small' }, k)))),
-      rows.length ? JC.h('table', { class: 'rep' }, JC.h('tr', {}, ['Task', 'Status', 'Build', 'Review', 'Checks', 'Reviews', 'Min'].map(x => JC.h('th', {}, x))),
-        rows.sort((a, b) => (b.build + b.review) - (a.build + a.review)).map(r => JC.h('tr', { onclick: () => { JC.$('#dlg').close(); JC.openTask(r.t.id, 'details'); } },
-          JC.h('td', {}, r.t.title), JC.h('td', {}, r.t.status), JC.h('td', {}, JC.tokShort(r.build)), JC.h('td', {}, JC.tokShort(r.review)), JC.h('td', {}, r.checks), JC.h('td', {}, r.reviews), JC.h('td', {}, r.mins)))) : JC.h('p', { class: 'muted' }, 'No task has run in this view yet.'),
-      JC.h('p', { class: 'muted small' }, 'New tokens = written plus input not already cached. Cached re-reads are context re-sent at each step (about a tenth of the cost). First-try pass: passed checks and review without a fix round.'),
-      JC.h('div', { class: 'acts' }, JC.btn('Copy as Markdown', () => JC.post('copy', { text: md }))));
+      rows.length ? JC.h('div', { class: 'tscroll' }, JC.h('table', { class: 'rep' }, JC.h('tr', {}, ['Task', 'Status', 'Cost', 'Reviews', 'Files'].map(x => JC.h('th', {}, x))),
+        rows.sort((a, b) => (b.t.costUsd || 0) - (a.t.costUsd || 0)).map(r => JC.h('tr', { onclick: () => { JC.$('#dlg').close(); JC.openTask(r.t.id, 'details'); } },
+          JC.h('td', {}, r.t.title), JC.h('td', {}, r.t.status), JC.h('td', {}, cost(r.t)), JC.h('td', {}, r.reviews), JC.h('td', {}, (r.t.directFiles || []).length || '–'))))) : JC.h('p', { class: 'muted' }, 'No task has run in this view yet.'),
+      JC.h('div', { class: 'acts' }, !JC.REMOTE && sp ? JC.btn('Export to .justcode/reports', () => JC.post('sprintReport', { sprintId: sp.id }), 'primary') : '', JC.btn('Copy as Markdown', () => JC.post('copy', { text: md }))));
   }
 
   // In a sprint view: the sources that sprint uses, then the rest of the project's library to pick from.
@@ -433,5 +427,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, designDialog, guide });
 })();

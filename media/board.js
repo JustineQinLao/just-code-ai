@@ -347,7 +347,7 @@
       if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') JC.artifactsDialog();
     }
     else if (m.type === 'completions') JC.completions(m);
-    else if (m.type === 'history') { history = m.items; if ($('#dlg').open && !JC.sessionView) JC.drawHistory(); }
+    else if (m.type === 'history') JC.setHistory(m.items);
     else if (m.type === 'sessionLog') { if (JC.sessionView?.id === m.sessionId) { JC.sessionView.steps = m.steps; JC.drawHistory(); } }
     else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') JC.renderDrawer(); }
     else if (m.type === 'savedAgents') { agentsSaved[m.id] = m.nodes; if (m.id === open && tab === 'agents' && !agentView) JC.renderDrawer(); }
