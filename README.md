@@ -1,49 +1,49 @@
-# JustCode
+<div align="center">
 
-A task board for VS Code that runs Claude Code on each task. Every task gets its own branch and its own copy of the
-project. Claude asks for approval right on the card, and an AI reviewer tests the work before you merge it.
+# ◆ JustCode
+
+**A task board for VS Code that runs Claude Code on every task.**<br>
+Own branch per task · approvals on the card · AI review · one-click merge
+
+</div>
+
+![The JustCode board: To do, Needs you, Working, Review and Done lanes](docs/screens/board.png)
+
+## Why JustCode
+
+| | |
+|---|---|
+| 🗂 **One card per task** | Type a goal, press **⌘/Ctrl+Enter**. Claude builds it in its own git branch and folder, so your checkout is never touched. |
+| ✋ **Approvals on the card** | *Auto* mode lets Claude approve what is safe. Everything else waits with **Allow / Always allow / Deny**. |
+| ✅ **Checked before you look** | Your tests and type check run after every turn. Failures go back to Claude, then an AI reviewer checks the diff. |
+| 🔀 **One-click merge** | Press **✓ Merge** when the review passes. Conflicts are resolved in the task's folder, not yours. |
+| 📱 **Take it with you** | A token-protected phone page, an Android app, or Claude Code Remote Control. |
+
+## Tour
+
+| Review the work | Plan with Claude |
+|---|---|
+| ![A task's review tab](docs/screens/task-review.png) | ![The planning panel](docs/screens/planner.png) |
+| Each task shows its activity, changes, review and details. | **✦ Plan** turns a goal into small tasks with a *Done when* checklist, grouped into sprints. |
+
+| Agent map | On your phone |
+|---|---|
+| ![Every Claude session at work](docs/screens/agentMap.png) | ![Phone page](docs/smoke/app/04-permission.png) |
+| Every session, subagent and reviewer, with time and tokens. | Approve, merge and watch tasks one lane at a time. |
+
+## All features
 
 - **Works on any folder:** an existing project or an empty one. Nothing to configure first.
-- **Few interruptions:** the default *Auto* mode lets Claude approve what is safe. Anything else waits on the card,
-  with **Allow / Always allow / Deny** buttons. "Always" is remembered for the whole project.
-- **Hands-off lists:** **Run all** works through a list in order. Each task is built, reviewed, fixed and (optionally)
-  merged before the next one starts.
-- **Agent map:** every Claude session, subagent and reviewer at work, with elapsed time and tokens.
-- **Plan with Claude:** one **✦ Plan** button turns a goal into small tasks or reworks the To do list. Claude reads
-  the code read-only, asks you a few questions when the goal is unclear, and proposes tasks with a goal, likely files
-  and a *Done when* checklist, grouped into sprints. You keep chatting, then apply the tasks you want.
-- **Project setup:** a label by the project name says whether it is set up for Claude. **Set up project** has Claude
-  interview you, then write `CLAUDE.md`, a reviewer agent and `TASKS.md` (with sprints) after you approve.
-- **Sprints with progress:** each sprint has a goal and a progress bar (done, in review, working, needs you, to do).
-  **✦ Edit sprint** reworks every not-started task in a sprint with one prompt. The planning panel shows its own
-  progress: reading the code, writing the proposal, waiting for you, ready.
-- **Artifact pages:** a task that says *artifact* designs a web page with the frontend-design skill, publishes it to
-  claude.ai and puts the link on the card. Messages to Claude update the same link.
-- **Quiet notifications:** a notification appears only when a task needs you, is ready to merge, or failed, with an
-  **Open task** and **Don't show again**. Everything else goes to the JustCode output log.
-- **Sources and artifacts:** tasks rest on your specs, designs, docs and links (**📎 Sources**). Each task keeps a
-  brief, a plan, the builder's handoff and the review notes, so every step reads short notes instead of re-exploring
-  the code.
-- **Checks before review:** JustCode runs the project's own tests and type check after every turn (no tokens). A failure
-  goes straight back to Claude, so the AI reviewer only sees work that already passes.
-- **Ready-to-build task folders:** dependencies are linked or installed and the project's `.venv` is used before Claude
-  starts. Each task gets its own port.
-- **Report:** tokens, check and review rounds, first-try passes and time per task.
-- **Fewer tokens:** lean sessions, a shared cached system prompt, capped command output, reviews sized to the change.
-  Each card shows the tokens it used.
-- **Continue on your phone:** move any task to Claude Code Remote Control and steer it from the Claude app or
-  claude.ai/code.
+- **Hands-off lists:** **Run all** builds, reviews, fixes and (optionally) merges each task in order.
+- **Project setup:** **Set up project** has Claude interview you, then write `CLAUDE.md`, a reviewer agent and `TASKS.md`.
+- **Sprints with progress:** a goal and a progress bar per sprint. **✦ Edit sprint** reworks every not-started task.
+- **Artifact pages:** a task that says *artifact* designs a page, publishes it to claude.ai and links it on the card.
+- **Sources:** tasks rest on your specs, designs, docs and links (**📎 Sources**).
+- **Quiet notifications:** only when a task needs you, is ready to merge, or failed.
+- **Ready task folders:** dependencies linked or installed, `.venv` used, one port per task.
+- **Report and fewer tokens:** lean sessions, cached prompts, capped output; each card shows its tokens.
 
-## Screenshots
-
-The board has five lanes: **To do**, **Needs you**, **Working**, **Review** and **Done**. Each task is a card.
-Approvals and questions appear on the card, and a task you open shows its activity, changes, review and details.
-
-The phone page shows the same tasks, one lane at a time, with **Needs you** first:
-
-| Open | Approve | Merge | Done |
-|---|---|---|---|
-| ![Phone page, task list](docs/smoke/app/01-open.png) | ![A permission card with Allow and Deny](docs/smoke/app/04-permission.png) | ![Confirm the merge](docs/smoke/app/06-confirm.png) | ![The task shows done](docs/smoke/app/07-done.png) |
+**Jump to:** [Install](#install) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Settings](#settings) · [Troubleshooting](#troubleshooting)
 
 ## Install
 
