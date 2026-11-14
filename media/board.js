@@ -194,7 +194,7 @@
         h('option', { value: 'all', selected: view === 'all' }, 'All tasks'), h('option', { value: 'backlog', selected: view === 'backlog' }, 'Backlog'),
         ...S.board.sprints.filter(s => !s.closed).map(s => h('option', { value: s.id, selected: view === s.id }, `${s.name}${s.active ? ' ★' : ''}`))),
       btn('✦ Plan', () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint), 'ghost', 'Plan new tasks or rework the To do list with Claude'),
-      (n => btn(`📎 Sources${n ? ` (${n})` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
+      (n => btn(`📎 Sources${n ? ` ${n}` : ''}`, () => JC.sourcesDialog(), 'ghost', sprint ? `Specs, designs, docs and links ${sprint.name} is built on` : 'Specs, designs, docs and links tasks are based on'))(sprint ? sprintSrcs(sprint.id).length : (S.sources || []).length),
       btn(`⧉ Artifacts${(S.registry || []).some(e => (e.changedAt || 0) > artSeen) ? ' •' : ''}`, () => JC.artifactsDialog(), 'ghost', 'Every claude.ai artifact this project used or published'),
       btn('🎨 Design', () => JC.designDialog(), 'ghost', 'The style spec UI and artifact tasks follow (.justcode/design/DESIGN.md)'),
       h('div', { class: 'spacer' }),
@@ -202,8 +202,8 @@
         (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
-      btn(`▶ Run all${todo.length ? ` (${todo.length})` : ''}`, () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
-      btn('⋯', () => JC.moreMenu(extra), 'ghost icon', 'Sprints, merge, agent map, report, history, archived tasks'));
+      btn('▶ Run all', () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
+      btn(ready.length ? '⋯ •' : '⋯', () => JC.moreMenu(extra), 'ghost icon', ready.length ? `${ready.length} task${ready.length === 1 ? '' : 's'} ready to merge: open this menu` : 'Sprints, merge, agent map, report, history, archived tasks'));
   }
 
   const costOf = l => l.reduce((n, t) => n + (t.costUsd || 0), 0);
@@ -217,7 +217,7 @@
     const n = id => tasks.filter(t => lane(t) === id).length;
     const parts = [['done', 'done', n('done')], ['review', 'in review', n('review')], ['work', 'working', n('work')], ['needs', 'need you', n('needs')], ['todo', 'to do', n('todo')]];
     const done = n('done'), pct = Math.round(done / tasks.length * 100);
-    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') },
+    $('#progress').replaceChildren(h('div', { class: 'sprintbar', title: parts.map(([, l, c]) => `${c} ${l}`).join(' · ') + (sp.branch ? ` — ⎇ ${sp.branch} → ${sp.target}` : '') },
       h('b', {}, sp.name),
       h('div', { class: 'bar', role: 'progressbar', 'aria-label': `${sp.name} progress`, 'aria-valuemin': '0', 'aria-valuemax': String(tasks.length), 'aria-valuenow': String(done) },
         parts.filter(([, , c]) => c).map(([id, , c]) => h('i', { class: `seg ${id}`, style: `flex:${c}` }))),
