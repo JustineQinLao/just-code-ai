@@ -3,7 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { loadPolicy, violations, DEFAULT_POLICY, policyFile, pathMatches } from '../policy';
+import { loadPolicy, violations, DEFAULT_POLICY, policyFile, pathMatches, setBudget } from '../policy';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'jc-pol-'));
 
@@ -138,4 +138,15 @@ test('policy: the 2.0.0 default (bypass forbidden) is upgraded when untouched, k
   assert.deepEqual(JSON.parse(fs.readFileSync(policyFile(root), 'utf8')).forbidModes, []);
   fs.writeFileSync(policyFile(root), JSON.stringify({ ...DEFAULT_POLICY, forbidModes: ['bypassPermissions'], secretScan: false }));
   assert.deepEqual(loadPolicy(root).policy.forbidModes, ['bypassPermissions'], 'an edited policy keeps its choice');
+});
+
+test('setBudget changes one budget and keeps the rest of policy.json', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-budget-'));
+  fs.mkdirSync(path.join(root, '.justcode'));
+  fs.writeFileSync(policyFile(root), JSON.stringify({ denyTools: ['WebFetch'], maxCostUsd: { task: 5, sprint: 50, project: 500 } }));
+  setBudget(root, 'sprint', 120);
+  const raw = JSON.parse(fs.readFileSync(policyFile(root), 'utf8'));
+  assert.deepEqual(raw.maxCostUsd, { task: 5, sprint: 120, project: 500 });
+  assert.deepEqual(raw.denyTools, ['WebFetch']);
+  assert.throws(() => setBudget(root, 'sprint', -1));
 });

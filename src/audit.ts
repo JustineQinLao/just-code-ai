@@ -9,7 +9,7 @@ export type AuditEvent =
   | 'permission.allow' | 'permission.always' | 'permission.deny' | 'mode.switch'
   | 'review.pass' | 'review.fail' | 'review.accept' | 'review.override' | 'checks.fail'
   | 'merge' | 'finish' | 'discard' | 'publish'
-  | 'policy.deny' | 'budget.stop' | 'secrets.block' | 'phone.pair' | 'phone.action';
+  | 'policy.deny' | 'policy.change' | 'budget.stop' | 'secrets.block' | 'phone.pair' | 'phone.action';
 export interface AuditEntry { time: string; actor: Actor; event: AuditEvent; taskId?: string; sprintId?: string; detail?: string }
 
 export const auditFile = (root: string) => path.join(root, '.justcode', 'audit.jsonl');

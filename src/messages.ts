@@ -16,7 +16,7 @@ import * as A from './artifacts';
 import * as R from './registry';
 import * as Audit from './audit';
 import { writeSprintReport } from './report';
-import { loadPolicy, policyFile } from './policy';
+import { loadPolicy, policyFile, setBudget } from './policy';
 import type { Actor } from './audit';
 import * as C from './checks';
 import * as D from './design';
@@ -360,6 +360,12 @@ export async function handle(m: any, remote = false) {
       const sp = s.sprint(m.sprintId);
       if (sp) void vscode.window.showTextDocument(vscode.Uri.file(await writeSprintReport(r.root, sp, s.data.tasks)));
       return;
+    }
+    case 'setBudget': {
+      const was = loadPolicy(r.root).policy.maxCostUsd[m.key as 'task'];
+      setBudget(r.root, m.key, Number(m.usd));
+      r.audit('policy.change', undefined, `maxCostUsd.${m.key}: ${was} → ${Number(m.usd)}`, who);
+      return push();
     }
     case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
     case 'exportAudit': void vscode.commands.executeCommand('justCode.exportAudit'); return;

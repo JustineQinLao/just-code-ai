@@ -363,14 +363,16 @@
     const cost = k => p.maxCostUsd[k] ? `$${p.maxCostUsd[k]}` : 'no limit';
     return JC.h('div', { class: 'gsec' },
       JC.h('h4', {}, `Policy${P.denials.length ? ` · ${P.denials.length} denied today` : ''}${P.errors.length ? ' · has errors' : ''}`),
-      JC.h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Edit the file to change them; they apply at once.'),
+      JC.h('p', { class: 'muted small' }, 'Rules every task in this project follows, whatever its permission mode. Change the budgets here, the rest in the file; they apply at once.'),
       ...P.errors.map(e => JC.h('p', { class: 'err small' }, e)),
       JC.h('ul', { class: 'small' },
         JC.h('li', {}, 'Protected paths (no edits): ', list(p.protectedPaths)),
         JC.h('li', {}, 'Denied tools: ', list(p.denyTools)),
         JC.h('li', {}, 'Forbidden modes: ', list(p.forbidModes)),
         JC.h('li', {}, 'Needs your approval before merging when a path contains: ', list(p.requireHumanReviewFor)),
-        JC.h('li', {}, `Budgets: task ${cost('task')}, sprint ${cost('sprint')}, project ${cost('project')}`),
+        JC.REMOTE ? JC.h('li', {}, `Budgets: task ${cost('task')}, sprint ${cost('sprint')}, project ${cost('project')}`)
+          : JC.h('li', { class: 'budgets' }, 'Budgets in $ (0 = no limit): ', ...['task', 'sprint', 'project'].map(k => JC.h('label', {}, ` ${k} `,
+            JC.h('input', { type: 'number', min: '0', step: '1', value: String(p.maxCostUsd[k]), style: 'width:5em', onchange: ev => { const v = Number(ev.target.value); if (ev.target.value !== '' && v >= 0) JC.post('setBudget', { key: k, usd: v }); } })))),
         JC.h('li', {}, 'Models: ', p.allowedModels.length ? p.allowedModels.join(', ') : 'any'),
         JC.h('li', {}, `Checks must pass to merge: ${p.requireChecksPass ? 'yes' : 'no'} · Secret scan before commits: ${p.secretScan ? 'on' : 'off'}`)),
       P.denials.length ? JC.h('div', {}, JC.h('h4', {}, 'Denied today'), JC.h('ul', { class: 'small' }, P.denials.slice().reverse().map(d => JC.h('li', {},

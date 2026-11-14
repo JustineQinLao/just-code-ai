@@ -45,7 +45,7 @@ export const guardMethods = {
     const max = loadPolicy(this.root).policy.maxCostUsd, s = this.spent(t);
     for (const k of ['task', 'sprint', 'project'] as const) {
       if (k === 'sprint' && !t.sprintId) continue;
-      if (max[k] > 0 && s[k] >= max[k]) return `Budget reached: $${s[k].toFixed(2)} of $${max[k]} (${k}). Raise maxCostUsd.${k} in .justcode/policy.json, then press Resume.`;
+      if (max[k] > 0 && s[k] >= max[k]) return `Budget reached: $${s[k].toFixed(2)} of $${max[k]} (${k}). Raise the ${k} budget in ⚙ Settings → Policy, then press Resume.`;
     }
   },
 

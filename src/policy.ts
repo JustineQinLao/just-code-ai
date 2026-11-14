@@ -118,6 +118,15 @@ const FIRST_DEFAULT = { ...DEFAULT_POLICY, forbidModes: ['bypassPermissions'] };
 
 export const policyFile = (root: string) => nodePath.join(root, '.justcode', 'policy.json');
 
+// One budget, from ⚙ Settings. The rest of the file is kept as written.
+export function setBudget(root: string, key: 'task' | 'sprint' | 'project', usd: number) {
+  if (!['task', 'sprint', 'project'].includes(key) || !Number.isFinite(usd) || usd < 0) throw new Error('A budget is a number of dollars, 0 for no limit.');
+  loadPolicy(root);  // writes the defaults when there is no file yet
+  const raw = JSON.parse(fs.readFileSync(policyFile(root), 'utf8'));
+  raw.maxCostUsd = { ...DEFAULT_POLICY.maxCostUsd, ...raw.maxCostUsd, [key]: usd };
+  fs.writeFileSync(policyFile(root), JSON.stringify(raw, null, 2) + '\n');
+}
+
 const strings = (v: unknown) => Array.isArray(v) && v.every(x => typeof x === 'string') ? v as string[] : undefined;
 
 // Reads the policy, writing the defaults when there is none. A field with the wrong type falls back to its default

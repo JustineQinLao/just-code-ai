@@ -153,7 +153,7 @@
         btn(sick.length === 1 ? sick[0].fix.label : 'Show', () => sick.length === 1 ? post(sick[0].fix.action === 'designPick' ? 'designPick' : 'fix', { action: sick[0].fix.action }) : JC.setupDialog(), 'ghost')));
     }
     const over = S.board.tasks.find(t => !t.archived && /^Budget reached/.test(t.error || ''));
-    if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in policy.json, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
+    if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in ⚙ Settings → Policy, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => JC.openTask(init.running.id), 'primary')));
