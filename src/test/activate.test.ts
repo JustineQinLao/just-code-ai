@@ -43,17 +43,21 @@ test('extension: activates, opens the board, handles messages, writes only .just
     assert.equal(handlers.length, 1);
     const send = (m: any) => handlers[0]({ root, ...m });
     await send({ type: 'ready' });
-    await send({ type: 'addTask', title: 'Smoke task', mode: 'bypassPermissions' });
+    await send({ type: 'addTask', title: 'Smoke task', mode: 'acceptEdits' });
     await send({ type: 'phoneRevoke', id: 'all' });
     await new Promise(r => setTimeout(r, 200));
     const state = posted.filter(m => m?.type === 'state').pop();
     assert.deepEqual(state.board.tasks.map((t: any) => t.title), ['Smoke task']);
-    assert.equal(state.board.tasks[0].mode, 'bypassPermissions', 'a task with no session keeps its own mode in the board state');
+    assert.equal(state.board.tasks[0].mode, 'acceptEdits', 'a task with no session keeps its own mode in the board state');
     assert.ok(state.policy && Array.isArray(state.registry) && state.phone);
     assert.deepEqual(fs.readdirSync(root).sort(), ['.git', '.justcode']);
-    ext.deactivate();
+  } finally {
+    // Always shut down (even after a failed assertion), or the store's file watcher keeps the test process alive.
     // The setup check still running may create the project's runner again: let it settle, then end it too.
+    const ext = require('../extension');
+    ext.deactivate();
     await new Promise(r => setTimeout(r, 1500));
     ext.deactivate();
-  } finally { Module._load = load; }
+    Module._load = load;
+  }
 });

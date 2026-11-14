@@ -6,6 +6,12 @@
   const open = r => (r?.issues || []).filter(i => !i.accepted);
   const accepted = r => (r?.issues || []).filter(i => i.accepted);
   const isDirect = t => t.where === 'direct' && !t.init;
+  // How long since `since` (a timestamp): 45s, 3m 12s, 2h 5m.
+  const elapsed = (since, now = Date.now()) => {
+    if (!since) return '';
+    const s = Math.max(0, Math.round((now - since) / 1000));
+    return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`;
+  };
   const busy = t => t.run === 'running' || t.run === 'starting';
 
   // Which column a card sits in.
@@ -26,7 +32,7 @@
   }
 
   // { text, tone, actions: [[label, fn, style?], ...] }: the first action is the primary one.
-  // c: { settings, queue, policy?, tasks, post, open(id, tab), dur(ms), lastTool(t) }
+  // c: { settings, queue, policy?, tasks, post, open(id, tab), lastTool(t) }
   function nextStep(t, c) {
     const s = c.settings, max = roundLimit(t.review, s.review.maxAttempts), r = t.review, post = c.post, id = t.id;
     const fin = isDirect(t) ? 'Finish' : 'Merge';
@@ -56,7 +62,7 @@
       return { text: `${bad.map(x => x.cmd || x.name).join(', ')} still fail${bad.length === 1 ? 's' : ''} after ${Math.max(0, t.checks.rounds - 1)} fix round(s)${first ? `: ${first.slice(0, 120)}` : ''}`, tone: 'err',
         actions: [['See log', () => c.open(id, 'details')], ['Try 1 more round', () => post('sendChecks', { id })], ...(c.policy?.requireChecksPass ? [] : [[`${fin} anyway`, () => post('merge', { id }), 'ghost']]), discard] };
     }
-    if (t.reviewing) return { text: `AI reviewer is testing it · ${c.dur(t.reviewing)}`, tone: 'run', actions: [] };
+    if (t.reviewing) return { text: `AI reviewer is testing it · ${elapsed(t.reviewing)}`, tone: 'run', actions: [] };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Claude is fixing ${open(r).length} review issue(s) (round ${r.attempts} of ${max})`, tone: 'run', actions: [] } : { text: 'Paused', tone: 'muted', actions: [resume] };
     if (t.quick && t.status === 'review') {
       const n = (t.directFiles || []).length;
@@ -97,6 +103,6 @@
     return '';
   }
 
-  const api = { lane, nextStep, roundLimit };
+  const api = { lane, nextStep, roundLimit, elapsed };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.JCStatus = api;
 })(typeof window !== 'undefined' ? window : this);

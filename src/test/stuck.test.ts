@@ -44,7 +44,7 @@ test('review prompt: accepted issues and the builder\'s note are passed to the r
 
 // Every state where an automatic loop gave up: the card explains it and offers a way out besides repeating the loop.
 const settings = { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 };
-const ctx = (posts: any[] = []) => ({ settings, queue: { queued: [] }, post: (type: string, m: any) => posts.push({ type, ...m }), open: () => {}, dur: () => '1m', lastTool: () => '' });
+const ctx = (posts: any[] = []) => ({ settings, queue: { queued: [] }, post: (type: string, m: any) => posts.push({ type, ...m }), open: () => {}, lastTool: () => '' });
 const issue = (text: string, rounds = 1) => ({ text, key: issueKey(text), rounds });
 const STUCK: Record<string, any> = {
   reviewFail: { id: 'a', title: 'A', status: 'review', worktree: '/w', review: { state: 'fail', attempts: 3, issues: [issue('src/a.ts bug', 3), issue('src/b.ts missing test')] } },
@@ -121,7 +121,7 @@ test('output: automatic picks an artifact page for a mockup, the form can force 
 test('quick: done without checks or review; Finish commits, Close when nothing changed', () => {
   const settings = { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 };
   const posts: any[] = [];
-  const c = { settings, queue: { queued: [] }, post: (type: string, m: any) => posts.push({ type, ...m }), open: () => {}, dur: () => '', lastTool: () => '' };
+  const c = { settings, queue: { queued: [] }, post: (type: string, m: any) => posts.push({ type, ...m }), open: () => {}, lastTool: () => '' };
   const files = { id: 'q', title: 'Q', status: 'review', where: 'direct', quick: true, run: 'idle', directFiles: ['a.ts'], reply: 'Renamed it.' };
   const n = status.nextStep(files, c);
   assert.match(n.text, /⚡ Done: changed 1 file/);
@@ -130,4 +130,13 @@ test('quick: done without checks or review; Finish commits, Close when nothing c
   const answer = status.nextStep({ ...files, directFiles: [], reply: 'The retry limit is 3.' }, c);
   assert.match(answer.text, /⚡ The retry limit is 3\./);
   assert.deepEqual(answer.actions.map((a: any) => a[0]), ['Reply', '✓ Close']);
+});
+
+test('elapsed: time since a timestamp, never since 1970', () => {
+  const now = 1_800_000_000_000;
+  assert.equal(status.elapsed(now - 45_000, now), '45s');
+  assert.equal(status.elapsed(now - (10 * 60 + 59) * 1000, now), '10m 59s');
+  assert.equal(status.elapsed(now - 2 * 3600_000 - 5 * 60_000, now), '2h 5m');
+  assert.equal(status.elapsed(undefined, now), '');
+  assert.match(status.nextStep({ id: 'r', title: 'R', status: 'review', reviewing: Date.now() - 90_000 }, ctx()).text, /testing it · 1m 30s/);
 });

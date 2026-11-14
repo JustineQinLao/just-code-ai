@@ -7,7 +7,17 @@ const media = path.resolve(__dirname, '..', 'media');
 const argv = process.argv.slice(2), si = argv.indexOf('--shots');
 const shotsDir = si >= 0 ? path.resolve(argv[si + 1] || (console.error('--shots needs a directory'), process.exit(2))) : '';
 if (si >= 0) argv.splice(si, 2);
-const board = JSON.parse(fs.readFileSync(argv[0] || path.resolve(__dirname, '..', '.justcode', 'board.json'), 'utf8'));
+// A task's copy of the repo has no .justcode/board.json: then a small built-in board with one task in each state.
+const SAMPLE = { sprints: [{ id: 's1', name: 'Sprint 1', active: true }], tasks: [
+  { id: 't1', title: 'Ready task', status: 'todo', mode: 'auto', sprintId: 's1', created: 1 },
+  { id: 't2', title: 'Stuck review', status: 'review', mode: 'auto', sprintId: 's1', created: 2, worktree: '/w', branch: 'jc/x', base: 'main',
+    review: { state: 'fail', attempts: 3, issues: [{ text: 'src/a.ts bug', key: 'k1', rounds: 3 }, { text: 'missing test', key: 'k2', rounds: 1 }] } },
+  { id: 't3', title: 'Passed review', status: 'review', mode: 'auto', sprintId: 's1', created: 3, worktree: '/w', review: { state: 'pass', attempts: 1 } },
+  { id: 't4', title: 'Quick answer', status: 'review', mode: 'auto', where: 'direct', quick: true, created: 4, reply: 'It is in src/queue.ts.' },
+  { id: 't5', title: 'Merged task', status: 'done', mode: 'auto', sprintId: 's1', created: 5 },
+] };
+const file = argv[0] || path.resolve(__dirname, '..', '.justcode', 'board.json');
+const board = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : SAMPLE;
 for (const t of board.tasks) delete t.live;
 const settings = { maxParallel: 1, taskModel: 'sonnet', allowedTools: [], worktreeCopy: [], idleMinutes: 10, personalSetup: false, superpowers: true, freshAfterTokens: 120000,
   checks: 'auto', setup: 'auto', maxCheckRounds: 2, checkTimeoutMinutes: 10, subagents: false, taskEffort: '', plannerEffort: '', plannerModel: 'opus', reviewEffort: 'medium',
