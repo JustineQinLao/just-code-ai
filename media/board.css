@@ -385,10 +385,11 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .dhead { padding-bottom: 0; }
 
 /* activity: asks and timeline (index.html#approvals) */
-.dbody .ask { margin: 0; padding: 11px; border-radius: 10px; background: var(--warnbg); border: 1px solid var(--needs); display: grid; gap: 8px; }
+.dbody .ask { margin: 0 0 12px; padding: 11px; border-radius: 10px; background: var(--warnbg); border: 1px solid var(--needs); display: grid; gap: 8px; }
 .dbody .ask .acts, .dbody .ask .row { margin-top: 0; }
 .dbody .ask .opts { margin: 0; gap: 6px; }
-.dbody .ask .opt { border-radius: 9px; padding: 8px 10px; background: var(--card, var(--bg)); }
+.dbody .ask .opt { border-radius: 9px; padding: 8px 10px; background: color-mix(in srgb, var(--bg) 35%, transparent); }
+.dbody .ask button.ghost { border-color: transparent; background: none; }
 .dbody .ask .opt.rec { border-color: var(--accent); }
 .tl { border-left: 2px solid var(--line); margin-left: 5px; padding-left: 14px; display: grid; gap: 8px; }
 .tl p { margin: 0; position: relative; word-break: break-word; }

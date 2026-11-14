@@ -50,7 +50,7 @@
           } }),
           JC.h('span', { class: 'otext' }, JC.h('span', { class: 'olabel' }, o.label), o.description ? JC.h('span', { class: 'odesc' }, o.description) : '',
             o.preview ? JC.h('pre', { class: 'opreview' }, o.preview) : '')))),
-        JC.h('input', { class: 'other', placeholder: 'Or type your own answer', oninput: e => { other[i] = e.target.value; } }))),
+        JC.h('input', { class: 'other', placeholder: 'Other…', oninput: e => { other[i] = e.target.value; } }))),
       JC.h('div', { class: 'acts' },
         JC.btn('Answer', () => {
           const answers = {};
