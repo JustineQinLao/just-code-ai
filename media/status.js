@@ -103,6 +103,8 @@
     return '';
   }
 
-  const api = { lane, nextStep, roundLimit, elapsed };
+  // Board columns, left to right: id and name.
+  const LANES = [['todo', 'To do'], ['needs', 'Needs you'], ['work', 'Working'], ['review', 'Review'], ['done', 'Done']];
+  const api = { LANES, lane, nextStep, roundLimit, elapsed };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.JCStatus = api;
 })(typeof window !== 'undefined' ? window : this);

@@ -359,3 +359,16 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .node.click { cursor: pointer; }
 .node.click:hover { background: var(--vscode-list-hoverBackground); }
 .aresult { white-space: pre-wrap; background: var(--lane); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+
+/* lane dot, tinted Needs you, pulse bar, add task */
+.lane h2 { justify-content: flex-start; align-items: center; gap: 7px; }
+.lane h2 .count { margin-left: auto; background: var(--card); padding: 0 7px; border-radius: 9px; color: var(--fg); }
+.ldot { width: 8px; height: 8px; border-radius: 50%; background: var(--todo); }
+.lane.needs .ldot { background: var(--needs); } .lane.work .ldot { background: var(--work); }
+.lane.review .ldot { background: var(--review); } .lane.done .ldot { background: var(--done); }
+.lane.needs { background: color-mix(in srgb, var(--needs) 9%, var(--lane)); }
+.pulsebar { height: 3px; border-radius: 2px; margin-top: 8px; background: linear-gradient(90deg, var(--work), transparent); }
+@media (prefers-reduced-motion: no-preference) { .pulsebar { animation: pulse 1.6s ease-in-out infinite; } }
+.addtask { width: 100%; background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+.empty b { color: var(--fg); font-size: 16px; }
+.empty { display: grid; gap: 10px; justify-items: center; color: var(--muted); }

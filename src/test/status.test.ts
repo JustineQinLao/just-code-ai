@@ -1,0 +1,11 @@
+import { test } from 'node:test';
+import * as assert from 'node:assert/strict';
+import * as path from 'path';
+
+// media/status.js is plain JS shared with the webview; out-test/test → ../../media.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const status = require(path.join(__dirname, '..', '..', 'media', 'status.js'));
+
+test('board lanes run To do, Needs you, Working, Review, Done', () => {
+  assert.deepEqual(status.LANES.map((l: string[]) => l[0]), ['todo', 'needs', 'work', 'review', 'done']);
+});
