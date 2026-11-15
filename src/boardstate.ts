@@ -27,6 +27,7 @@ import { startMobileServer, MobileServer } from './server';
 import { askingTerms, bypassAllOn, emit, limits, roots, runner, runnerSettings, runners, savingTerms, setting, sinks, st, workspace } from './host';
 import { phoneDevices } from './phonehost';
 import { savedAt } from './artifact-terminal';
+import * as App from './app';
 
 // The state the board renders, and the open task's activity.
 
@@ -54,6 +55,7 @@ export function post() {
     policy: (() => { const l = loadPolicy(r.root), day = new Date(); day.setHours(0, 0, 0, 0);
       return { ...l, file: policyFile(r.root), denials: Audit.read(r.root, { since: day.getTime(), event: 'policy.deny' }).slice(-50) }; })(),
     detectedChecks: C.detectChecks(r.root),
+    app: App.view(r.root),
     settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), defaultWhere: setting('defaultWhere', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!st.apiKey },
     planner: r.plannerLive(),
     plannerPhase: r.plannerPhase,

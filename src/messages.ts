@@ -29,6 +29,7 @@ import { BYPASS_TEXT, bin, bypassAllOn, cfg, commandCache, confirm, confirmFor, 
 import { fix, recheck } from './setupflow';
 import { publishArtifact, saveArtifactSource } from './artifact-terminal';
 import { sendSteps } from './boardstate';
+import * as App from './app';
 
 // Messages from the board (desktop or phone) and the actions they start.
 
@@ -95,6 +96,8 @@ export async function handle(m: any, remote = false) {
       const named = splitTitle(String(m.title), m.description);
       // A "run it so I can see it" request with Runs in on Automatic: the project folder, outside the sprint (no branch, no merge).
       const runApp = !m.where && !output && runsApp(`${m.title}\n${m.description ?? ''}`);
+      // "Run it so I can see it" is not a task: the App button builds and runs the project folder, without Claude.
+      if (runApp && !remote && App.detect(r.root)) { void App.start(r.root); emit({ type: 'openApp' }); return; }
       const task = s.addTask({ title: named.title, description: named.description, sprintId: runApp ? undefined : m.sprintId || undefined, agent: m.agent || undefined,
         mode: m.mode || setting('defaultMode', 'auto'), ...(m.quick ? { quick: true } : {}), where: m.quick ? 'direct' : resolveWhere({ where: m.where, artifact: !!output, setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote, runApp }),
         output,
@@ -370,6 +373,21 @@ export async function handle(m: any, remote = false) {
       push();
       // "Raise and resume" on a task the budget stopped: the task continues under the new budget.
       if (t) await r.say(m.id, 'Continue the task.');
+      return;
+    }
+    case 'appStart': if (!remote) void App.start(r.root); return;
+    case 'appStop': if (!remote) await App.stop(r.root); return;
+    case 'appLog': if (!remote) void vscode.window.showTextDocument(vscode.Uri.file(App.logFile(r.root))); return;
+    case 'appFix': {
+      // The app would not come up: a ⚡ task in the project folder, with what JustCode tried and the log.
+      if (remote) return;
+      const a = App.view(r.root);
+      const task = s.addTask({ title: 'Get the app running', where: 'direct', quick: true, mode: setting('defaultMode', 'auto'),
+        description: `JustCode could not run this project's app from the project folder${a.kind ? ` (detected: ${a.kind})` : ''}: ${a.error ?? 'it did not answer'}.\n\n` +
+          `Last lines of .justcode/app.log:\n\`\`\`\n${a.log.slice(-2500)}\n\`\`\`\n\nFix the environment or setup so it builds and answers (prefer config such as .env or ` +
+          'a missing dependency over code changes), start it detached, and confirm the frontend and backend answer. Reply short: "Frontend: <url>", "Backend: <url>", then one line on what you fixed.' });
+      r.audit('task.create', task.id, task.title, who);
+      await r.run(task.id);
       return;
     }
     case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;

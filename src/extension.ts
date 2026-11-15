@@ -28,6 +28,7 @@ import { lanIps, loadPhoneToken, newToken, phoneDevices, syncMobile, syncPhone }
 import { PHONE_BYPASS_TEXT, bypassAllOn, cfg, checkBypassAll, confirm, emit, limits, open, out, overrides, push, runner, runnerFor, runners, setting, st, status, updateStatus, workspace } from './host';
 import { addProject, remoteTerms } from './messages';
 import { recheck } from './setupflow';
+import { appEvents } from './app';
 
 
 export function activate(context: vscode.ExtensionContext) {
@@ -45,6 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
   st.closeMobile = () => { const m = st.mobile; st.mobile = undefined; void m?.stop(); };
 
   limits.onChange(push);
+  appEvents.on('change', () => push());
   limits.onReset(() => { for (const r of runners.values()) r.afterReset(); });
 
   // Left side of a review diff: the file at the merge base, straight from git.

@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
 import { sweepStacks } from './docker';
+import * as App from './app';
 import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
@@ -71,6 +72,7 @@ export const mergeMethods = {
         this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
         this.audit('finish', id, `${files.length} file(s) committed${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}`, auto ? 'justcode' : by);
         this.d.notify('info', `Finished "${t.title}".`, undefined, auto);
+        void App.afterMerge(this.root, files, `after "${t.title}"`, false).catch(() => undefined);
         this.pump();
         return;
       }
@@ -92,8 +94,14 @@ export const mergeMethods = {
           this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id, true);
           return;
         }
+        const before = await g.git(this.root, ['rev-parse', `refs/heads/${t.base}`]).catch(() => '');
         await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
+        // A running app follows the project folder: rebuild it when this merge landed on the checked-out branch.
+        if (before && await g.currentBranch(this.root).catch(() => '') === t.base) {
+          const files = (await g.git(this.root, ['diff', '--name-only', before, t.base]).catch(() => '')).split('\n').filter(Boolean);
+          void App.afterMerge(this.root, files, `after "${t.title}"`, false).catch(() => undefined);
+        }
       }
       // The merge is in git. A folder that will not go away must not leave the task in Review, or Merge runs again.
       await this.cleanup(t).catch(e => this.d.notify('warn', `Merged "${t.title}", but could not remove its folder (${e.message}). Delete ${t.worktree} by hand.`, id));
@@ -117,6 +125,7 @@ export const mergeMethods = {
     const tasks = this.store.data.tasks;
     if (tasks.some(x => (x.sprintId === id && !x.archived && x.status !== 'done') || (x.base === sp.branch && x.worktree && x.status !== 'done'))) return;
     this.requireLease();
+    const before = await g.git(this.root, ['rev-parse', `refs/heads/${sp.target}`]).catch(() => '');
     if (await g.branchExists(this.root, sp.branch)) {
       const conflicts = await g.mergeBranch(this.root, sp.target, sp.branch, `Merge sprint ${sp.name} (${sp.branch})`);
       if (conflicts.length) {
@@ -128,19 +137,11 @@ export const mergeMethods = {
     }
     this.store.updateSprint(id, { branch: undefined, target: undefined });
     this.d.notify('info', `${sp.name} is done: merged ${sp.branch} into ${sp.target}.`, undefined, true);
-    // The sprint is in: free Docker of every task stack, then run the result from the project folder for the user to open.
+    // The sprint is in: free Docker of every task stack, then rebuild the project's app from the project folder when code changed.
     const live = this.store.data.tasks.filter(x => x.worktree && x.status !== 'done').map(x => x.worktree!);
     await sweepStacks(this.root, live).catch(() => []);
-    const last = tasks.filter(x => x.sprintId === id && x.status === 'done').sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0))[0];
-    const run = this.store.addTask({ title: `Run ${sp.name} so I can open it`, where: 'direct', quick: true, mode: last?.mode ?? 'acceptEdits',
-      description: `${sp.name} was just merged into ${sp.target}. Build and start the app from this project folder (the current branch), detached so your turn ends ` +
-        '(for a Docker Compose project: docker compose up -d --build, with no -p project name). Seed demo data if the project has a seed command. ' +
-        'Take the frontend and backend URLs from the .env the build uses (its host and port variables, e.g. FRONTEND_PORT, BACKEND_PORT), not from guesses. ' +
-        'If it does not come up, fix the environment (stale node_modules or images, a missing .env value) without changing project files, and retry. ' +
-        'Wait until both answer and sign in once with a demo login to confirm it works. Leave it running. ' +
-        'Reply short, in this order: "Frontend: <url>", "Backend: <url>", one line per demo login ("<role>: <email> / <password>"), then at most two lines on anything you fixed.' });
-    this.audit('task.create', run.id, run.title, 'justcode');
-    setTimeout(() => void this.run(run.id).catch(e => this.d.notify('error', e.message, run.id)), 0);  // outside the merge's serial section
+    const files = before ? (await g.git(this.root, ['diff', '--name-only', before, sp.target]).catch(() => '')).split('\n').filter(Boolean) : [];
+    void App.afterMerge(this.root, files, `after ${sp.name}`, true).catch(() => undefined);  // not awaited: a build can take minutes
   },
 
   resolveWithClaude(this: Runner, id: string) {

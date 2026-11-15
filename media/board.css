@@ -452,3 +452,14 @@ table.rep th, table.rep td { padding: 5px 6px; }
 
 /* Long task titles in dialogs wrap instead of widening the dialog. */
 .wrap { overflow-wrap: anywhere; white-space: normal; min-width: 0; }
+
+/* ▶ App button and modal */
+button.app-running { color: var(--ok); }
+button.app-failed { color: var(--err); }
+button.app-building { opacity: .85; }
+b.app-running, .applinks .ok { color: var(--ok); }
+b.app-failed { color: var(--err); }
+.applinks { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 6px; }
+.applinks li { gap: 8px; align-items: center; }
+.applinks a { word-break: break-all; }
+.applog { max-height: 220px; overflow: auto; white-space: pre-wrap; }

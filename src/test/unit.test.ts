@@ -1246,3 +1246,18 @@ test('staleStacks: only stacks of task folders no live task uses', () => {
   ];
   assert.deepEqual(staleStacks(list, root, [wt('bbbb2222')]).map((s: any) => s.Name), ['aaaa1111']);
 });
+
+test('app: detects how to run a project and which link is the frontend', () => {
+  const App = require('../app');
+  const mk = (files: Record<string, string>) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-app-')); for (const [f, c] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), c); } return d; };
+  assert.equal(App.detect(mk({ 'docker-compose.yml': 'services: {}' })).kind, 'Docker Compose');
+  const ng = App.detect(mk({ 'frontend/package.json': JSON.stringify({ scripts: { start: 'ng serve' }, dependencies: { '@angular/core': '19' } }), 'backend/manage.py': '', '.env': 'FRONTEND_PORT=4209\nBACKEND_PORT=8009\n' }));
+  assert.equal(ng.kind, 'Angular + Django');
+  assert.deepEqual(ng.procs.map((p: any) => [p.role, p.port]), [['frontend', 4209], ['backend', 8009]]);
+  assert.equal(App.detect(mk({ 'package.json': JSON.stringify({ scripts: { dev: 'vite' }, devDependencies: { vite: '6' } }) })).procs[0].port, 5173);
+  assert.equal(App.detect(mk({ 'README.md': 'hi' })), undefined);
+  const ps = App.parsePs('{"Service":"db","Publishers":[{"PublishedPort":5432,"TargetPort":5432}]}\n{"Service":"backend","Publishers":[{"PublishedPort":8009,"TargetPort":8000}]}\n{"Service":"frontend","Publishers":[{"PublishedPort":4209,"TargetPort":4200}]}\n{"Service":"mailpit","Publishers":[{"PublishedPort":8025,"TargetPort":8025}]}');
+  assert.deepEqual(App.composeLinks(ps, {}).map((l: any) => [l.role, l.url]), [['frontend', 'http://localhost:4209'], ['backend', 'http://localhost:8009'], ['other', 'http://localhost:8025']]);
+  assert.ok(App.needsBuild(['frontend/src/app/x.ts']));
+  assert.ok(!App.needsBuild(['docs/plan.md', 'e2e/tests/a.spec.ts', '.justcode/progress.md']));
+});

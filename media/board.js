@@ -198,6 +198,8 @@
         (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
+      !REMOTE ? (a => btn(a.busy || a.state === 'building' ? '⟳ App: building…' : a.state === 'running' ? '● App running' : a.state === 'failed' ? '⚠ App' : '▶ App',
+        () => JC.appDialog(), `ghost app-${a.busy ? 'building' : a.state}`, 'Build and run this project from its folder (current branch): frontend and backend links'))(S.app || { state: 'stopped' }) : '',
       btn('▶ Run all', () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),
       btn(ready.length ? '⋯ •' : '⋯', () => JC.moreMenu(extra), 'ghost icon', ready.length ? `${ready.length} task${ready.length === 1 ? '' : 's'} ready to merge: open this menu` : 'Sprints, merge, agent map, report, history, archived tasks'));
   }
@@ -361,6 +363,7 @@
       if ($('#dlg').open && $('#dlg').dataset.kind === 'setup') JC.setupDialog();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'sources') JC.sourcesDialog();
       if ($('#dlg').open && $('#dlg').dataset.kind === 'artifacts') JC.artifactsDialog();
+      if ($('#dlg').open && $('#dlg').dataset.kind === 'app') JC.appDialog();
     }
     else if (m.type === 'completions') JC.completions(m);
     else if (m.type === 'history') JC.setHistory(m.items);
@@ -371,6 +374,7 @@
     else if (m.type === 'changes') { changes[m.id] = m.files; if (m.id === open) JC.renderDrawer(); }
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) JC.renderDrawer(); }
     else if (m.type === 'focus') JC.openTask(m.id);
+    else if (m.type === 'openApp') JC.appDialog();
     else if (m.type === 'usedSource') { JC.srcOff.delete(m.sourceId); JC.renderAddOptions(); }
     else if (m.type === 'picked') JC.addPicked(m.files);
     else if (m.type === 'dialog') JC.bridged(m);
