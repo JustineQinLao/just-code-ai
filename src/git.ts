@@ -54,10 +54,22 @@ export async function exclude(repo: string, _fresh: boolean, extra: string[] = [
   fs.appendFileSync(file, `${cur && !cur.endsWith('\n') ? '\n' : ''}${want.join('\n')}\n`);
 }
 
+// .justcode/ (board, worktrees, logs, the app's state) in the project's own .gitignore, once, at setup, so a teammate
+// or a plain `git add -A` never commits it. Nothing is written when a line already covers it (or deliberately un-ignores it).
+export function ignoreJustcode(repo: string) {
+  const file = path.join(repo, '.gitignore');
+  let cur = '';
+  try { cur = fs.readFileSync(file, 'utf8'); } catch { /* none yet */ }
+  if (cur.split(/\r?\n/).some(l => /^!?\/?\.justcode(\/(\*\*?)?)?\s*$/.test(l.trim()))) return false;
+  fs.appendFileSync(file, `${cur && !cur.endsWith('\n') ? '\n' : ''}${cur ? '\n' : ''}# JustCode (local board, task folders, logs)\n/.justcode/\n`);
+  return true;
+}
+
 // Local repo when there is none (no remote is added). Worktrees need a first commit to branch from.
 export async function ensureRepo(dir: string) {
   const fresh = !await isRepo(dir);
   if (fresh) await git(dir, ['init', '-q']);
+  ignoreJustcode(dir);   // before the first commit, so the new repo's .gitignore has it
   await exclude(dir, fresh);
   if (!await hasCommits(dir)) {
     await git(dir, ['add', '-A']);

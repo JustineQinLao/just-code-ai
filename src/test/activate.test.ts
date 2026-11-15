@@ -80,7 +80,9 @@ test('extension: activates, opens the board, handles messages, writes only .just
     assert.deepEqual(state.board.tasks.map((t: any) => t.title), ['Smoke task']);
     assert.equal(state.board.tasks[0].mode, 'acceptEdits', 'a task with no session keeps its own mode in the board state');
     assert.ok(state.policy && Array.isArray(state.registry) && state.phone);
-    assert.deepEqual(fs.readdirSync(root).sort(), ['.git', '.justcode']);
+    // Only .justcode/, plus the one .gitignore line that keeps it out of git.
+    assert.deepEqual(fs.readdirSync(root).sort(), ['.git', '.gitignore', '.justcode']);
+    assert.equal(fs.readFileSync(path.join(root, '.gitignore'), 'utf8'), '# JustCode (local board, task folders, logs)\n/.justcode/\n');
   } finally {
     // Always shut down (even after a failed assertion), or the store's file watcher keeps the test process alive.
     // The setup check still running may create the project's runner again: let it settle, then end it too.

@@ -1312,3 +1312,18 @@ test('chat: its turn is only a reply (no commit, review or status change) and it
   assert.equal(t.review, undefined);
   r.dispose();
 });
+
+test('ignoreJustcode: adds /.justcode/ to .gitignore once, and respects an existing rule', () => {
+  const g = require('../git');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-ign-'));
+  assert.equal(g.ignoreJustcode(d), true);
+  assert.match(fs.readFileSync(path.join(d, '.gitignore'), 'utf8'), /^\/\.justcode\/$/m);
+  assert.equal(g.ignoreJustcode(d), false);
+  const e = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-ign-'));
+  fs.writeFileSync(path.join(e, '.gitignore'), 'node_modules\n.justcode');
+  assert.equal(g.ignoreJustcode(e), false);
+  const f = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-ign-'));
+  fs.writeFileSync(path.join(f, '.gitignore'), 'node_modules');
+  g.ignoreJustcode(f);
+  assert.equal(fs.readFileSync(path.join(f, '.gitignore'), 'utf8'), 'node_modules\n\n# JustCode (local board, task folders, logs)\n/.justcode/\n');
+});

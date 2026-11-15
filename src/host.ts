@@ -98,6 +98,8 @@ export const recent = new Map<string, number>(); // notification text → when i
 export const runnerFor = (root: string) => {
   let r = runners.get(root);
   if (r) return r;
+  // First time JustCode sees this project (no .justcode/ yet): keep it out of git in the project's .gitignore.
+  if (!fs.existsSync(path.join(root, '.justcode'))) try { g.ignoreJustcode(root); } catch { /* read-only folder */ }
   r = new Runner(new Store(root), {
     version: st.ctx.extension.packageJSON.version, bin, env, settings: runnerSettings, limits, cli: path.join(st.ctx.extensionPath, 'out', 'cli.js'),
     notify: (level, text, taskId, toast) => {

@@ -585,6 +585,7 @@ export async function designFromProject(r: Runner) {
 async function initialize(r: Runner) {
   const running = r.store.data.tasks.find(t => t.init === true && !t.archived && t.status !== 'done');
   if (running) return open(running.id);
+  try { g.ignoreJustcode(r.root); } catch { /* read-only folder */ }
   const task = r.store.addTask({ title: 'Describe this project for JustCode', description: 'Claude reads the code, asks you a few questions on this card, shows the files it will write, and writes them only after you approve: .justcode/project.md and, if you name a design, .justcode/design/DESIGN.md.',
     mode: 'acceptEdits', where: 'direct', init: true, allow: ['Write(.justcode/**)', 'Bash(ls:*)'] });
   await r.run(task.id);
