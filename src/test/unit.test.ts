@@ -1234,3 +1234,15 @@ test('runsApp: "run it so I can see it" goes to the project folder, ordinary wor
   assert.equal(resolveWhere({ sprintId: 's', runApp: true, where: 'branch' }), 'branch');
   assert.equal(resolveWhere({ sprintId: 's', runApp: true, remote: true }), 'branch');
 });
+
+test('staleStacks: only stacks of task folders no live task uses', () => {
+  const { staleStacks } = require('../docker');
+  const root = '/p/app', wt = (id: string) => `${root}/.justcode/worktrees/${id}`;
+  const list = [
+    { Name: 'app', ConfigFiles: `${root}/docker-compose.yml` },
+    { Name: 'aaaa1111', ConfigFiles: `${wt('aaaa1111')}/docker-compose.yml` },
+    { Name: 'bbbb2222', ConfigFiles: `${wt('bbbb2222')}/docker-compose.yml,/tmp/ov.yml` },
+    { Name: 'other', ConfigFiles: '/q/other/.justcode/worktrees/cccc3333/docker-compose.yml' },
+  ];
+  assert.deepEqual(staleStacks(list, root, [wt('bbbb2222')]).map((s: any) => s.Name), ['aaaa1111']);
+});

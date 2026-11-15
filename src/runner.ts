@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
+import { sweepStacks } from './docker';
 import { setupSkillBody, designFromCodeBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
@@ -119,6 +120,9 @@ export class Runner {
       this.pumpSoon();
     });
     setTimeout(() => this.renewLease(), 1500).unref?.();
+    // Docker stacks left by task folders that are gone (merged or discarded before this cleanup existed, or while closed).
+    setTimeout(() => void sweepStacks(this.root, this.store.data.tasks.filter(t => t.worktree && t.status !== 'done').map(t => t.worktree!))
+      .then(n => n.length && this.d.notify('info', `Stopped ${n.length} Docker stack(s) left by finished tasks.`, undefined, true)), 5000).unref?.();
     this.leaseTimer = setInterval(() => this.renewLease(), LEASE_MS / 4);
     this.leaseTimer.unref?.();
   }

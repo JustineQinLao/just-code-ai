@@ -142,7 +142,7 @@ Work efficiently: read only the files the task needs, prefer Grep/Glob over broa
 Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
 (e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands to verify your work.
 Exception: when the task itself asks you to run, start or serve the app (so the user can open it), start it detached so your turn can end
-(e.g. docker compose up -d --build, or a background process with its output in a log file), wait until it answers, then give the URLs and any logins, and leave it running.
+(e.g. docker compose up -d --build, or a background process with its output in a log file), wait until it answers, then give the frontend and backend URLs (from the .env the build uses: its host and port variables) and any logins, and leave it running.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
 When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
 If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;

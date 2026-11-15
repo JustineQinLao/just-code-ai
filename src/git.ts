@@ -3,6 +3,7 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { findSecrets, SecretsFound } from './secrets';
+import { stopStacksIn } from './docker';
 
 // Every task works on its own branch in its own worktree (<project>/.justcode/worktrees/<id>),
 // so the user's checkout is never switched and parallel tasks never share files.
@@ -172,6 +173,7 @@ export async function pruneOrphans(repo: string, keep: Set<string>): Promise<{ r
 
 // Only this one worktree; never `git worktree prune` (would drop the user's own temporarily-missing worktrees).
 export async function removeWorktree(repo: string, dir: string) {
+  await stopStacksIn(dir);  // its containers would keep writing into the folder while it is removed
   const real = fs.existsSync(dir) ? fs.realpathSync(dir) : dir;
   const listed = (await git(repo, ['worktree', 'list', '--porcelain'])).split('\n').includes(`worktree ${real}`);
   // A container or test run may still write into the folder while git empties it ("Directory not empty"): clear the rest.

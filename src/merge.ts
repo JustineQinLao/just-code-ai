@@ -5,6 +5,7 @@ import { randomUUID, createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
+import { sweepStacks } from './docker';
 import { setupSkillBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
@@ -127,6 +128,17 @@ export const mergeMethods = {
     }
     this.store.updateSprint(id, { branch: undefined, target: undefined });
     this.d.notify('info', `${sp.name} is done: merged ${sp.branch} into ${sp.target}.`, undefined, true);
+    // The sprint is in: free Docker of every task stack, then run the result from the project folder for the user to open.
+    const live = this.store.data.tasks.filter(x => x.worktree && x.status !== 'done').map(x => x.worktree!);
+    await sweepStacks(this.root, live).catch(() => []);
+    const last = tasks.filter(x => x.sprintId === id && x.status === 'done').sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0))[0];
+    const run = this.store.addTask({ title: `Run ${sp.name} so I can open it`, where: 'direct', quick: true, mode: last?.mode ?? 'acceptEdits',
+      description: `${sp.name} was just merged into ${sp.target}. Build and start the app from this project folder (the current branch), detached so your turn ends ` +
+        '(for a Docker Compose project: docker compose up -d --build, with no -p project name). Seed demo data if the project has a seed command. ' +
+        'Take the frontend and backend URLs from the .env the build uses (its host and port variables, e.g. FRONTEND_PORT, BACKEND_PORT), not from guesses. ' +
+        'Wait until both answer, then reply with the frontend link first, then the backend URL, any other URLs and the demo logins. Leave it running. Do not change project files.' });
+    this.audit('task.create', run.id, run.title, 'justcode');
+    setTimeout(() => void this.run(run.id).catch(e => this.d.notify('error', e.message, run.id)), 0);  // outside the merge's serial section
   },
 
   resolveWithClaude(this: Runner, id: string) {
