@@ -263,7 +263,7 @@
     const el = JC.h('div', { class: 'tl' }, shown.map((s, i) => {
       const last = live && i === shown.length - 1;
       const txt = s.kind === 'tool' ? `${s.agent ? `↳ ${s.agent}: ` : ''}${s.text}` : s.text;
-      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : txt);
+      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : s.kind === 'tool' ? txt : JC.rich(txt));
     }));
     // Keep the ask boxes (above the timeline) in view while Claude waits for an answer.
     requestAnimationFrame(() => { body.scrollTop = t.asks?.length ? 0 : body.scrollHeight; });
@@ -273,7 +273,7 @@
   function logEl(list) {
     const el = JC.h('div', { class: 'log' }, list.map(s => JC.h('div', { class: `step ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` },
       JC.h('span', { class: 'k' }, { user: 'you', say: 'claude', tool: s.agent ? `↳ ${s.agent}` : 'tool', result: '', error: 'error', info: 'note' }[s.kind]),
-      s.kind === 'say' || s.kind === 'user' ? JC.h('div', { class: 'txt' }, s.text) : JC.h('code', {}, s.text))));
+      s.kind === 'say' || s.kind === 'user' ? JC.h('div', { class: 'txt' }, ...JC.rich(s.text)) : JC.h('code', {}, s.text))));
     requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
     return el;
   }
@@ -305,7 +305,7 @@
   // The planning chat as you / Claude bubbles; tool noise stays out of it.
   function chatEl(list) {
     const el = JC.h('div', { class: 'chat' }, list.filter(s => s.kind === 'user' || s.kind === 'say' || s.kind === 'error').map(s =>
-      JC.h('div', { class: `msg ${s.kind === 'user' ? 'you' : 'claude'}${s.kind === 'error' ? ' err' : ''}` }, s.text)));
+      JC.h('div', { class: `msg ${s.kind === 'user' ? 'you' : 'claude'}${s.kind === 'error' ? ' err' : ''}` }, ...JC.rich(s.text))));
     requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
     return el;
   }

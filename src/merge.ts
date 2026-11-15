@@ -136,7 +136,9 @@ export const mergeMethods = {
       description: `${sp.name} was just merged into ${sp.target}. Build and start the app from this project folder (the current branch), detached so your turn ends ` +
         '(for a Docker Compose project: docker compose up -d --build, with no -p project name). Seed demo data if the project has a seed command. ' +
         'Take the frontend and backend URLs from the .env the build uses (its host and port variables, e.g. FRONTEND_PORT, BACKEND_PORT), not from guesses. ' +
-        'Wait until both answer, then reply with the frontend link first, then the backend URL, any other URLs and the demo logins. Leave it running. Do not change project files.' });
+        'If it does not come up, fix the environment (stale node_modules or images, a missing .env value) without changing project files, and retry. ' +
+        'Wait until both answer and sign in once with a demo login to confirm it works. Leave it running. ' +
+        'Reply short, in this order: "Frontend: <url>", "Backend: <url>", one line per demo login ("<role>: <email> / <password>"), then at most two lines on anything you fixed.' });
     this.audit('task.create', run.id, run.title, 'justcode');
     setTimeout(() => void this.run(run.id).catch(e => this.d.notify('error', e.message, run.id)), 0);  // outside the merge's serial section
   },

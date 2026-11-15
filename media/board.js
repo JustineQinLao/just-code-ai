@@ -81,7 +81,7 @@
   /* ---------- lanes and what each card says ---------- */
   // Column and next step live in status.js (shared with the tests).
   const lane = t => window.JCStatus.lane(t, S.settings);
-  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, lastTool, remote: REMOTE });
+  const next = t => window.JCStatus.nextStep(t, { settings: S.settings, queue: S.queue, policy: S.policy?.policy, tasks: S.board.tasks, post, open: JC.openTask, lastTool, remote: REMOTE, appLinks });
   const lastTool = t => { const n = t.agents?.find(a => a.id === 'main'); return n?.last ? ` · ${n.last}` : '…'; };
 
   /* ---------- shell (rendered once) ---------- */
@@ -269,8 +269,27 @@
   }
 
   // What drawer.js and dialogs.js use from here; `let` values through getters and setters, so they stay live.
+  // Claude's replies: **bold**, `code` and links, as elements (never innerHTML). Local app links open in the browser.
+  const URL_RE = /https?:\/\/[^\s)<>`*'"]+[^\s)<>`*'".,;:]/;
+  function rich(text) {
+    const out = [], re = new RegExp(`\\*\\*([^*]+)\\*\\*|\`([^\`]+)\`|(${URL_RE.source})`, 'g');
+    let i = 0, m;
+    const link = u => h('a', { href: '#', title: u, onclick: e => { e.preventDefault(); e.stopPropagation(); post('openUrl', { url: u }); } }, u);
+    while ((m = re.exec(text))) {
+      if (m.index > i) out.push(text.slice(i, m.index));
+      if (m[1] !== undefined) out.push(h('b', {}, ...rich(m[1])));
+      else if (m[2] !== undefined) out.push(URL_RE.test(m[2]) && m[2].match(URL_RE)[0] === m[2] ? link(m[2]) : h('code', {}, m[2]));
+      else out.push(link(m[3]));
+      i = re.lastIndex;
+    }
+    if (i < text.length) out.push(text.slice(i));
+    return out;
+  }
+  // Local app links in a reply, in order (frontend first when Claude follows the run instructions).
+  const appLinks = text => [...new Set((String(text || '').match(new RegExp(URL_RE.source, 'g')) || []).filter(u => /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/.test(u)))];
+
   window.JC = {
-    REMOTE,
+    REMOTE, rich, appLinks,
     vscode,
     post,
     saved,

@@ -70,9 +70,11 @@
     if (t.reviewing) return { text: `AI reviewer is testing it · ${elapsed(t.reviewing)}`, tone: 'run', actions: [] };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Claude is fixing ${open(r).length} review issue(s) (round ${r.attempts} of ${max})`, tone: 'run', actions: [] } : { text: 'Paused', tone: 'muted', actions: [resume] };
     if (t.quick && t.status === 'review') {
-      const n = (t.directFiles || []).length;
+      const n = (t.directFiles || []).length, links = c.remote ? [] : (c.appLinks ? c.appLinks(t.reply) : []);
       return n ? { text: `⚡ Done: changed ${n} file(s)${t.reply ? `. "${t.reply.slice(0, 120)}"` : ''}`, tone: 'ok',
           actions: [['✓ Finish (commit)', () => post('merge', { id })], ['See changes', () => c.open(id, 'changes')], ['Reply', () => c.open(id, 'activity')], discard] }
+        : links.length ? { text: `⚡ App running: ${links[0]}${links[1] ? ` · ${links[1]}` : ''}`, tone: 'ok',
+            actions: [['↗ Open app', () => post('openUrl', { url: links[0] })], ...(links[1] ? [['↗ Backend', () => post('openUrl', { url: links[1] }), 'ghost']] : []), ['Details', () => c.open(id, 'activity'), 'ghost'], ['✓ Close', () => post('merge', { id }), 'ghost']] }
         : { text: `⚡ ${t.reply ? t.reply.slice(0, 200) : 'Done, no files changed'}`, tone: 'ok', actions: [['Reply', () => c.open(id, 'activity')], ['✓ Close', () => post('merge', { id })]] };
     }
     if (t.output === 'artifact') {

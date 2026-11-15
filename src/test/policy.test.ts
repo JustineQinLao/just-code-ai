@@ -161,3 +161,15 @@ test('status: a budget stop offers to raise that budget and resume, not on the p
   assert.deepEqual(posts.pop(), { type: 'setBudget', id: 'b', key: 'task', usd: 10 });
   assert.ok(!status.nextStep(t, c(true)).actions.some((a: any) => /Raise/.test(a[0])));
 });
+
+test('status: a finished run-the-app task opens the app, not a wall of text', () => {
+  const posts: any[] = [];
+  const appLinks = (t: string) => (t.match(/http:\/\/localhost:\d+[^\s*]*/g) || []);
+  const c = { settings: { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 }, queue: { queued: [] }, post: (type: string, x: any) => posts.push({ type, ...x }), open: () => {}, lastTool: () => '', appLinks };
+  const t = { id: 'r', title: 'Run', status: 'review', quick: true, where: 'direct', reply: 'Frontend: http://localhost:4209/sign-in\nBackend: http://localhost:8009/api/' };
+  const n = status.nextStep(t, c);
+  assert.match(n.text, /App running: http:\/\/localhost:4209\/sign-in/);
+  n.actions[0][1]();
+  assert.deepEqual(posts.pop(), { type: 'openUrl', url: 'http://localhost:4209/sign-in' });
+  assert.ok(!status.nextStep(t, { ...c, remote: true }).actions.some((a: any) => /Open app/.test(a[0])));
+});

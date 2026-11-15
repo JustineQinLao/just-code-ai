@@ -55,7 +55,7 @@ export async function handle(m: any, remote = false) {
     case 'removeProject': return removeProject(m.root);
     case 'fix': return fix(m.action);
     case 'guideSeen': await st.ctx.globalState.update('guideSeen', true); return;
-    case 'openUrl': if (/^https:\/\//.test(m.url)) { if (remote) hub.emit({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
+    case 'openUrl': if (/^https:\/\//.test(m.url) || (!remote && /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/.test(m.url))) { if (remote) hub.emit({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
     case 'settings':
       if (m.values && 'bypassAll' in m.values) {
         if (m.values.bypassAll === true && !bypassAllOn() && !await canEnableBypassAll(remote, () => ensureBypassAll())) m = { ...m, values: { ...m.values, bypassAll: false } };
