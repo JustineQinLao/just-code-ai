@@ -47,6 +47,7 @@ export interface SessionOptions {
   model?: string;
   effort?: string;            // low | medium | high | xhigh | max (empty: the model's default)
   subagents?: boolean;        // let Claude start subagents (each carries its own large prompt); off by default
+  showFirst?: boolean;        // the first prompt is the user's own words (💬 Chat): show it in the activity
   append?: string;            // system-prompt append (defaults to the task guidance; the planner uses its own)
   readOnly?: boolean;         // block all edits (the planner never changes code)
   agent?: string;
@@ -136,7 +137,7 @@ export class Session {
   get open() { return !this.ended; }
 
   async start(prompt?: string) {
-    if (prompt) this.inbox.push(prompt);
+    if (prompt) { if (this.o.showFirst) this.step({ kind: 'user', text: prompt }); this.inbox.push(prompt); }
     const { query } = await sdk();
     const o = this.o;
     const options: Sdk.Options = {

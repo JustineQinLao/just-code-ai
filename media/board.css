@@ -463,3 +463,20 @@ b.app-failed { color: var(--err); }
 .applinks li { gap: 8px; align-items: center; }
 .applinks a { word-break: break-all; }
 .applog { max-height: 220px; overflow: auto; white-space: pre-wrap; }
+
+/* Claude's markdown in the activity and chat */
+.tl .md { position: relative; word-break: break-word; display: grid; gap: 6px; }
+.tl .md::before { content: ""; position: absolute; left: -20px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--done); }
+.tl .md.you { background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 8px; padding: 6px 10px; }
+.tl .md.you::before { background: var(--accent); }
+.md p, .md .mdp { margin: 0; }
+.md .mdh { margin: 4px 0 0; font-size: 13px; }
+.md .mdlist { margin: 0; padding-left: 18px; display: grid; gap: 2px; }
+.md .mdlist li.sub { margin-left: 14px; }
+.md blockquote { margin: 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.md .mdcode { margin: 0; padding: 8px 10px; border-radius: 6px; background: color-mix(in srgb, var(--bg) 60%, black 10%); overflow-x: auto; font-size: 12px; white-space: pre; }
+.md .mdtable { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: 12px; }
+.md th, .md td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
+.md th { background: color-mix(in srgb, var(--line) 40%, transparent); }
+.md code { font-size: 12px; padding: 0 3px; border-radius: 4px; background: color-mix(in srgb, var(--line) 50%, transparent); }

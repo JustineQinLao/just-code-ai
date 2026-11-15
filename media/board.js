@@ -292,11 +292,50 @@
     if (i < text.length) out.push(text.slice(i));
     return out;
   }
+  // Claude's markdown as elements: code blocks, tables, headings, lists, quotes and paragraphs; inline parts via rich().
+  function md(text) {
+    const lines = String(text || '').replace(/\r/g, '').split('\n'), out = [];
+    const cells = l => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+    for (let i = 0; i < lines.length;) {
+      const l = lines[i];
+      if (/^\s*```/.test(l)) {
+        const body = []; i++;
+        while (i < lines.length && !/^\s*```/.test(lines[i])) body.push(lines[i++]);
+        i++; out.push(h('pre', { class: 'mdcode' }, h('code', {}, body.join('\n')))); continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1] || '') && /-/.test(lines[i + 1] || '')) {
+        const head = cells(l), rows = []; i += 2;
+        while (i < lines.length && /^\s*\|.*\|?\s*$/.test(lines[i]) && lines[i].trim()) rows.push(cells(lines[i++]));
+        out.push(h('div', { class: 'mdtable' }, h('table', {}, h('thead', {}, h('tr', {}, head.map(c => h('th', {}, ...rich(c))))), h('tbody', {}, rows.map(r => h('tr', {}, r.map(c => h('td', {}, ...rich(c)))))))));
+        continue;
+      }
+      const hd = /^\s*(#{1,6})\s+(.*)$/.exec(l);
+      if (hd) { out.push(h(hd[1].length <= 2 ? 'h4' : 'h5', { class: 'mdh' }, ...rich(hd[2]))); i++; continue; }
+      if (/^\s*([-*•+]|\d+[.)])\s+/.test(l)) {
+        const ordered = /^\s*\d+[.)]/.test(l), items = [];
+        while (i < lines.length && /^\s*([-*•+]|\d+[.)])\s+/.test(lines[i])) {
+          const depth = (/^(\s*)/.exec(lines[i])[1].length >= 2) ? 1 : 0;
+          let item = lines[i++].replace(/^\s*([-*•+]|\d+[.)])\s+/, '');
+          while (i < lines.length && lines[i].trim() && /^\s{2,}\S/.test(lines[i]) && !/^\s*([-*•+]|\d+[.)])\s+/.test(lines[i])) item += ' ' + lines[i++].trim();
+          items.push(h('li', depth ? { class: 'sub' } : {}, ...rich(item)));
+        }
+        out.push(h(ordered ? 'ol' : 'ul', { class: 'mdlist' }, items)); continue;
+      }
+      if (/^\s*>/.test(l)) { const q = []; while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, '')); out.push(h('blockquote', {}, ...rich(q.join(' ')))); continue; }
+      if (!l.trim()) { i++; continue; }
+      const para = [];
+      while (i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|[-*•+]\s|\d+[.)]\s|>|\|)/.test(lines[i])) para.push(lines[i++]);
+      if (!para.length) para.push(lines[i++]);
+      out.push(h('p', { class: 'mdp' }, ...para.flatMap((x, k) => k ? [h('br'), ...rich(x)] : rich(x))));
+    }
+    return out;
+  }
+
   // Local app links in a reply, in order (frontend first when Claude follows the run instructions).
   const appLinks = text => [...new Set((String(text || '').match(new RegExp(URL_RE.source, 'g')) || []).filter(u => /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/.test(u)))];
 
   window.JC = {
-    REMOTE, rich, appLinks,
+    REMOTE, rich, md, appLinks,
     vscode,
     post,
     saved,

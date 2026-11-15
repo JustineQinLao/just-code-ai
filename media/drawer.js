@@ -281,7 +281,10 @@
     const el = JC.h('div', { class: 'tl' }, shown.map((s, i) => {
       const last = live && i === shown.length - 1;
       const txt = s.kind === 'tool' ? `${s.agent ? `↳ ${s.agent}: ` : ''}${s.text}` : s.text;
-      return JC.h('p', { class: `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` }, s.kind === 'user' ? JC.h('b', {}, `You: ${txt}`) : last ? JC.h('b', {}, txt) : s.kind === 'tool' ? txt : JC.rich(txt));
+      const cls = `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}`;
+      if (s.kind === 'say') return JC.h('div', { class: `${cls} md` }, ...JC.md(txt));
+      if (s.kind === 'user') return JC.h('div', { class: `${cls} md you` }, JC.h('b', {}, 'You'), ...JC.md(txt));
+      return JC.h('p', { class: cls }, last ? JC.h('b', {}, txt) : s.kind === 'tool' ? txt : JC.rich(txt));
     }));
     // Keep the ask boxes (above the timeline) in view while Claude waits for an answer.
     requestAnimationFrame(() => { body.scrollTop = t.asks?.length ? 0 : body.scrollHeight; });
