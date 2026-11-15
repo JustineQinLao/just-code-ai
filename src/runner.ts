@@ -463,7 +463,14 @@ export class Runner {
       return this.pump();
     }
     // A chat turn is just a reply: nothing is committed, checked, reviewed or announced.
-    if (t.chat) { this.store.updateTask(id, { live: undefined, reply: turn.text.trim().slice(-4000) || undefined, costUsd: cost }); return; }
+    if (t.chat) {
+      // What the chat changed in the project folder so far (its Changes tab), not counting what was dirty before it started.
+      let before: string[] = [];
+      try { before = fs.readFileSync(path.join(A.taskDir(this.root, id), 'dirty-before.txt'), 'utf8').split('\n').filter(Boolean); } catch { /* none */ }
+      const now = await g.dirtyFiles(this.root).catch(() => [] as string[]);
+      this.store.updateTask(id, { live: undefined, reply: turn.text.trim().slice(-4000) || undefined, costUsd: cost, directFiles: now.filter(f => !before.includes(f)) });
+      return;
+    }
     let committed = false;
     if (t.where === 'direct' && !t.init) {
       let before: string[] = [];

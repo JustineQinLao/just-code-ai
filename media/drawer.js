@@ -105,7 +105,8 @@
 
   let menu = [];
   let fullTitle = null;   // the task whose long title is shown in full (survives re-renders)
-  let chatList = false, chatWatched = null;   // 💬 the chat history list is open; the chat whose activity was requested
+  let chatList = false, chatWatched = null;
+  const chatRun = {};   // each chat's last run state, to refresh its Changes when a reply ends   // 💬 the chat history list is open; the chat whose activity was requested
   function renderDrawer() {
     applyBtn.hidden = true;
     foot.hidden = false; doneFoot.hidden = true; stopBtn.hidden = false;   // the planner and running tasks use the message box
@@ -142,7 +143,13 @@
     ].filter(Boolean);
     // 💬 Chat: only the conversation, Claude's questions and permission requests. No steps, tabs, review or merge.
     if (t.chat) {
-      JC.tab = 'activity';
+      if (!['activity', 'changes', 'agents'].includes(JC.tab)) JC.tab = 'activity';
+      // The Changes tab follows the chat: asked again whenever a reply ends.
+      if (JC.tab === 'changes' && chatRun[t.id] !== (t.run || 'idle')) JC.post('changes', { id: t.id });
+      chatRun[t.id] = t.run || 'idle';
+      const main = (t.agents || []).find(n => n.id === 'main'), subs = (t.agents || []).filter(n => n.id !== 'main');
+      const status = t.run === 'starting' ? ['run', 'Starting Claude…'] : t.run === 'running' ? ['run', `Working${main?.last ? ` · ${main.last}` : '…'}`]
+        : a0 || t.run === 'waiting' ? ['warn', 'Needs you: answer below'] : t.error ? ['err', 'Stopped on an error'] : ['ok', t.sessionId ? 'Idle · ready for your next message' : 'Ready'];
       menu = [['New chat', () => JC.post('newChat')]];
       if (!JC.steps[t.id] && t.sessionId && chatWatched !== t.id) { chatWatched = t.id; JC.post('watch', { id: t.id }); }   // a panel restored after a reload
       const chats = JC.S.chats || [];
@@ -151,7 +158,10 @@
           live ? JC.btn('■ Stop', () => JC.post('interrupt', { id: t.id }), 'ghost', 'Stop this reply (Esc)') : '',
           JC.btn(`🕘${chats.length > 1 ? ` ${chats.length}` : ''}`, () => { chatList = !chatList; renderDrawer(); }, `ghost${chatList ? ' on' : ''}`, 'Chat history'),
           JC.btn('＋', () => { chatList = false; JC.post('newChat'); }, 'ghost icon', 'New chat'), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
-        chatList ? '' : JC.h('p', { class: 'muted small' }, 'Claude in the project folder, as in a terminal. Nothing here is checked, reviewed, committed or merged.'),
+        chatList ? '' : JC.h('div', { class: `chatstatus ${status[0]}` }, JC.h('span', { class: 'dot' }), JC.h('span', { class: 'grow' }, status[1]),
+          t.context ? JC.h('span', { class: 'muted small' }, `${Math.round(t.context / 1000)}k context`) : '', t.costUsd ? JC.h('span', { class: 'muted small' }, ` · $${t.costUsd.toFixed(2)}`) : ''),
+        chatList ? '' : JC.h('nav', { class: 'tabs' }, [['activity', 'Chat'], ['changes', `Changes${t.directFiles?.length ? ` (${t.directFiles.length})` : ''}`], ['agents', `Agents${subs.length ? ` (${subs.length})` : ''}`]]
+          .map(([k, l]) => JC.h('a', { class: JC.tab === k ? 'on' : '', onclick: () => { JC.tab = k; JC.agentView = undefined; if (k === 'changes') JC.post('changes', { id: t.id }); JC.render(); } }, l))),
         !chatList && a0 ? JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost')))) : '',
         !chatList && t.error ? JC.h('p', { class: 'err small' }, t.error) : '');
       if (chatList) {
@@ -164,7 +174,7 @@
         return;
       }
       body.replaceChildren(...drawerBody(t));
-      if (!t.sessionId) body.replaceChildren(JC.h('p', { class: 'muted' }, 'Ask anything about this project, or ask Claude to change something.'));
+      if (!t.sessionId && JC.tab === 'activity') body.replaceChildren(JC.h('p', { class: 'muted' }, 'Ask anything about this project, or ask Claude to change something. Nothing here is checked, reviewed, committed or merged: you commit.'));
       msg.placeholder = 'Message Claude…  Enter sends · Shift+Enter new line';
       foot.hidden = false; doneFoot.hidden = true;
       stopBtn.hidden = !(live || t.run === 'starting');
@@ -196,7 +206,7 @@
       if (!JC.agentsSaved[t.id]) JC.post('savedAgents', { id: t.id });
       const extra = (JC.agentsSaved[t.id] || []).filter(a => !live.some(n => n.toolUseId && n.toolUseId === a.toolUseId))
         .map(a => ({ id: `saved-${a.id}`, parent: 'main', name: a.name, description: a.description, status: a.finished ? 'completed' : 'stopped', key: a.id, sessionId: a.sessionId }));
-      return [JC.btn('← Details', () => { JC.tab = 'details'; JC.render(); }, 'ghost small'), JC.agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
+      return [t.chat ? '' : JC.btn('← Details', () => { JC.tab = 'details'; JC.render(); }, 'ghost small'), JC.agentTree([{ name: t.title, tasks: [{ ...t, agents: [...(t.agents || []), ...extra] }] }], true),
         JC.h('p', { class: 'muted small' }, 'Click an agent for its whole conversation.')];
     }
     if (JC.tab === 'changes') {
@@ -287,20 +297,29 @@
     return [...asks, timeline(t, list)];
   }
 
+  // Follow the newest step only while you are at the bottom (or just opened this task); scrolled up, you stay where you are.
+  let followed = null;
+  function keepScroll(t, top) {
+    const at = body.scrollTop, pinned = followed !== t.id || body.scrollHeight - at - body.clientHeight < 60;
+    followed = t.id;
+    requestAnimationFrame(() => { body.scrollTop = top ? 0 : pinned ? body.scrollHeight : at; });
+  }
+
   // Activity: what Claude did as a timeline, finished steps green, the last one live while it works.
   function timeline(t, list) {
     const live = t.run && t.run !== 'idle';
-    const shown = list.filter(s => s.kind !== 'result');
+    const shown = t.chat ? list : list.filter(s => s.kind !== 'result');   // a chat shows each command's output too
     const el = JC.h('div', { class: 'tl' }, shown.map((s, i) => {
       const last = live && i === shown.length - 1;
       const txt = s.kind === 'tool' ? `${s.agent ? `↳ ${s.agent}: ` : ''}${s.text}` : s.text;
       const cls = `${last ? 'live' : s.kind === 'error' ? 'err' : s.kind === 'info' ? 'note' : 'ok'} ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}`;
       if (s.kind === 'say') return JC.h('div', { class: `${cls} md` }, ...JC.md(txt));
       if (s.kind === 'user') return JC.h('div', { class: `${cls} md you` }, JC.h('b', {}, 'You'), ...JC.md(txt));
+      if (s.kind === 'result') return JC.h('pre', { class: 'tlout' }, txt);
       return JC.h('p', { class: cls }, last ? JC.h('b', {}, txt) : s.kind === 'tool' ? txt : JC.rich(txt));
     }));
-    // Keep the ask boxes (above the timeline) in view while Claude waits for an answer.
-    requestAnimationFrame(() => { body.scrollTop = t.asks?.length ? 0 : body.scrollHeight; });
+    // The ask boxes (above the timeline) stay in view while Claude waits for an answer.
+    keepScroll(t, !!t.asks?.length);
     return el;
   }
 
@@ -308,7 +327,7 @@
     const el = JC.h('div', { class: 'log' }, list.map(s => JC.h('div', { class: `step ${s.kind}${s.kind === 'info' && s.text.startsWith('Model: ') ? ' model' : ''}` },
       JC.h('span', { class: 'k' }, { user: 'you', say: 'claude', tool: s.agent ? `↳ ${s.agent}` : 'tool', result: '', error: 'error', info: 'note' }[s.kind]),
       s.kind === 'say' || s.kind === 'user' ? JC.h('div', { class: 'txt' }, ...JC.rich(s.text)) : JC.h('code', {}, s.text))));
-    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    keepScroll({ id: 'log' }, false);
     return el;
   }
 
@@ -340,7 +359,7 @@
   function chatEl(list) {
     const el = JC.h('div', { class: 'chat' }, list.filter(s => s.kind === 'user' || s.kind === 'say' || s.kind === 'error').map(s =>
       JC.h('div', { class: `msg ${s.kind === 'user' ? 'you' : 'claude'}${s.kind === 'error' ? ' err' : ''}` }, ...JC.rich(s.text))));
-    requestAnimationFrame(() => { body.scrollTop = body.scrollHeight; });
+    keepScroll({ id: '__planner' }, false);
     return el;
   }
   const pKeep = {}; // which proposals the user has unticked

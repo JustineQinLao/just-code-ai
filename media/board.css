@@ -487,3 +487,9 @@ b.app-failed { color: var(--err); }
 .chatlist li:hover { background: color-mix(in srgb, var(--line) 40%, transparent); }
 .chatlist li.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .chatlist .ctitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
+.chatstatus { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: color-mix(in srgb, var(--line) 30%, transparent); }
+.chatstatus .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--done); flex: none; }
+.chatstatus.run .dot { background: var(--work); animation: jcpulse 1.2s ease-in-out infinite; }
+.chatstatus.warn .dot { background: var(--needs); } .chatstatus.err .dot { background: var(--err); }
+@keyframes jcpulse { 50% { opacity: .35; } }
+.tl .tlout { margin: -4px 0 0; padding: 4px 8px; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--line) 25%, transparent); border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
