@@ -1261,3 +1261,40 @@ test('app: detects how to run a project and which link is the frontend', () => {
   assert.ok(App.needsBuild(['frontend/src/app/x.ts']));
   assert.ok(!App.needsBuild(['docs/plan.md', 'e2e/tests/a.spec.ts', '.justcode/progress.md']));
 });
+
+test('app: covers static sites, generators, PHP, Procfile, monorepos, Dockerfile, Make and printed URLs', () => {
+  const App = require('../app');
+  const mk = (files: Record<string, string>) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-app-')); for (const [f, c] of Object.entries(files)) { fs.mkdirSync(path.dirname(path.join(d, f)), { recursive: true }); fs.writeFileSync(path.join(d, f), c); } return d; };
+  const kind = (f: Record<string, string>) => App.detect(mk(f))?.kind;
+  assert.equal(kind({ 'index.html': '<h1>hi</h1>' }), 'Static site');
+  assert.equal(kind({ 'public/index.html': '' }), 'Static site');
+  assert.equal(kind({ 'hugo.toml': '', 'content/_index.md': '' }), 'Hugo');
+  assert.equal(kind({ '_config.yml': '', 'Gemfile': '' }), 'Jekyll');
+  assert.equal(kind({ 'mkdocs.yml': '' }), 'MkDocs');
+  assert.equal(kind({ 'index.php': '<?php' }), 'PHP');
+  assert.match(kind({ 'wp-config.php': '' }), /WordPress/);
+  assert.equal(kind({ 'Procfile': 'web: gunicorn app:app' }), 'Procfile');
+  assert.equal(kind({ 'Dockerfile': 'FROM nginx\nEXPOSE 80' }), 'Dockerfile');
+  assert.equal(kind({ 'Makefile': 'dev:\n\tnpm run dev\n' }), 'make dev');
+  assert.equal(kind({ 'package.json': JSON.stringify({ workspaces: ['apps/*'], scripts: { dev: 'turbo dev' } }), 'turbo.json': '{}' }), 'Monorepo dev script');
+  assert.equal(kind({ 'mix.exs': 'defp deps do [{:phoenix, "~> 1.7"}] end' }), 'Phoenix');
+  assert.equal(kind({ 'Api.csproj': '<Project Sdk="Microsoft.NET.Sdk.Web">' }), '.NET');
+  assert.equal(kind({ 'main.py': 'from fastapi import FastAPI\napp = FastAPI()' }), 'FastAPI');
+  assert.equal(kind({ 'app.py': 'import streamlit as st' }), 'Streamlit');
+  assert.equal(kind({ 'go.mod': 'module x', 'main.go': '' }), 'Go');
+  assert.equal(kind({ 'package.json': JSON.stringify({ scripts: { dev: 'node server.js' } }) }), 'dev script');
+  // Python never installs into the system interpreter: a venv in .justcode/venv.
+  const dj = App.detect(mk({ 'manage.py': '', 'requirements.txt': 'django' })).procs[0];
+  assert.ok(dj.setup.some((s: string) => /-m venv .*\.justcode\/venv/.test(s)) && dj.setup.some((s: string) => /migrate/.test(s)));
+  assert.deepEqual(App.printedUrls('\x1b[32m  ➜  Local:   http://localhost:5174/\x1b[0m\n  Network: http://192.168.1.2:5174/\n Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C)'), ['http://localhost:5174', 'http://localhost:8000']);
+});
+
+test('app: freePort skips a taken port', async () => {
+  const App = require('../app');
+  const net = require('net');
+  const s = net.createServer(); await new Promise(r => s.listen(0, '127.0.0.1', r));
+  const taken = s.address().port;
+  const p = await App.freePort(taken);
+  assert.notEqual(p, taken);
+  s.close();
+});

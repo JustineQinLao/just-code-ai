@@ -1,12 +1,17 @@
 import * as fs from 'fs';
 import * as os from 'os';
+import * as net from 'net';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import { EventEmitter } from 'events';
 
 // The project's app, run from the project folder (the current branch) for the user to open: no task, no Claude.
-// JustCode works out how to run it (Docker Compose, a Node dev server, Django, Rails, Laravel, FastAPI, Flask, Go…),
-// where it listens (compose port mappings, .env, the framework's default) and keeps one copy running per project.
+// JustCode works out how to run it, where it listens and keeps one copy running per project. In order of preference:
+// Docker Compose; a single Dockerfile; a Procfile; a frontend dev server (Node frameworks, static site generators,
+// plain static HTML) plus a backend (Django, FastAPI, Flask, Laravel, Symfony, plain PHP, Rails, Phoenix, .NET, Go,
+// Spring, Node servers); a monorepo's own dev script; a Makefile dev/run/serve/start target.
+// Ports: .env first, then the framework default (moved to the next free port when that one is taken); the link is
+// corrected from the dev server's own "http://localhost:NNNN" line when it prints one.
 
 export type Role = 'frontend' | 'backend' | 'other';
 export interface AppLink { label: string; url: string; role: Role; up?: boolean }
@@ -18,16 +23,23 @@ export interface AppState {
   startedAt?: number;
   head?: string;          // the commit it was built from
   pids?: number[];        // processes JustCode started (not for compose)
+  container?: string;     // the container JustCode started for a lone Dockerfile
   why?: string;           // what started the last build ("after Sprint 2", "you")
 }
-export interface Proc { label: string; role: Role; cwd: string; cmd: string; port?: number; install?: string }
-export interface Plan { kind: string; compose?: string; procs: Proc[]; env: Record<string, string> }
+export interface Proc {
+  label: string; role: Role; cwd: string; cmd: string;
+  port?: number;          // where it should listen; PORT is set to it
+  setup?: string[];       // dependency installs and migrations, run first (each must succeed)
+  urls?: boolean;         // take the link(s) from its output (dev scripts that pick their own port, monorepos)
+}
+export interface Plan { kind: string; compose?: string; dockerfile?: string; procs: Proc[]; env: Record<string, string> }
 
 export const appEvents = new EventEmitter();
 const busy = new Map<string, Promise<void>>();
 
-const ENV_PATH = [process.env.PATH, '/usr/local/bin', '/opt/homebrew/bin', path.join(os.homedir(), '.docker', 'bin'), path.join(os.homedir(), '.local', 'bin')].filter(Boolean).join(path.delimiter);
-const ENV = { ...process.env, PATH: ENV_PATH };
+const ENV_PATH = [process.env.PATH, '/usr/local/bin', '/opt/homebrew/bin', path.join(os.homedir(), '.docker', 'bin'), path.join(os.homedir(), '.local', 'bin'),
+  path.join(os.homedir(), '.dotnet', 'tools'), path.join(os.homedir(), '.cargo', 'bin'), path.join(os.homedir(), 'go', 'bin')].filter(Boolean).join(path.delimiter);
+const ENV = { ...process.env, PATH: ENV_PATH, CI: '', BROWSER: 'none', FORCE_COLOR: '0' };
 const dir = (root: string) => path.join(root, '.justcode');
 const stateFile = (root: string) => path.join(dir(root), 'app.json');
 export const logFile = (root: string) => path.join(dir(root), 'app.log');
@@ -43,7 +55,7 @@ function save(root: string, s: AppState) {
 export function view(root: string) {
   const s = load(root);
   let tail = '';
-  try { const t = fs.readFileSync(logFile(root), 'utf8'); tail = t.slice(-4000); } catch { /* no log yet */ }
+  try { tail = fs.readFileSync(logFile(root), 'utf8').slice(-4000); } catch { /* no log yet */ }
   let detected: string | undefined;
   try { detected = detect(root)?.kind; } catch { /* unreadable project */ }
   return { ...s, busy: busy.has(root), log: tail, detected };
@@ -57,73 +69,130 @@ export function readEnv(file: string): Record<string, string> {
   try { text = fs.readFileSync(file, 'utf8'); } catch { return out; }
   for (const line of text.split(/\r?\n/)) {
     const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
-    if (!m) continue;
-    out[m[1]] = m[2].replace(/\s+#.*$/, '').replace(/^(['"])(.*)\1$/, '$2');
+    if (m) out[m[1]] = m[2].replace(/\s+#.*$/, '').replace(/^(['"])(.*)\1$/, '$2');
   }
   return out;
 }
 
 const COMPOSE = ['compose.yaml', 'compose.yml', 'docker-compose.yaml', 'docker-compose.yml'];
-const FRONT_DIRS = ['frontend', 'client', 'web', 'ui', 'app', 'apps/web', 'apps/frontend', 'packages/web', '.'];
-const BACK_DIRS = ['backend', 'server', 'api', 'apps/api', 'apps/backend', 'packages/api', '.'];
+const FRONT_DIRS = ['frontend', 'client', 'web', 'ui', 'app', 'site', 'www', 'apps/web', 'apps/frontend', 'apps/client', 'apps/site', 'packages/web', 'packages/frontend', '.'];
+const BACK_DIRS = ['backend', 'server', 'api', 'apps/api', 'apps/backend', 'apps/server', 'packages/api', 'packages/server', '.'];
 const json = (f: string) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return undefined; } };
 const has = (d: string, f: string) => fs.existsSync(path.join(d, f));
 const read = (f: string) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
+const q = (s: string) => /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+const files = (d: string) => { try { return fs.readdirSync(d); } catch { return []; } };
 
-// Node frameworks: which dependency means which dev server, and its default port.
-const NODE_FRONT: [string, string, number][] = [
-  ['@angular/core', 'Angular', 4200], ['next', 'Next.js', 3000], ['nuxt', 'Nuxt', 3000], ['astro', 'Astro', 4321],
-  ['@sveltejs/kit', 'SvelteKit', 5173], ['@remix-run/dev', 'Remix', 3000], ['@react-router/dev', 'React Router', 5173], ['gatsby', 'Gatsby', 8000],
-  ['react-scripts', 'Create React App', 3000], ['expo', 'Expo', 8081], ['@vue/cli-service', 'Vue CLI', 8080], ['vite', 'Vite', 5173],
+// Node frameworks: dependency, name, default port, and how the port is passed ('flag' = --port N after the script).
+type Fw = [dep: string, name: string, port: number, how: 'flag' | 'env'];
+const NODE_FRONT: Fw[] = [
+  ['@angular/core', 'Angular', 4200, 'flag'], ['next', 'Next.js', 3000, 'flag'], ['nuxt', 'Nuxt', 3000, 'flag'], ['astro', 'Astro', 4321, 'flag'],
+  ['@sveltejs/kit', 'SvelteKit', 5173, 'flag'], ['@remix-run/dev', 'Remix', 3000, 'env'], ['@react-router/dev', 'React Router', 5173, 'flag'],
+  ['@solidjs/start', 'SolidStart', 3000, 'flag'], ['@builder.io/qwik', 'Qwik', 5173, 'flag'], ['@docusaurus/core', 'Docusaurus', 3000, 'flag'],
+  ['vitepress', 'VitePress', 5173, 'flag'], ['@11ty/eleventy', 'Eleventy', 8080, 'flag'], ['gatsby', 'Gatsby', 8000, 'flag'],
+  ['react-scripts', 'Create React App', 3000, 'env'], ['expo', 'Expo', 8081, 'flag'], ['@vue/cli-service', 'Vue CLI', 8080, 'flag'],
+  ['ember-cli', 'Ember', 4200, 'flag'], ['@redwoodjs/core', 'Redwood', 8910, 'env'], ['parcel', 'Parcel', 1234, 'flag'],
+  ['webpack-dev-server', 'webpack', 8080, 'flag'], ['vite', 'Vite', 5173, 'flag'],
 ];
-const NODE_BACK: [string, string, number][] = [['@nestjs/core', 'NestJS', 3000], ['fastify', 'Fastify', 3000], ['koa', 'Koa', 3000], ['hono', 'Hono', 3000], ['express', 'Express', 3000]];
+const NODE_BACK: Fw[] = [['@nestjs/core', 'NestJS', 3000, 'env'], ['@adonisjs/core', 'AdonisJS', 3333, 'env'], ['fastify', 'Fastify', 3000, 'env'],
+  ['koa', 'Koa', 3000, 'env'], ['hono', 'Hono', 3000, 'env'], ['express', 'Express', 3000, 'env']];
 
 function pm(d: string, root: string) {
   const at = (f: string) => has(d, f) || has(root, f);
   return at('pnpm-lock.yaml') ? 'pnpm' : at('yarn.lock') ? 'yarn' : at('bun.lockb') || at('bun.lock') ? 'bun' : 'npm';
 }
-const runScript = (p: string, s: string) => p === 'npm' ? `npm run ${s}` : `${p} ${s === 'start' && p !== 'bun' ? 'start' : `run ${s}`}`;
+const runScript = (p: string, s: string, extra: string) => p === 'yarn' ? `yarn ${s}${extra ? ` ${extra}` : ''}` : `${p} run ${s}${extra ? ` -- ${extra}` : ''}`;
+const nodeSetup = (d: string, root: string) => has(d, 'node_modules') || has(root, 'node_modules') ? [] : [`${pm(d, root)} install`];
 
-function nodeProc(root: string, rel: string, table: [string, string, number][], role: Role, port?: number): Proc & { fw: string } | undefined {
+function nodeProc(root: string, rel: string, table: Fw[], role: Role, port?: number): Proc | undefined {
   const d = path.join(root, rel), pkg = json(path.join(d, 'package.json'));
   if (!pkg?.scripts) return undefined;
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   const fw = table.find(([dep]) => dep in deps);
   if (!fw) return undefined;
-  const script = ['dev', 'start', 'serve'].find(s => pkg.scripts[s]);
+  const script = ['dev', 'start', 'serve', 'develop'].find(s => pkg.scripts[s]);
   if (!script) return undefined;
   const p = pm(d, root), want = port ?? fw[2];
-  // Pass the port only where the framework takes a --port flag the same way (others read PORT from the environment).
-  const flag = /Angular|Vite|SvelteKit|Astro|Nuxt|Next|React Router|Vue CLI|Gatsby/.test(fw[1]) ? ` -- --port ${want}${/Angular|Vite|SvelteKit|Astro|React Router/.test(fw[1]) ? ' --host 127.0.0.1' : ''}` : '';
-  return { label: fw[1], fw: fw[1], role, cwd: d, cmd: `PORT=${want} ${runScript(p, script)}${p === 'npm' || p === 'pnpm' ? flag : ''}`, port: want,
-    install: has(d, 'node_modules') ? undefined : `${p} install` };
+  const host = /Angular|Vite|SvelteKit|Astro|React Router|Qwik|VitePress|Ember/.test(fw[1]) ? ' --host 127.0.0.1' : '';
+  return { label: fw[1], role, cwd: d, port: want, urls: true, setup: nodeSetup(d, root),
+    cmd: runScript(p, script, fw[3] === 'flag' ? `--port ${want}${host}` : '') };
 }
 
-function pythonCmd(d: string, root: string) {
-  for (const v of ['.venv', 'venv', 'env']) for (const b of [d, root]) if (fs.existsSync(path.join(b, v, 'bin', 'python'))) return path.join(b, v, 'bin', 'python');
-  return 'python3';
+// Any package.json dev script, framework or not: it prints its own URL(s). Also a monorepo's root (turbo, nx, workspaces).
+function anyNodeScript(root: string, rel: string, role: Role): Proc | undefined {
+  const d = path.join(root, rel), pkg = json(path.join(d, 'package.json'));
+  const script = pkg?.scripts && ['dev', 'start', 'serve', 'develop'].find(s => pkg.scripts[s]);
+  if (!script) return undefined;
+  const mono = !!pkg.workspaces || has(d, 'turbo.json') || has(d, 'nx.json') || has(d, 'pnpm-workspace.yaml') || has(d, 'lerna.json');
+  return { label: mono ? 'Monorepo dev script' : `${script} script`, role, cwd: d, urls: true, setup: nodeSetup(d, root), cmd: runScript(pm(d, root), script, '') };
 }
+
+// Python: the project's own venv, uv or poetry; otherwise a venv JustCode keeps in .justcode/venv (never the system Python).
+function python(d: string, root: string): { run: string; setup: string[] } {
+  for (const v of ['.venv', 'venv', 'env']) for (const b of [d, root]) if (fs.existsSync(path.join(b, v, 'bin', 'python'))) return { run: q(path.join(b, v, 'bin', 'python')), setup: [] };
+  if (has(d, 'uv.lock') || has(root, 'uv.lock')) return { run: 'uv run python', setup: ['uv sync'] };
+  if (has(d, 'poetry.lock')) return { run: 'poetry run python', setup: ['poetry install --no-root'] };
+  if (has(d, 'Pipfile')) return { run: 'pipenv run python', setup: ['pipenv install'] };
+  const venv = path.join(dir(root), 'venv'), py = q(path.join(venv, 'bin', 'python'));
+  const req = ['requirements.txt', 'requirements/dev.txt', 'requirements/base.txt', 'requirements-dev.txt'].find(f => has(d, f));
+  const setup = fs.existsSync(path.join(venv, 'bin', 'python')) ? [] : [`python3 -m venv ${q(venv)}`, ...(req ? [`${py} -m pip install -q -r ${q(req)}`] : has(d, 'pyproject.toml') ? [`${py} -m pip install -q -e .`] : [])];
+  return { run: py, setup };
+}
+const ruby = (d: string) => has(d, 'Gemfile') ? ['bundle check >/dev/null 2>&1 || bundle install'] : [];
+const php = (d: string) => has(d, 'composer.json') && !has(d, 'vendor') ? ['composer install --no-interaction'] : [];
 
 function backProc(root: string, env: Record<string, string>): Proc | undefined {
-  const port = Number(env.BACKEND_PORT || env.API_PORT || env.SERVER_PORT) || undefined;
+  const port = Number(env.BACKEND_PORT || env.API_PORT || env.SERVER_PORT || env.APP_PORT) || undefined;
   for (const rel of BACK_DIRS) {
-    const d = path.join(root, rel);
-    if (has(d, 'manage.py')) return { label: 'Django', role: 'backend', cwd: d, cmd: `${pythonCmd(d, root)} manage.py runserver 127.0.0.1:${port ?? 8000}`, port: port ?? 8000 };
-    if (has(d, 'artisan')) return { label: 'Laravel', role: 'backend', cwd: d, cmd: `php artisan serve --port=${port ?? 8000}`, port: port ?? 8000 };
-    if (has(d, 'bin/rails')) return { label: 'Rails', role: 'backend', cwd: d, cmd: `bin/rails server -p ${port ?? 3000}`, port: port ?? 3000 };
-    const py = ['main.py', 'app/main.py', 'app.py', 'src/main.py'].find(f => has(d, f));
+    const d = path.join(root, rel), P = (n: number) => port ?? n;
+    if (has(d, 'manage.py')) { const py = python(d, root); return { label: 'Django', role: 'backend', cwd: d, port: P(8000), setup: [...py.setup, `${py.run} manage.py migrate --noinput`], cmd: `${py.run} manage.py runserver 127.0.0.1:${P(8000)}` }; }
+    if (has(d, 'artisan')) return { label: 'Laravel', role: 'backend', cwd: d, port: P(8000), setup: [...php(d), ...(has(d, '.env') ? ['php artisan migrate --force'] : [])], cmd: `php artisan serve --host=127.0.0.1 --port=${P(8000)}` };
+    if (has(d, 'bin/console') && has(d, 'public/index.php')) return { label: 'Symfony', role: 'backend', cwd: d, port: P(8000), setup: php(d), cmd: `php -S 127.0.0.1:${P(8000)} -t public` };
+    if (has(d, 'bin/rails')) return { label: 'Rails', role: 'backend', cwd: d, port: P(3000), setup: [...ruby(d), 'bin/rails db:prepare'], cmd: `bin/rails server -b 127.0.0.1 -p ${P(3000)}` };
+    if (has(d, 'mix.exs') && /:phoenix/.test(read(path.join(d, 'mix.exs')))) return { label: 'Phoenix', role: 'backend', cwd: d, port: P(4000), setup: ['mix deps.get', 'mix ecto.create --quiet || true', 'mix ecto.migrate || true'], cmd: 'mix phx.server' };
+    const csproj = files(d).find(f => f.endsWith('.csproj'));
+    if (csproj && /Microsoft\.NET\.Sdk\.Web|AspNetCore/.test(read(path.join(d, csproj)))) return { label: '.NET', role: 'backend', cwd: d, port: P(5000), cmd: `dotnet run --urls http://127.0.0.1:${P(5000)}` };
+    const py = ['main.py', 'app/main.py', 'src/main.py', 'app.py', 'wsgi.py', 'server.py'].find(f => has(d, f));
     if (py) {
-      const src = read(path.join(d, py)), mod = py.replace(/\.py$/, '').replace(/\//g, '.');
-      if (/FastAPI\(/.test(src)) return { label: 'FastAPI', role: 'backend', cwd: d, cmd: `${pythonCmd(d, root)} -m uvicorn ${mod}:app --port ${port ?? 8000}`, port: port ?? 8000 };
-      if (/Flask\(/.test(src)) return { label: 'Flask', role: 'backend', cwd: d, cmd: `${pythonCmd(d, root)} -m flask --app ${mod} run --port ${port ?? 5000}`, port: port ?? 5000 };
+      const src = read(path.join(d, py)), mod = py.replace(/\.py$/, '').replace(/\//g, '.'), env = python(d, root);
+      if (/FastAPI\(/.test(src)) return { label: 'FastAPI', role: 'backend', cwd: d, port: P(8000), setup: env.setup, cmd: `${env.run} -m uvicorn ${mod}:app --host 127.0.0.1 --port ${P(8000)}` };
+      if (/Flask\(/.test(src)) return { label: 'Flask', role: 'backend', cwd: d, port: P(5000), setup: env.setup, cmd: `${env.run} -m flask --app ${mod} run --port ${P(5000)}` };
+      if (/streamlit/.test(src)) return { label: 'Streamlit', role: 'frontend', cwd: d, port: P(8501), setup: env.setup, cmd: `${env.run} -m streamlit run ${py} --server.port ${P(8501)} --server.headless true` };
+      if (/gradio/.test(src)) return { label: 'Gradio', role: 'frontend', cwd: d, port: P(7860), setup: env.setup, cmd: `GRADIO_SERVER_PORT=${P(7860)} ${env.run} ${py}` };
     }
-    if (has(d, 'go.mod') && (has(d, 'main.go') || has(d, 'cmd'))) return { label: 'Go', role: 'backend', cwd: d, cmd: `PORT=${port ?? 8080} go run .`, port: port ?? 8080 };
-    if (has(d, 'mvnw')) return { label: 'Spring', role: 'backend', cwd: d, cmd: `./mvnw spring-boot:run -Dspring-boot.run.arguments=--server.port=${port ?? 8080}`, port: port ?? 8080 };
-    if (has(d, 'gradlew') && /spring/i.test(read(path.join(d, 'build.gradle')) + read(path.join(d, 'build.gradle.kts')))) return { label: 'Spring', role: 'backend', cwd: d, cmd: `./gradlew bootRun --args=--server.port=${port ?? 8080}`, port: port ?? 8080 };
-    if (rel !== '.') { const n = nodeProc(root, rel, NODE_BACK, 'backend', port); if (n) return n; }
+    if (has(d, 'go.mod') && (has(d, 'main.go') || has(d, 'cmd'))) return { label: 'Go', role: 'backend', cwd: d, port: P(8080), cmd: has(d, 'main.go') ? 'go run .' : `go run ./cmd/${files(path.join(d, 'cmd'))[0] ?? ''}` };
+    if (has(d, 'Cargo.toml') && /axum|actix-web|rocket|warp|poem/.test(read(path.join(d, 'Cargo.toml')))) return { label: 'Rust', role: 'backend', cwd: d, port: P(8080), cmd: 'cargo run' };
+    if (has(d, 'mvnw') || has(d, 'pom.xml') && /spring-boot/.test(read(path.join(d, 'pom.xml')))) return { label: 'Spring', role: 'backend', cwd: d, port: P(8080), cmd: `${has(d, 'mvnw') ? './mvnw' : 'mvn'} -q spring-boot:run -Dspring-boot.run.arguments=--server.port=${P(8080)}` };
+    if ((has(d, 'gradlew') || has(d, 'build.gradle') || has(d, 'build.gradle.kts')) && /spring/i.test(read(path.join(d, 'build.gradle')) + read(path.join(d, 'build.gradle.kts')))) return { label: 'Spring', role: 'backend', cwd: d, port: P(8080), cmd: `${has(d, 'gradlew') ? './gradlew' : 'gradle'} bootRun --args=--server.port=${P(8080)}` };
+    if (rel !== '.') { const n = nodeProc(root, rel, NODE_BACK, 'backend', port) ?? anyNodeScript(root, rel, 'backend'); if (n) return { ...n, port: n.port ?? port }; }
+    if (rel !== '.' && has(d, 'index.php')) return { label: 'PHP', role: 'backend', cwd: d, port: P(8000), setup: php(d), cmd: `php -S 127.0.0.1:${P(8000)}` };
   }
-  const n = nodeProc(root, '.', NODE_BACK, 'backend', port);
-  return n;
+  return nodeProc(root, '.', NODE_BACK, 'backend', port);
+}
+
+// Sites without a Node dev server: generators, PHP sites and WordPress, plain HTML.
+function siteProc(root: string, port?: number): Proc | undefined {
+  const d = root, P = (n: number) => port ?? n;
+  if ((has(d, 'hugo.toml') || has(d, 'hugo.yaml') || has(d, 'config.toml') && has(d, 'content')) && !has(d, 'package.json')) return { label: 'Hugo', role: 'frontend', cwd: d, port: P(1313), cmd: `hugo server --bind 127.0.0.1 -p ${P(1313)}` };
+  if (has(d, '_config.yml') && has(d, 'Gemfile')) return { label: 'Jekyll', role: 'frontend', cwd: d, port: P(4000), setup: ruby(d), cmd: `bundle exec jekyll serve --host 127.0.0.1 --port ${P(4000)}` };
+  if (has(d, 'mkdocs.yml')) { const py = python(d, root); return { label: 'MkDocs', role: 'frontend', cwd: d, port: P(8000), setup: py.setup, cmd: `${py.run} -m mkdocs serve -a 127.0.0.1:${P(8000)}` }; }
+  if (has(d, 'wp-config.php') || has(d, 'wp-config-sample.php') || has(d, 'wp-content')) return { label: 'WordPress (PHP built-in server: needs its MySQL running)', role: 'frontend', cwd: d, port: P(8000), cmd: `php -S 127.0.0.1:${P(8000)}` };
+  if (has(d, 'index.php')) return { label: 'PHP', role: 'frontend', cwd: d, port: P(8000), setup: php(d), cmd: `php -S 127.0.0.1:${P(8000)}` };
+  const html = ['.', 'public', 'site', 'www', 'docs', 'dist', 'build', 'src'].find(f => has(path.join(d, f), 'index.html'));
+  if (html !== undefined) return { label: 'Static site', role: 'frontend', cwd: path.join(d, html), port: P(8080), cmd: `python3 -m http.server ${P(8080)} --bind 127.0.0.1` };
+  return undefined;
+}
+
+// Procfile "web:" (Heroku-style): PORT is given to it.
+function procfileProc(root: string, port?: number): Proc | undefined {
+  const pf = read(path.join(root, 'Procfile.dev')) || read(path.join(root, 'Procfile'));
+  const web = /^web:\s*(.+)$/m.exec(pf)?.[1];
+  return web ? { label: 'Procfile web', role: 'frontend', cwd: root, port: port ?? 5000, urls: true, cmd: web } : undefined;
+}
+function makeProc(root: string): Proc | undefined {
+  const mk = read(path.join(root, 'Makefile'));
+  const target = ['dev', 'run', 'serve', 'start', 'up'].find(t => new RegExp(`^${t}\\s*:`, 'm').test(mk));
+  return target ? { label: `make ${target}`, role: 'frontend', cwd: root, urls: true, cmd: `make ${target}` } : undefined;
 }
 
 // How to run this project, or undefined when JustCode cannot tell (the modal then offers "Ask Claude").
@@ -132,19 +201,30 @@ export function detect(root: string): Plan | undefined {
   const compose = COMPOSE.find(f => has(root, f));
   if (compose) return { kind: 'Docker Compose', compose, procs: [], env };
   const fport = Number(env.FRONTEND_PORT || env.WEB_PORT || env.CLIENT_PORT || env.VITE_PORT) || undefined;
-  let front: (Proc & { fw: string }) | undefined;
+  const pf = procfileProc(root, fport);
+  if (pf) return { kind: 'Procfile', procs: [pf], env };
+  let front: Proc | undefined;
   for (const rel of FRONT_DIRS) if ((front = nodeProc(root, rel, NODE_FRONT, 'frontend', fport))) break;
   const back = backProc(root, env);
-  const procs = [front, back].filter((p): p is Proc => !!p && !(front && back && p === back && back.cwd === front.cwd && back.port === front.port));
-  if (!procs.length) return undefined;
-  return { kind: procs.map(p => p.label).join(' + '), procs, env };
+  if (!front && !back) {
+    const rootPkg = json(path.join(root, 'package.json'));
+    const mono = rootPkg && (rootPkg.workspaces || has(root, 'turbo.json') || has(root, 'nx.json') || has(root, 'pnpm-workspace.yaml'));
+    front = (mono ? anyNodeScript(root, '.', 'frontend') : undefined) ?? siteProc(root, fport) ?? anyNodeScript(root, '.', 'frontend');
+  }
+  const procs = [front, back].filter((p): p is Proc => !!p);
+  if (procs.length === 2 && procs[0].cwd === procs[1].cwd && procs[0].cmd === procs[1].cmd) procs.pop();
+  if (procs.length) return { kind: procs.map(p => p.label).join(' + '), procs, env };
+  const dockerfile = ['Dockerfile', 'dockerfile'].find(f => has(root, f));
+  if (dockerfile) return { kind: 'Dockerfile', dockerfile, procs: [], env };
+  const mk = makeProc(root);
+  return mk ? { kind: mk.label, procs: [mk], env } : undefined;
 }
 
 /* ---------- links ---------- */
 
-const NOT_HTTP = new Set([5432, 3306, 6379, 27017, 5672, 11211, 9200, 9300, 1025, 2525, 587, 25, 1433, 1521, 5433, 6380, 4222, 9092, 2181, 15672]);
-const FRONT_NAME = /front|web|client|ui|site|nginx|caddy|proxy|^app$|portal|dashboard|admin/i;
-const BACK_NAME = /back|api|server|django|rails|laravel|php|node|express|nest|flask|fastapi|uvicorn|gunicorn|spring|go/i;
+const NOT_HTTP = new Set([5432, 3306, 6379, 27017, 5672, 11211, 9200, 9300, 1025, 2525, 587, 25, 1433, 1521, 5433, 6380, 4222, 9092, 2181, 15672, 9000, 1883]);
+const FRONT_NAME = /front|web|client|ui|site|nginx|caddy|traefik|proxy|^app$|portal|dashboard|admin|wordpress|storefront/i;
+const BACK_NAME = /back|api|server|django|rails|laravel|php|node|express|nest|flask|fastapi|uvicorn|gunicorn|spring|^go$|worker/i;
 
 // `docker compose ps --format json` prints an array (Compose ≥ 2.21) or one object per line (older).
 export function parsePs(out: string): { Service: string; Publishers?: { URL?: string; PublishedPort?: number; TargetPort?: number }[] }[] {
@@ -163,33 +243,52 @@ export function composeLinks(ps: ReturnType<typeof parsePs>, env: Record<string,
     seen.add(port);
     const name = c.Service || '';
     const role: Role = String(port) === env.FRONTEND_PORT ? 'frontend' : String(port) === env.BACKEND_PORT ? 'backend'
-      : /mail|smtp|pgadmin|adminer|grafana|prometheus|kibana|flower|minio|rabbit/i.test(name) ? 'other' : FRONT_NAME.test(name) ? 'frontend' : BACK_NAME.test(name) ? 'backend' : 'other';
+      : /mail|smtp|pgadmin|adminer|grafana|prometheus|kibana|flower|minio|rabbit|jaeger|phpmyadmin|redis-?insight|mongo-express/i.test(name) ? 'other'
+      : FRONT_NAME.test(name) ? 'frontend' : BACK_NAME.test(name) ? 'backend' : 'other';
     links.push({ label: name || `port ${port}`, url: `http://localhost:${port}`, role });
   }
-  // One app service and nothing marked as frontend: that service is what the user opens.
+  // Nothing marked as frontend: the one app service is what the user opens.
   if (!links.some(l => l.role === 'frontend')) { const first = links.find(l => l.role === 'backend') ?? links.find(l => l.role === 'other'); if (first && links.filter(l => l.role !== 'other').length <= 1) first.role = 'frontend'; }
   const order: Record<Role, number> = { frontend: 0, backend: 1, other: 2 };
   return links.sort((a, b) => order[a.role] - order[b.role]);
 }
 
+// Local URLs a dev server printed ("Local: http://localhost:5174/", "running at http://127.0.0.1:8000").
+export function printedUrls(text: string): string[] {
+  const clean = text.replace(/\x1b\[[0-9;]*m/g, '');
+  const seen = new Set<string>();
+  for (const m of clean.matchAll(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{2,5})(\/[^\s'")\]]*)?/g)) seen.add(`http://localhost:${m[1]}${(m[2] ?? '/').replace(/\/$/, '') || ''}`);
+  return [...seen];
+}
+
+const portFree = (port: number) => new Promise<boolean>(res => {
+  const s = net.createServer().once('error', () => res(false)).once('listening', () => s.close(() => res(true)));
+  s.listen(port, '127.0.0.1');
+});
+export async function freePort(want: number, taken: Set<number> = new Set()) {
+  for (let p = want; p < want + 50; p++) if (!taken.has(p) && await portFree(p)) return p;
+  return want;
+}
+
 async function up(url: string) {
   try { const r = await fetch(url, { signal: AbortSignal.timeout(3000), redirect: 'manual' }); return r.status < 500; } catch { return false; }
 }
-async function waitUp(links: AppLink[], ms: number, abort: () => boolean) {
+async function waitUp(links: AppLink[], ms: number, refresh?: () => void) {
   const end = Date.now() + ms;
   for (;;) {
+    refresh?.();
     for (const l of links) if (!l.up) l.up = await up(l.url);
-    if (links.every(l => l.up) || Date.now() > end || abort()) return;
+    if (links.every(l => l.up) || Date.now() > end) return;
     await new Promise(r => setTimeout(r, 2000));
   }
 }
 
 /* ---------- start / stop ---------- */
 
-function sh(cmd: string, cwd: string, log: fs.WriteStream, timeout: number) {
+function sh(cmd: string, cwd: string, log: fs.WriteStream, timeout: number, env: NodeJS.ProcessEnv = ENV) {
   return new Promise<void>((resolve, reject) => {
     log.write(`\n$ ${cmd}\n`);
-    const p = spawn('/bin/sh', ['-c', cmd], { cwd, env: ENV });
+    const p = spawn('/bin/sh', ['-c', cmd], { cwd, env });
     p.stdout.pipe(log, { end: false }); p.stderr.pipe(log, { end: false });
     const t = setTimeout(() => { p.kill('SIGTERM'); reject(new Error(`${cmd} took longer than ${Math.round(timeout / 60000)} min`)); }, timeout);
     p.on('error', e => { clearTimeout(t); reject(e); });
@@ -198,6 +297,8 @@ function sh(cmd: string, cwd: string, log: fs.WriteStream, timeout: number) {
 }
 const out = (cmd: string, args: string[], cwd: string) => new Promise<string>((res, rej) => execFile(cmd, args, { cwd, env: ENV, timeout: 30_000, maxBuffer: 8 << 20 }, (e, o) => e ? rej(e) : res(o)));
 const headOf = (root: string) => out('git', ['rev-parse', '--short', 'HEAD'], root).then(s => s.trim(), () => undefined);
+const dockerUp = (root: string, log: fs.WriteStream) => sh('docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop, then Rebuild."; exit 1; }', root, log, 30_000);
+const imageName = (root: string) => `justcode-${path.basename(root).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
 function killAll(pids?: number[]) {
   for (const pid of pids ?? []) { try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } } }
@@ -216,39 +317,72 @@ export function start(root: string, why = 'you'): Promise<void> {
 async function run(root: string, why: string) {
   const plan = detect(root);
   const old = load(root);
-  if (!plan) { save(root, { state: 'failed', links: [], why, error: 'JustCode could not tell how to run this project (no compose file, dev server or backend it knows). Use "Ask Claude" to set it up.' }); return; }
+  if (!plan) { save(root, { state: 'failed', links: [], why, error: 'JustCode could not tell how to run this project. Use "Ask Claude to fix it": Claude sets it up and starts it.' }); return; }
   fs.mkdirSync(dir(root), { recursive: true });
   const log = fs.createWriteStream(logFile(root), { flags: 'w' });
   log.write(`# ${plan.kind} · ${new Date().toISOString()} · ${why}\n`);
   save(root, { ...old, state: 'building', kind: plan.kind, why, error: undefined });
+  killAll(old.pids);
+  if (old.container) await out('docker', ['rm', '-f', old.container], root).catch(() => '');
   try {
-    let links: AppLink[];
-    let pids: number[] | undefined;
+    let links: AppLink[] = [];
+    let pids: number[] | undefined, container: string | undefined;
+    const printed = new Map<Proc, string>();   // each process's output, for the URL it prints
+    if (!has(root, '.env') && has(root, '.env.example')) fs.copyFileSync(path.join(root, '.env.example'), path.join(root, '.env'));
     if (plan.compose) {
-      if (!has(root, '.env') && has(root, '.env.example')) fs.copyFileSync(path.join(root, '.env.example'), path.join(root, '.env'));
-      await sh('docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop, then Rebuild."; exit 1; }', root, log, 30_000);
+      await dockerUp(root, log);
       await sh(`docker compose -f ${plan.compose} up -d --build --remove-orphans`, root, log, 20 * 60_000);
       links = composeLinks(parsePs(await out('docker', ['compose', '-f', plan.compose, 'ps', '--format', 'json'], root)), readEnv(path.join(root, '.env')));
+    } else if (plan.dockerfile) {
+      // A lone Dockerfile: build it and publish the port it EXPOSEs on the same port (or the next free one).
+      await dockerUp(root, log);
+      const img = imageName(root), expose = Number(/^\s*EXPOSE\s+(\d+)/mi.exec(read(path.join(root, plan.dockerfile)))?.[1]) || 8080;
+      const host = await freePort(expose);
+      await sh(`docker build -t ${img} -f ${plan.dockerfile} .`, root, log, 20 * 60_000);
+      container = img;
+      await sh(`docker rm -f ${img} >/dev/null 2>&1; docker run -d --name ${img} -p 127.0.0.1:${host}:${expose}${has(root, '.env') ? ' --env-file .env' : ''} ${img}`, root, log, 120_000);
+      links = [{ label: 'container', url: `http://localhost:${host}`, role: 'frontend' }];
+      setTimeout(() => void out('docker', ['logs', '--tail', '200', img], root).then(t => fs.appendFileSync(logFile(root), `\n${t}`), () => undefined), 20_000).unref?.();
     } else {
-      killAll(old.pids);
       pids = [];
-      links = [];
+      const taken = new Set<number>();
       for (const p of plan.procs) {
-        if (p.install) await sh(p.install, p.cwd, log, 10 * 60_000);
-        log.write(`\n$ (${p.label}) ${p.cmd}\n`);
-        const child = spawn('/bin/sh', ['-c', p.cmd], { cwd: p.cwd, env: ENV, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-        child.stdout?.pipe(log, { end: false }); child.stderr?.pipe(log, { end: false });
+        for (const step of p.setup ?? []) await sh(step, p.cwd, log, 15 * 60_000);
+        // The wanted port may be taken (another project, an old run): the next free one, so the link is right.
+        const want = p.port;
+        if (p.port) { p.port = await freePort(p.port, taken); taken.add(p.port); }
+        const env = { ...ENV, ...(p.port ? { PORT: String(p.port) } : {}) };
+        const cmd = want && p.port !== want ? p.cmd.replace(new RegExp(`\\b${want}\\b`, 'g'), String(p.port)) : p.cmd;
+        log.write(`\n$ (${p.label}) ${cmd}\n`);
+        const child = spawn('/bin/sh', ['-c', cmd], { cwd: p.cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        printed.set(p, '');
+        const take = (b: Buffer) => { log.write(b); const t = printed.get(p)! + b.toString(); printed.set(p, t.slice(-20_000)); };
+        child.stdout?.on('data', take); child.stderr?.on('data', take);
         child.unref();
         if (child.pid) pids.push(child.pid);
-        links.push({ label: p.label, url: `http://localhost:${p.port}`, role: p.role });
+        if (p.port) links.push({ label: p.label, url: `http://localhost:${p.port}`, role: p.role });
       }
     }
-    if (!links.length) throw new Error('The app started but publishes no web port. Check the compose file\'s ports, or use "Ask Claude".');
-    save(root, { state: 'building', kind: plan.kind, links, pids, why, startedAt: Date.now(), head: await headOf(root) });
-    await waitUp(links, 4 * 60_000, () => false);
+    // Processes that print their URL (dev scripts, monorepos, make, Procfile): their links come from the output.
+    const refresh = () => {
+      for (const [p, text] of printed) {
+        if (!p.urls && p.port) continue;
+        const urls = printedUrls(text);
+        if (!urls.length) continue;
+        const mine = links.filter(l => l.label === p.label);
+        if (p.port && mine.length === 1) { if (mine[0].url !== urls[0]) { mine[0].url = urls[0]; mine[0].up = false; } continue; }
+        for (const [i, u] of urls.entries()) if (!links.some(l => l.url === u)) links.push({ label: urls.length > 1 ? `${p.label} ${i + 1}` : p.label, url: u, role: i === 0 && !links.some(l => l.role === 'frontend') ? 'frontend' : p.role === 'backend' ? 'backend' : 'other' });
+      }
+    };
+    if (printed.size) { const end = Date.now() + 90_000; while (!links.length && Date.now() < end) { refresh(); await new Promise(r => setTimeout(r, 1500)); } }
+    // A backend-only app (Django templates, Rails, Laravel…) is what the user opens.
+    if (links.length && !links.some(l => l.role === 'frontend')) links[0].role = 'frontend';
+    if (!links.length) throw new Error('It started, but JustCode found no web address (no published port and none printed). See the log, or use "Ask Claude to fix it".');
+    save(root, { state: 'building', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head: await headOf(root) });
+    await waitUp(links, 5 * 60_000, refresh);
     const front = links.find(l => l.role === 'frontend') ?? links[0];
-    save(root, { state: front.up ? 'running' : 'failed', kind: plan.kind, links, pids, why, startedAt: Date.now(), head: await headOf(root),
-      error: front.up ? undefined : `${front.url} does not answer. The log below says why; "Ask Claude" can fix the setup.` });
+    save(root, { state: front.up ? 'running' : 'failed', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head: await headOf(root),
+      error: front.up ? undefined : `${front.url} does not answer. The log says why; "Ask Claude to fix it" can repair the setup.` });
   } catch (e: any) {
     save(root, { ...load(root), state: 'failed', error: String(e?.message ?? e) });
   } finally { log.end(); }
@@ -257,8 +391,9 @@ async function run(root: string, why: string) {
 export async function stop(root: string) {
   const s = load(root), plan = detect(root);
   if (plan?.compose) await out('docker', ['compose', '-f', plan.compose, 'stop'], root).catch(() => '');
+  if (s.container) await out('docker', ['rm', '-f', s.container], root).catch(() => '');
   killAll(s.pids);
-  save(root, { ...s, state: 'stopped', pids: undefined, links: s.links.map(l => ({ ...l, up: false })) });
+  save(root, { ...s, state: 'stopped', pids: undefined, container: undefined, links: s.links.map(l => ({ ...l, up: false })) });
 }
 
 // Is the running copy behind the project folder? Then it rebuilds, for the changes that need it.
