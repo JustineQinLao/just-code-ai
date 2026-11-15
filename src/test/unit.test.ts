@@ -9,7 +9,7 @@ import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule } from '../policy';
 import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
-import { Store, resolveWhere, splitTitle } from '../store';
+import { Store, resolveWhere, splitTitle, runsApp } from '../store';
 import { projectSetup } from '../setup';
 import { Session, toolOptions } from '../session';
 import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
@@ -1223,4 +1223,14 @@ test('splitTitle: a long prompt typed as the title keeps a short title and moves
   const nl = splitTitle('Add dark mode\nUse the theme tokens', 'extra');
   assert.equal(nl.title, 'Add dark mode');
   assert.equal(nl.description, 'Add dark mode\nUse the theme tokens\n\nextra');
+});
+
+test('runsApp: "run it so I can see it" goes to the project folder, ordinary work does not', () => {
+  for (const t of ['pls build the project so I can see', 'Run the app with docker compose so I can open it in the browser', 'start the frontend locally', 'spin up the stack so we can test it'])
+    assert.ok(runsApp(t), t);
+  for (const t of ['Build merchant list, empty state and form', 'Add expenses API with scoping', 'Run the migrations for the new table', 'Fix the build'])
+    assert.ok(!runsApp(t), t);
+  assert.equal(resolveWhere({ sprintId: 's', runApp: true }), 'direct');
+  assert.equal(resolveWhere({ sprintId: 's', runApp: true, where: 'branch' }), 'branch');
+  assert.equal(resolveWhere({ sprintId: 's', runApp: true, remote: true }), 'branch');
 });

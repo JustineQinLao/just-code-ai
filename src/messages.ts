@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { Store, Task, resolveWhere, resolveOutput, splitTitle } from './store';
+import { Store, Task, resolveWhere, runsApp, resolveOutput, splitTitle } from './store';
 import { Runner, RunnerSettings } from './runner';
 import * as g from './git';
 import { pluginDir } from './plugin';
@@ -93,8 +93,10 @@ export async function handle(m: any, remote = false) {
       const picked: string[] | undefined = Array.isArray(m.sources) && m.sources.length < all.length ? m.sources.filter((x: string) => all.includes(x)) : undefined;
       const output = resolveOutput(m.output, `${m.title}\n${m.description ?? ''}`);
       const named = splitTitle(String(m.title), m.description);
-      const task = s.addTask({ title: named.title, description: named.description, sprintId: m.sprintId || undefined, agent: m.agent || undefined,
-        mode: m.mode || setting('defaultMode', 'auto'), ...(m.quick ? { quick: true } : {}), where: m.quick ? 'direct' : resolveWhere({ where: m.where, artifact: !!output, setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote }),
+      // A "run it so I can see it" request with Runs in on Automatic: the project folder, outside the sprint (no branch, no merge).
+      const runApp = !m.where && !output && runsApp(`${m.title}\n${m.description ?? ''}`);
+      const task = s.addTask({ title: named.title, description: named.description, sprintId: runApp ? undefined : m.sprintId || undefined, agent: m.agent || undefined,
+        mode: m.mode || setting('defaultMode', 'auto'), ...(m.quick ? { quick: true } : {}), where: m.quick ? 'direct' : resolveWhere({ where: m.where, artifact: !!output, setting: setting<string>('defaultWhere', 'auto'), sprintId: m.sprintId, remote, runApp }),
         output,
         files: Array.isArray(m.files) && m.files.length ? m.files.map(String) : undefined, sources: picked });
       A.logPrompt(r.root, { kind: 'task', text: [task.title, task.description].filter(Boolean).join('\n\n'), taskId: task.id, title: task.title });

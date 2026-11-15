@@ -266,10 +266,16 @@ export function splitTitle(title: string, description?: string): { title: string
   return { title: short, description: [t, d].filter(Boolean).join('\n\n') };
 }
 
-export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean }): 'direct' | 'branch' {
+// "Run the app so I can see it": nothing to merge, and the user opens it from the project folder, not a task's copy.
+export const runsApp = (text: string) =>
+  /\b(run|start|serve|launch|spin up|boot|build|deploy)\b[^.\n]{0,60}\b(app|project|site|server|stack|frontend|backend|it)\b/i.test(text) &&
+  /\b(so (that )?(i|we) can|for me to|in (the|my|a) browser|to (see|test|try|open|view|check)|locally|up and running)\b/i.test(text);
+
+export function resolveWhere(o: { where?: string; artifact?: boolean; setting?: string; sprintId?: string; remote?: boolean; runApp?: boolean }): 'direct' | 'branch' {
   if (o.remote) return 'branch';
   if (o.where === 'direct' || o.artifact) return 'direct';
   if (o.where === 'branch') return 'branch';
+  if (o.runApp) return 'direct';
   if (o.setting === 'direct' || o.setting === 'branch') return o.setting;
   return o.sprintId ? 'branch' : 'direct';
 }
