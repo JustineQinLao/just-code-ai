@@ -480,3 +480,10 @@ b.app-failed { color: var(--err); }
 .md th, .md td { border: 1px solid var(--line); padding: 3px 8px; text-align: left; vertical-align: top; }
 .md th { background: color-mix(in srgb, var(--line) 40%, transparent); }
 .md code { font-size: 12px; padding: 0 3px; border-radius: 4px; background: color-mix(in srgb, var(--line) 50%, transparent); }
+
+/* 💬 chat history */
+.chatlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.chatlist li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.chatlist li:hover { background: color-mix(in srgb, var(--line) 40%, transparent); }
+.chatlist li.on { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.chatlist .ctitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }

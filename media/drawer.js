@@ -105,11 +105,12 @@
 
   let menu = [];
   let fullTitle = null;   // the task whose long title is shown in full (survives re-renders)
+  let chatList = false, chatWatched = null;   // 💬 the chat history list is open; the chat whose activity was requested
   function renderDrawer() {
     applyBtn.hidden = true;
     foot.hidden = false; doneFoot.hidden = true; stopBtn.hidden = false;   // the planner and running tasks use the message box
     if (open === '__planner') return renderPlanner();
-    const t = open && JC.S.board.tasks.find(x => x.id === open);
+    const t = open && (JC.S.board.tasks.find(x => x.id === open) ?? (JC.S.chats || []).find(x => x.id === open));
     drawer.classList.toggle('on', !!t);
     document.body.classList.toggle('drawer-open', !!t);
     if (!t) return;
@@ -143,15 +144,27 @@
     if (t.chat) {
       JC.tab = 'activity';
       menu = [['New chat', () => JC.post('newChat')]];
+      if (!JC.steps[t.id] && t.sessionId && chatWatched !== t.id) { chatWatched = t.id; JC.post('watch', { id: t.id }); }   // a panel restored after a reload
+      const chats = JC.S.chats || [];
       head.replaceChildren(
-        JC.h('div', { class: 'row' }, JC.h('h3', { class: 'dtitle grow' }, '💬 Chat'),
+        JC.h('div', { class: 'row' }, JC.h('h3', { class: 'dtitle grow', title: t.title }, `💬 ${t.title === 'New chat' ? 'Chat' : t.title}`),
           live ? JC.btn('■ Stop', () => JC.post('interrupt', { id: t.id }), 'ghost', 'Stop this reply (Esc)') : '',
-          JC.btn('New chat', () => JC.post('newChat'), 'ghost', 'Start a fresh conversation'), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
-        JC.h('p', { class: 'muted small' }, 'Claude in the project folder, as in a terminal. Nothing here is checked, reviewed, committed or merged.'),
-        a0 ? JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost')))) : '',
-        t.error ? JC.h('p', { class: 'err small' }, t.error) : '');
+          JC.btn(`🕘${chats.length > 1 ? ` ${chats.length}` : ''}`, () => { chatList = !chatList; renderDrawer(); }, `ghost${chatList ? ' on' : ''}`, 'Chat history'),
+          JC.btn('＋', () => { chatList = false; JC.post('newChat'); }, 'ghost icon', 'New chat'), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
+        chatList ? '' : JC.h('p', { class: 'muted small' }, 'Claude in the project folder, as in a terminal. Nothing here is checked, reviewed, committed or merged.'),
+        !chatList && a0 ? JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost')))) : '',
+        !chatList && t.error ? JC.h('p', { class: 'err small' }, t.error) : '');
+      if (chatList) {
+        body.replaceChildren(JC.h('ul', { class: 'chatlist' }, chats.map(c => JC.h('li', { class: c.id === t.id ? 'on' : '', onclick: () => { chatList = false; JC.openTask(c.id, 'activity'); } },
+          JC.h('div', { class: 'grow' }, JC.h('div', { class: 'ctitle' }, c.title === 'New chat' ? 'New chat (empty)' : c.title),
+            JC.h('div', { class: 'muted small' }, JC.savedAgo ? JC.savedAgo(c.chatAt || c.created) : '', c.run && c.run !== 'idle' ? ' · replying…' : c.asks?.length ? ' · needs you' : '')),
+          JC.btn('🗑', e => { e.stopPropagation(); JC.post('deleteChat', { id: c.id }); }, 'ghost icon small', 'Delete this chat')))),
+          chats.length ? '' : JC.h('p', { class: 'muted' }, 'No chats yet.'));
+        foot.hidden = true; doneFoot.hidden = true;
+        return;
+      }
       body.replaceChildren(...drawerBody(t));
-      if (!body.childNodes.length || !(t.sessionId)) body.replaceChildren(JC.h('p', { class: 'muted' }, 'Ask anything about this project, or ask Claude to change something.'));
+      if (!t.sessionId) body.replaceChildren(JC.h('p', { class: 'muted' }, 'Ask anything about this project, or ask Claude to change something.'));
       msg.placeholder = 'Message Claude…  Enter sends · Shift+Enter new line';
       foot.hidden = false; doneFoot.hidden = true;
       stopBtn.hidden = !(live || t.run === 'starting');

@@ -42,7 +42,9 @@ export function post() {
     type: 'state',
     roots: roots().map(p => ({ path: p, name: path.basename(p), removable: !workspace().includes(p), ...(runners.get(p)?.counts() ?? { running: 0, waiting: 0 }) })),
     root: r.root,
-    board: { ...r.store.data, tasks },
+    // 💬 Chats are not tasks: never on the board, in a sprint or the backlog; the chat panel lists them.
+    board: { ...r.store.data, tasks: tasks.filter(t => !t.chat) },
+    chats: tasks.filter(t => t.chat && !t.archived).sort((a, b) => (b.chatAt ?? b.created ?? 0) - (a.chatAt ?? a.created ?? 0)),
     setup: st.setup, project: projectSetup(r.root),
     limit: limits.view(),
     version: st.ctx.extension.packageJSON.version,

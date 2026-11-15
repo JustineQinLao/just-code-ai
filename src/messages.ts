@@ -174,6 +174,7 @@ export async function handle(m: any, remote = false) {
     case 'interrupt': await r.interrupt(m.id); return;
     case 'say':
       if (typeof m.text !== 'string' || !m.text.trim()) return;
+      if (t?.chat) s.updateTask(t.id, { chatAt: Date.now(), ...(t.title === 'New chat' || t.title === 'Chat' && !t.sessionId ? { title: m.text.trim().split('\n')[0].slice(0, 70) } : {}) });
       A.logPrompt(r.root, { kind: 'message', text: m.text.trim(), taskId: m.id, title: t?.title });
       r.audit('task.message', m.id, m.text.trim().slice(0, 200), who);
       await r.say(m.id, withImages(m.text.trim(), r.root, m.id, m.images)); return;
@@ -376,16 +377,19 @@ export async function handle(m: any, remote = false) {
       return;
     }
     case 'openChat': case 'newChat': {
-      // 💬 Chat: one conversation per project, in the project folder, off the board. New chat archives the old one.
+      // 💬 Chat: conversations in the project folder, off the board. Open goes back to the latest; New starts another
+      // (an unused empty one is reused). Every chat stays in the panel's 🕘 history until you delete it.
       if (remote) return;
-      const cur = s.data.tasks.find(x => x.chat && !x.archived);
-      if (cur && m.type === 'openChat') { emit({ type: 'focus', id: cur.id }); return; }
-      if (cur) { r.stop(cur.id); s.updateTask(cur.id, { archived: true }); }
+      const chats = s.data.tasks.filter(x => x.chat && !x.archived).sort((a, b) => (b.chatAt ?? b.created ?? 0) - (a.chatAt ?? a.created ?? 0));
+      if (m.type === 'openChat' && chats[0]) { emit({ type: 'focus', id: chats[0].id }); return; }
+      const empty = chats.find(x => !x.sessionId);
+      if (empty) { emit({ type: 'focus', id: empty.id }); return; }
       const mode = setting<string>('defaultMode', 'auto');
-      const chat = s.addTask({ title: 'Chat', chat: true, where: 'direct', status: 'review', mode: (mode === 'plan' ? 'default' : mode) as any });
+      const chat = s.addTask({ title: 'New chat', chat: true, chatAt: Date.now(), where: 'direct', status: 'review', mode: (mode === 'plan' ? 'default' : mode) as any });
       emit({ type: 'focus', id: chat.id });
       return;
     }
+    case 'deleteChat': if (!remote && t?.chat) { await r.remove(t.id); } return;
     case 'appStart': if (!remote) void App.start(r.root); return;
     case 'appStop': if (!remote) await App.stop(r.root); return;
     case 'appLog': if (!remote) void vscode.window.showTextDocument(vscode.Uri.file(App.logFile(r.root))); return;
