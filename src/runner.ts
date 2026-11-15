@@ -13,7 +13,7 @@ import * as Audit from './audit';
 import { SecretsFound, describeSecrets } from './secrets';
 import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
-import { transcript } from './claude';
+import { transcript, CHAT_APPEND } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -248,8 +248,8 @@ export class Runner {
     const bin = this.d.bin();
     if (!bin) throw new Error('Claude Code is not installed or not found. Open JustCode: Check Setup.');
     // One direct task at a time, decided before any await: the first claim wins, a second one is refused.
-    if (t.where === 'direct' && !t.init) {
-      if (this.store.data.tasks.some(o => o.id !== id && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done' && (this.starting.has(o.id) || this.sessions.get(o.id)?.open)))
+    if (t.where === 'direct' && !t.init && !t.chat) {   // a chat is like Claude in a terminal: it never blocks or waits on tasks
+      if (this.store.data.tasks.some(o => o.id !== id && o.where === 'direct' && !o.init && !o.chat && !o.archived && o.status !== 'done' && (this.starting.has(o.id) || this.sessions.get(o.id)?.open)))
         throw new Error('Another task is already working in the project folder. Wait for it to finish, or run this one on its own branch.');
       if (this.busy.size) throw new Error('A merge is running. Start this task in the project folder when it finishes.');
     }
@@ -361,7 +361,7 @@ export class Runner {
     const reuse = !resume && t.output === 'artifact' && !t.artifactUrl ? this.publishedNamedIn(t) : undefined;
     if (reuse) { patch = { ...patch, artifactUrl: reuse.url }; R.link(this.root, reuse.url, t.id, t.sprintId); }
     const title = (x: string) => this.store.task(x)?.title;
-    const first = resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title)), t.init === 'design' ? designFromCodeBody() : t.init ? setupSkillBody() : '',
+    const first = t.chat ? (prompt ?? 'Hi') : resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title)), t.init === 'design' ? designFromCodeBody() : t.init ? setupSkillBody() : '',
       t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!installedPlugin('frontend-design', undefined, 'skills'), reuse && { ...reuse, file: this.previousPage(reuse) }) : '', prompt].filter(Boolean).join('\n\n');
     if (!resume) this.linkArtifacts(t, sources);
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
@@ -370,6 +370,7 @@ export class Runner {
     const personal = set.personalSetup ? [] : userAllowRules();
     const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
     const s = new Session({
+      ...(task.chat ? { append: CHAT_APPEND } : {}),
       bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
@@ -461,6 +462,8 @@ export class Runner {
       this.d.notify('error', `"${t.title}" stopped: ${String(turn.error).slice(0, 200)}`, id);
       return this.pump();
     }
+    // A chat turn is just a reply: nothing is committed, checked, reviewed or announced.
+    if (t.chat) { this.store.updateTask(id, { live: undefined, reply: turn.text.trim().slice(-4000) || undefined, costUsd: cost }); return; }
     let committed = false;
     if (t.where === 'direct' && !t.init) {
       let before: string[] = [];

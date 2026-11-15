@@ -62,7 +62,7 @@ export function post() {
     guideSeen: st.ctx.globalState.get('guideSeen', false),
     all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({
       root, name: path.basename(root),
-      tasks: x.store.data.tasks.filter(t => !t.archived && (x.isOpen(t.id) || x.live(t.id).reviewing || t.status === 'doing' || t.status === 'review'))
+      tasks: x.store.data.tasks.filter(t => !t.archived && !t.chat && (x.isOpen(t.id) || x.live(t.id).reviewing || t.status === 'doing' || t.status === 'review'))
         .map(t => ({ id: t.id, title: t.title, status: t.status, ...x.live(t.id), review: t.review })),
     })),
   });

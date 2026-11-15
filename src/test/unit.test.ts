@@ -1298,3 +1298,17 @@ test('app: freePort skips a taken port', async () => {
   assert.notEqual(p, taken);
   s.close();
 });
+
+test('chat: its turn is only a reply (no commit, review or status change) and it never blocks a project-folder task', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-chat-'));
+  const store = new Store(root);
+  const chat = store.addTask({ title: 'Chat', chat: true, where: 'direct', status: 'review', mode: 'default' } as any);
+  const { Runner } = require('../runner');
+  const r = new Runner(store, { settings: () => ({ review: { auto: true } }), notify: () => {}, limits: { held: () => false, update: () => {}, setReached: () => {} }, bin: () => undefined } as any);
+  await r.turnEnded(chat.id, { ok: true, text: 'Here is the answer.', costUsd: 0.01 } as any);
+  const t = store.task(chat.id)!;
+  assert.equal(t.status, 'review');
+  assert.equal(t.reply, 'Here is the answer.');
+  assert.equal(t.review, undefined);
+  r.dispose();
+});

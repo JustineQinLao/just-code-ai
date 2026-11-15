@@ -165,7 +165,7 @@
     $('#banners').replaceChildren(...out);
   }
 
-  const visible = () => S.board.tasks.filter(t => (showArchived ? t.archived : !t.archived) &&
+  const visible = () => S.board.tasks.filter(t => !t.chat && (showArchived ? t.archived : !t.archived) &&
     (view === 'all' || (view === 'backlog' ? !t.sprintId : t.sprintId === view)));
 
   function renderToolbar() {
@@ -198,6 +198,7 @@
         (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
+      !REMOTE ? btn('💬 Chat', () => post('openChat'), 'ghost', 'Talk to Claude in the project folder: no task, checks, review or merge') : '',
       !REMOTE ? (a => {
         const building = a.busy || a.state === 'building', stopped = !building && (a.state === 'stopped' || !a.state);
         return btn(building ? '⟳ App: building…' : a.state === 'running' ? '● App running' : a.state === 'failed' ? '⚠ App not running' : '▶ Start app',

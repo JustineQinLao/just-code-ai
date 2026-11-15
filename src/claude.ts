@@ -147,6 +147,11 @@ If the task has a "Done when" list, meet every item: the reviewer checks each on
 When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
 If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;
 
+// 💬 Chat: Claude Code as in a terminal, in the project folder. No brief, handoff, checks, review or merge.
+export const CHAT_APPEND = `You are chatting with the user through JustCode, in their project folder, the way Claude Code works in a terminal.
+Answer questions, explain code, run commands and change files when they ask. Nothing you do here is reviewed, committed or merged by JustCode:
+the user commits themselves. Keep replies short and concrete. Do not start long-running servers in the foreground: start them detached.`;
+
 // Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
 // not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
 // allow rules are still applied (userAllowRules).

@@ -139,6 +139,24 @@
       [t.archived ? 'Unarchive' : 'Archive', () => JC.post('archive', { id: t.id })],
       ['Delete', () => JC.post('delete', { id: t.id }), 'danger'],
     ].filter(Boolean);
+    // 💬 Chat: only the conversation, Claude's questions and permission requests. No steps, tabs, review or merge.
+    if (t.chat) {
+      JC.tab = 'activity';
+      menu = [['New chat', () => JC.post('newChat')]];
+      head.replaceChildren(
+        JC.h('div', { class: 'row' }, JC.h('h3', { class: 'dtitle grow' }, '💬 Chat'),
+          live ? JC.btn('■ Stop', () => JC.post('interrupt', { id: t.id }), 'ghost', 'Stop this reply (Esc)') : '',
+          JC.btn('New chat', () => JC.post('newChat'), 'ghost', 'Start a fresh conversation'), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
+        JC.h('p', { class: 'muted small' }, 'Claude in the project folder, as in a terminal. Nothing here is checked, reviewed, committed or merged.'),
+        a0 ? JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost')))) : '',
+        t.error ? JC.h('p', { class: 'err small' }, t.error) : '');
+      body.replaceChildren(...drawerBody(t));
+      if (!body.childNodes.length || !(t.sessionId)) body.replaceChildren(JC.h('p', { class: 'muted' }, 'Ask anything about this project, or ask Claude to change something.'));
+      msg.placeholder = 'Message Claude…  Enter sends · Shift+Enter new line';
+      foot.hidden = false; doneFoot.hidden = true;
+      stopBtn.hidden = !(live || t.run === 'starting');
+      return;
+    }
     const st = window.JCStatus.stepOf(t);
     const tags = [t.branch && `⎇ ${t.branch}`, t.mode && t.mode !== 'auto' && JC.modeName(t.mode)].filter(Boolean);
     head.replaceChildren(

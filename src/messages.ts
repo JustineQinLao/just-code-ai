@@ -375,6 +375,17 @@ export async function handle(m: any, remote = false) {
       if (t) await r.say(m.id, 'Continue the task.');
       return;
     }
+    case 'openChat': case 'newChat': {
+      // 💬 Chat: one conversation per project, in the project folder, off the board. New chat archives the old one.
+      if (remote) return;
+      const cur = s.data.tasks.find(x => x.chat && !x.archived);
+      if (cur && m.type === 'openChat') { emit({ type: 'focus', id: cur.id }); return; }
+      if (cur) { r.stop(cur.id); s.updateTask(cur.id, { archived: true }); }
+      const mode = setting<string>('defaultMode', 'auto');
+      const chat = s.addTask({ title: 'Chat', chat: true, where: 'direct', status: 'review', mode: (mode === 'plan' ? 'default' : mode) as any });
+      emit({ type: 'focus', id: chat.id });
+      return;
+    }
     case 'appStart': if (!remote) void App.start(r.root); return;
     case 'appStop': if (!remote) await App.stop(r.root); return;
     case 'appLog': if (!remote) void vscode.window.showTextDocument(vscode.Uri.file(App.logFile(r.root))); return;
