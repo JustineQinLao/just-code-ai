@@ -393,8 +393,8 @@ details.adv[open] > summary { margin-bottom: 6px; }
 .dbody .ask button.ghost { border-color: transparent; background: none; }
 .dbody .ask .opt.rec { border-color: var(--accent); }
 .tl { border-left: 2px solid var(--line); margin-left: 5px; padding-left: 14px; display: grid; gap: 8px; }
-.tl p { margin: 0; position: relative; word-break: break-word; }
-.tl p::before { content: ""; position: absolute; left: -20px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.tl > p { margin: 0; position: relative; word-break: break-word; }
+.tl > p::before { content: ""; position: absolute; left: -20px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
 .tl .ok::before { background: var(--done); } .tl .live::before { background: var(--work); } .tl .err::before { background: var(--err); }
 .tl .err { color: var(--err); }
 .tl .note, .tl .model { color: var(--muted); font-size: 12px; } .tl .note::before { background: var(--needs); }
@@ -493,3 +493,24 @@ b.app-failed { color: var(--err); }
 .chatstatus.warn .dot { background: var(--needs); } .chatstatus.err .dot { background: var(--err); }
 @keyframes jcpulse { 50% { opacity: .35; } }
 .tl .tlout { margin: -4px 0 0; padding: 4px 8px; font-size: 11px; color: var(--muted); background: color-mix(in srgb, var(--line) 25%, transparent); border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+
+/* 💬 chat conversation */
+.chatv { display: grid; gap: 14px; font-size: 13px; line-height: 1.55; }
+.chatv .cmsg { display: grid; gap: 8px; word-break: break-word; }
+.chatv .cmsg.you { justify-self: end; max-width: 85%; background: color-mix(in srgb, var(--accent) 18%, transparent); padding: 8px 12px; border-radius: 14px 14px 4px 14px; }
+.chatv .cmsg.claude { padding: 0 2px; }
+.chatv .md .mdlist { gap: 4px; }
+.chatv .md code { background: color-mix(in srgb, var(--line) 35%, transparent); color: inherit; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+.chatv .csteps { border-radius: 8px; font-size: 12px; color: var(--muted); }
+.chatv .csteps summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chatv .csteps summary::-webkit-details-marker { display: none; }
+.chatv .csteps summary::after { content: "▸"; margin-left: auto; opacity: .6; }
+.chatv .csteps[open] summary::after { content: "▾"; }
+.chatv .csteps summary:hover { background: color-mix(in srgb, var(--line) 30%, transparent); }
+.chatv .cdot { width: 6px; height: 6px; border-radius: 50%; background: var(--done); flex: none; }
+.chatv .csteps.now .cdot { background: var(--work); animation: jcpulse 1.2s ease-in-out infinite; }
+.chatv .csteps.haserr .cdot { background: var(--err); }
+.chatv .csteplist { display: grid; gap: 4px; padding: 6px 8px 4px 22px; }
+.chatv .ccmd { display: block; font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--fg, inherit); background: none; padding: 0; }
+.chatv .cout { margin: 0 0 4px; font-size: 11px; white-space: pre-wrap; word-break: break-word; opacity: .8; }
+.chatv .cout.err { color: var(--err); opacity: 1; }

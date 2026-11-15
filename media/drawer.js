@@ -294,7 +294,7 @@
     const list = JC.steps[t.id] || [];
     const asks = (t.asks || []).map(a => askBox(t, a));
     if (!list.length) return [...asks, JC.h('p', { class: 'muted' }, t.status === 'todo' ? 'Not started yet. Press ▶ Run.' : 'No activity yet.')];
-    return [...asks, timeline(t, list)];
+    return [...asks, t.chat ? chatView(t, list) : timeline(t, list)];
   }
 
   // Follow the newest step only while you are at the bottom (or just opened this task); scrolled up, you stay where you are.
@@ -303,6 +303,43 @@
     const at = body.scrollTop, pinned = followed !== t.id || body.scrollHeight - at - body.clientHeight < 60;
     followed = t.id;
     requestAnimationFrame(() => { body.scrollTop = top ? 0 : pinned ? body.scrollHeight : at; });
+  }
+
+  // 💬 A chat reads like a conversation: your messages on the right, Claude's replies as text, and each run of
+  // commands folded into one row ("Ran 3 commands") that opens to show every command and its output.
+  const openGroups = new Set();   // `${chat}:${index}` of the command groups you opened (kept across re-renders)
+  function chatView(t, list) {
+    const live = t.run && t.run !== 'idle';
+    const items = [];
+    let group = null;
+    for (const s of list) {
+      if (s.kind === 'info' && /^Model: /.test(s.text)) continue;
+      if (s.kind === 'tool' || s.kind === 'result' || s.kind === 'error' || s.kind === 'info') {
+        if (!group) items.push(group = { steps: [] });
+        group.steps.push(s);
+        continue;
+      }
+      group = null;
+      items.push(s);
+    }
+    const el = JC.h('div', { class: 'chatv' }, items.map((it, i) => {
+      if (!it.steps) return it.kind === 'user'
+        ? JC.h('div', { class: 'cmsg you md' }, ...JC.md(it.text))
+        : JC.h('div', { class: 'cmsg claude md' }, ...JC.md(it.text));
+      const tools = it.steps.filter(s => s.kind === 'tool'), errs = it.steps.filter(s => s.kind === 'error').length;
+      const now = live && i === items.length - 1, key = `${t.id}:${i}`;
+      const name = s => s.text.replace(/\(.*$/s, '');
+      const kinds = [...new Set(tools.map(name))].slice(0, 3).join(', ');
+      const d = JC.h('details', { class: `csteps${now ? ' now' : ''}${errs ? ' haserr' : ''}`, ...(openGroups.has(key) ? { open: true } : {}),
+        ontoggle: e => e.target.open ? openGroups.add(key) : openGroups.delete(key) },
+        JC.h('summary', {}, JC.h('span', { class: 'cdot' }),
+          now ? `Working · ${tools.length ? tools[tools.length - 1].text.slice(0, 80) : '…'}` : `Ran ${tools.length || it.steps.length} ${tools.length === 1 ? 'step' : 'steps'}${kinds ? ` · ${kinds}` : ''}${errs ? ` · ${errs} failed` : ''}`),
+        JC.h('div', { class: 'csteplist' }, it.steps.map(s => s.kind === 'tool' ? JC.h('code', { class: 'ccmd' }, s.text)
+          : JC.h('pre', { class: `cout${s.kind === 'error' ? ' err' : ''}` }, s.text))));
+      return d;
+    }));
+    keepScroll(t, !!t.asks?.length);
+    return el;
   }
 
   // Activity: what Claude did as a timeline, finished steps green, the last one live while it works.
