@@ -1,6 +1,7 @@
 // JustCode board: dialogs (settings, plan, report, sources, artifacts, design, guide), prompt history and the agent map.
 // Shares the board's state and helpers through window.JC (set by board.js, which loads first).
 (() => {
+  'use strict';
   // Phone pairing (the phone page and Android app) is not offered on the board yet: its settings section stays hidden.
   const PHONE_UI = false;
   /* ---------- prompt history ---------- */
@@ -126,7 +127,7 @@
     name.select();
   }
 
-  function openPlanner() { open = '__planner'; JC.remember(); JC.render(); }
+  function openPlanner() { JC.open = '__planner'; JC.remember(); JC.render(); }
 
   // The one way to plan with Claude: new tasks from a goal, or rework To do tasks. With a sprint (✦ Edit sprint, or
   // ✦ Plan while a sprint is shown), one prompt edits every not-started task in that sprint. Offers project setup

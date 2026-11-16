@@ -1,6 +1,7 @@
 // JustCode board: approvals and questions on a card, the task panel, and the planning chat.
 // Shares the board's state and helpers through window.JC (set by board.js, which loads first).
 (() => {
+  'use strict';
   /* ---------- approvals and questions ---------- */
   function askBox(t, a) {
     if (a.kind === 'question') return questionBox(t, a);
@@ -71,14 +72,14 @@
 
   /* ---------- task drawer ---------- */
   function openTask(id, t2) {
-    open = id; if (t2) JC.tab = t2;
+    JC.open = id; if (t2) JC.tab = t2;
     JC.agentView = undefined; delete JC.agentsSaved[id];
     JC.remember();
     JC.post('watch', { id });
     if (JC.tab === 'changes') JC.post('changes', { id });
     JC.render();
   }
-  function closeTask() { open = undefined; JC.remember(); JC.post('watch', { id: undefined }); JC.render(); }
+  function closeTask() { JC.open = undefined; JC.remember(); JC.post('watch', { id: undefined }); JC.render(); }
 
   const drawer = JC.$('#drawer');
   const msgImages = [], msgThumbs = JC.h('div', { class: 'imgs' }), msgPaste = JC.imagePaste(msgImages, msgThumbs);
@@ -87,21 +88,21 @@
   } }));
   function sendMsg() {
     const text = msg.value.trim() || (msgImages.length ? 'See the screenshot(s).' : '');
-    if (!text || !open) return;
+    if (!text || !JC.open) return;
     const images = msgImages.splice(0);
-    JC.post(open === '__planner' ? 'plannerSay' : 'say', open === '__planner' ? { text, images } : { id: open, text, images });
+    JC.post(JC.open === '__planner' ? 'plannerSay' : 'say', JC.open === '__planner' ? { text, images } : { id: JC.open, text, images });
     msg.value = ''; msgPaste.draw();
   }
   const body = JC.h('div', { class: 'dbody' });
   const head = JC.h('div', { class: 'dhead' });
   const applyBtn = JC.btn('Apply', () => {}, 'primary');
   applyBtn.hidden = true;
-  const stopBtn = JC.btn('Stop step', () => JC.post(open === '__planner' ? 'stopPlanner' : 'interrupt', open === '__planner' ? {} : { id: open }), 'ghost', 'Interrupt what Claude is doing now (Esc)');
+  const stopBtn = JC.btn('Stop step', () => JC.post(JC.open === '__planner' ? 'stopPlanner' : 'interrupt', JC.open === '__planner' ? {} : { id: JC.open }), 'ghost', 'Interrupt what Claude is doing now (Esc)');
   const foot = JC.h('div', { class: 'dfoot' }, JC.h('div', { class: 'col grow' }, msgThumbs, msg), JC.h('div', { class: 'col' }, applyBtn, JC.btn('Send', sendMsg), stopBtn));
   // A finished task has no session to message: the footer offers a follow-up task instead.
   const doneFoot = JC.h('div', { class: 'dfoot' });
   drawer.append(head, body, foot, doneFoot);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && open && document.activeElement === msg && open !== '__planner') JC.post('interrupt', { id: open }); else if (e.key === 'Escape' && open && !JC.$('#dlg').open) closeTask(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && JC.open && document.activeElement === msg && JC.open !== '__planner') JC.post('interrupt', { id: JC.open }); else if (e.key === 'Escape' && JC.open && !JC.$('#dlg').open) closeTask(); });
 
   let menu = [];
   let fullTitle = null;   // the task whose long title is shown in full (survives re-renders)
@@ -110,8 +111,8 @@
   function renderDrawer() {
     applyBtn.hidden = true;
     foot.hidden = false; doneFoot.hidden = true; stopBtn.hidden = false;   // the planner and running tasks use the message box
-    if (open === '__planner') return renderPlanner();
-    const t = open && (JC.S.board.tasks.find(x => x.id === open) ?? (JC.S.chats || []).find(x => x.id === open));
+    if (JC.open === '__planner') return renderPlanner();
+    const t = JC.open && (JC.S.board.tasks.find(x => x.id === JC.open) ?? (JC.S.chats || []).find(x => x.id === JC.open));
     drawer.classList.toggle('on', !!t);
     document.body.classList.toggle('drawer-open', !!t);
     if (!t) return;

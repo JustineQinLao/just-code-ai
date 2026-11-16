@@ -1,6 +1,7 @@
 // New-task box (webview): prompt, Details, Quick, Add, the / and @ menu and pasted images. Loaded after board.js, which
 // shares its helpers and state through window.JC; this file hands the box's state and helpers back on the same object.
 (() => {
+  'use strict';
   const JC = window.JC, { h, $, btn, post, MODES, sprintSrcs, srcLabel } = JC;
   let more = true;                         // new-task details open
   let images = [];                         // pasted screenshots for the new task

@@ -51,6 +51,15 @@ const EXERCISE = `async () => {
   const run = async (name, fn) => { try { await fn(); await wait(150); out[name] = (document.querySelector('#dlg').open ? document.querySelector('#dlg').innerText.length : document.querySelector('#drawer').innerText.length); } catch (e) { errs.push(name + ': ' + e.message); } };
   for (const tab of ['activity', 'changes', 'review', 'details', 'agents']) await run('task:' + tab, () => JC.openTask(stuck.id, tab));
   JC.closeTask && JC.closeTask();
+  // Activity that arrives after the panel opens shows at once (it once waited for a second click).
+  try {
+    const other = S.board.tasks.find(t => t.id !== stuck.id && t.sessionId) || S.board.tasks.find(t => t.id !== stuck.id);
+    JC.openTask(stuck.id, 'activity'); await wait(50); JC.openTask(other.id, 'activity'); await wait(50);
+    if (JC.open !== other.id) errs.push('openTask did not set JC.open');
+    window.postMessage({ type: 'steps', id: other.id, steps: [{ kind: 'text', text: 'late activity marker', time: new Date().toISOString() }] }, '*'); await wait(150);
+    if (!document.querySelector('#drawer').innerText.includes('late activity marker')) errs.push('late activity not shown until clicked again');
+    JC.closeTask();
+  } catch (e) { errs.push('late activity: ' + e.message); }
   for (const d of ['settings', 'sourcesDialog', 'artifactsDialog', 'report', 'guide', 'designDialog', 'moreMenu', 'agentMap', 'newSprint']) await run(d, () => { document.querySelector('#dlg').open && document.querySelector('#dlg').close(); return JC[d](); });
   await run('history', () => { document.querySelector('#dlg').close(); JC.historyDialog(); window.postMessage({ type: 'history', items: [] }, '*'); });
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });

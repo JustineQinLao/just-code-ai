@@ -2,6 +2,7 @@
 // and sends the user's actions back. Inputs (new task, message box) live outside the re-rendered regions, so a
 // state update never eats what you are typing.
 (() => {
+  'use strict';
   // Inside VS Code the host shows native dialogs. A remote client (phone) supplies window.JC_BRIDGE with
   // postMessage/getState/setState; the host then asks for dialogs over the bridge and this file shows them in #dlg.
   const REMOTE = typeof acquireVsCodeApi !== 'function';
