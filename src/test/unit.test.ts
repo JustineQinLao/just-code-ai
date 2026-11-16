@@ -1376,3 +1376,10 @@ test('app: links from nginx server names (https when ssl) and .env URLs, with a 
   assert.deepEqual(links.map((l: any) => [l.role, l.url]), [['frontend', 'http://localhost:4200'], ['backend', 'http://localhost:8882/api/'], ['other', 'https://viaje.test:8443'], ['other', 'https://www.viaje.test:8443']], 'a name that does not resolve is listed under Other with the hosts fix');
   assert.match(links[2].note, /\/etc\/hosts/);
 });
+
+test('app: after a merge it rebuilds only for build inputs, otherwise restarts', () => {
+  const App = require('../app');
+  assert.equal(App.modeFor(['frontend/src/app/x.ts', 'backend/api/views.py']), 'restart');
+  for (const f of ['Dockerfile', 'frontend/Dockerfile.dev', 'docker-compose.yml', 'frontend/package.json', 'package-lock.json', 'backend/requirements.txt', 'backend/app/migrations/0004_x.py', 'go.mod', 'nginx/nginx.conf'])
+    assert.equal(App.modeFor(['src/a.ts', f]), 'build', f);
+});

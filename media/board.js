@@ -203,7 +203,7 @@
       !REMOTE ? (a => {
         const building = a.busy || a.state === 'building', stopped = !building && (a.state === 'stopped' || !a.state);
         return btn(building ? `⟳ App: building${a.steps?.length ? ` ${(a.stepNo ?? 0) + 1}/${a.steps.length}` : '…'}` : a.state === 'running' ? '● App running' : a.state === 'failed' ? '⚠ App not running' : '▶ Start app',
-          () => { if (stopped) post('appStart'); JC.appDialog(); }, `ghost app-${building ? 'building' : a.state || 'stopped'}`,
+          () => { if (stopped) post('appStart', { mode: 'start' }); JC.appDialog(); }, `ghost app-${building ? 'building' : a.state || 'stopped'}`,
           stopped ? 'Builds the current branch in the project folder, starts it, and shows its frontend and backend links' : 'Frontend and backend links, Rebuild, Stop, log');
       })(S.app || { state: 'stopped' }) : '',
       btn('▶ Run all', () => post('runAll', { ids: todo.map(t => t.id) }), 'primary', `Runs every To do task in board order, ${S.settings.maxParallel} at a time`),

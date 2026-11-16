@@ -427,11 +427,14 @@
         JC.btn('Copy', () => JC.post('copy', { text: l.url }), 'ghost small')))) :
         building ? '' : JC.h('p', { class: 'muted small' }, a.detected ? 'Start builds the project folder and lists its frontend and backend links.' : 'JustCode could not tell how to run this project. Ask Claude to set it up.'),
       JC.h('div', { class: 'row' },
-        building ? JC.btn('Building…', () => {}, 'primary', 'It is building: see the steps above') : JC.btn(a.state === 'running' || a.state === 'failed' ? '↻ Rebuild' : '▶ Start', () => JC.post('appStart'), 'primary', 'Builds the current branch in the project folder and starts it'),
+        ...(building ? [JC.btn('Working…', () => {}, 'primary', 'See the steps above')]
+          : (a.state === 'running' ? [['restart', 'primary'], ['build', 'ghost']] : a.state === 'failed' ? [['build', 'primary'], ['restart', 'ghost']] : [['start', 'primary'], ['build', 'ghost']])
+            .map(([mode, cls]) => JC.btn({ start: '▶ Start', restart: '↻ Restart', build: '⟳ Rebuild' }[mode], () => JC.post('appStart', { mode }), cls,
+              { start: 'Starts it with what is already built (builds only what is missing)', restart: 'Restarts what runs: nothing is built or installed (fast)', build: 'Builds the current branch again (images, dependencies, migrations), then starts it' }[mode]))),
         a.state === 'running' || building ? JC.btn('■ Stop', () => JC.post('appStop'), 'ghost') : '',
         JC.btn('Show in terminal', () => JC.post('appTerminal'), 'ghost', 'The build and run output, live, in a terminal panel'),
         (a.state === 'failed' || !a.detected) && !building ? JC.btn('Ask Claude to fix it', () => { JC.post('appFix'); d.close(); }, 'ghost', 'A ⚡ task in the project folder gets the error and the log') : ''),
-      JC.h('p', { class: 'muted small' }, 'Runs from the project folder on its current branch. It rebuilds by itself when a sprint merges, and after a merge into this branch while it runs, when code changed.'),
+      JC.h('p', { class: 'muted small' }, 'Runs from the project folder on its current branch. After a sprint merges, or a merge into this branch while it runs, it restarts by itself, or rebuilds when the change needs it (Dockerfile, compose, dependencies, migrations).'),
       a.log ? JC.h('details', { open: building || a.state === 'failed' }, JC.h('summary', { class: 'small' }, 'Log'), JC.h('pre', { class: 'small applog' }, a.log.slice(-3000))) : '');
     d.dataset.kind = 'app';
     const pre = d.querySelector('.applog'); if (pre) pre.scrollTop = pre.scrollHeight;   // newest lines in view

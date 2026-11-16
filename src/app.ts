@@ -409,27 +409,32 @@ function killAll(pids?: number[]) {
   for (const pid of pids ?? []) { try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } } }
 }
 
-// Builds (again) and starts the app. One run per project at a time; a second call waits for the first.
-export function start(root: string, why = 'you'): Promise<void> {
+// How a run gets the app up: 'build' rebuilds images and reinstalls; 'start' reuses what is built (building only what
+// is missing); 'restart' restarts what runs, nothing built or installed.
+export type Mode = 'build' | 'start' | 'restart';
+
+// One run per project at a time; a second call waits for the first.
+export function start(root: string, why = 'you', mode: Mode = 'build'): Promise<void> {
   const prev = busy.get(root);
   if (prev) return prev;
-  const job = run(root, why).finally(() => { busy.delete(root); appEvents.emit('change', root); });
+  const job = run(root, why, mode).finally(() => { busy.delete(root); appEvents.emit('change', root); });
   busy.set(root, job);
   appEvents.emit('change', root);
   return job;
 }
 
-async function run(root: string, why: string) {
+async function run(root: string, why: string, mode: Mode) {
   const plan = detect(root);
   const old = load(root);
   if (!plan) { save(root, { state: 'failed', links: [], why, error: 'JustCode could not tell how to run this project. Use "Ask Claude to fix it": Claude sets it up and starts it.' }); return; }
   fs.mkdirSync(dir(root), { recursive: true });
   const log = fs.createWriteStream(logFile(root), { flags: 'w' });
-  log.write(`# ${plan.kind} · ${new Date().toISOString()} · ${why}\n`);
+  log.write(`# ${plan.kind} · ${mode} · ${new Date().toISOString()} · ${why}\n`);
   // The steps the modal lists, with a live timer and the log's last line: refreshed every 1.5 s while it builds.
-  const steps = plan.compose ? ['Check that Docker is running', 'Build and start the containers', 'Find the links', 'Wait until it answers']
-    : plan.dockerfile ? ['Check that Docker is running', 'Build the image', 'Start the container', 'Wait until it answers']
-    : ['Install dependencies and prepare', `Start ${plan.procs.map(p => p.label).join(' and ')}`, 'Find the links', 'Wait until it answers'];
+  const verb = { build: 'Build and start', start: 'Start', restart: 'Restart' }[mode];
+  const steps = plan.compose ? ['Check that Docker is running', `${verb} the containers`, 'Find the links', 'Wait until it answers']
+    : plan.dockerfile ? ['Check that Docker is running', mode === 'build' ? 'Build the image' : 'Use the built image', `${mode === 'restart' ? 'Restart' : 'Start'} the container`, 'Wait until it answers']
+    : [mode === 'build' ? 'Install dependencies and prepare' : 'Prepare (nothing to install)', `${mode === 'restart' ? 'Restart' : 'Start'} ${plan.procs.map(p => p.label).join(' and ')}`, 'Find the links', 'Wait until it answers'];
   const step = (i: number) => save(root, { ...load(root), stepNo: i, stepAt: Date.now() });
   const tick = setInterval(() => appEvents.emit('change', root), 1500);
   save(root, { ...old, state: 'building', kind: plan.kind, why, error: undefined, steps, stepNo: 0, stepAt: Date.now(), buildAt: Date.now(), links: [] });
@@ -443,8 +448,11 @@ async function run(root: string, why: string) {
     if (plan.compose) {
       await dockerUp(root, log);
       step(1);
-      const upCmd = `docker compose -f ${plan.compose} up -d --build --remove-orphans`;
-      try { await sh(upCmd, root, log, 20 * 60_000); } catch (e) {
+      const upCmd = `docker compose -f ${plan.compose} up -d ${mode === 'build' ? '--build ' : ''}--remove-orphans`;
+      try {
+        if (mode === 'restart') await sh(`docker compose -f ${plan.compose} up -d --no-build --remove-orphans && docker compose -f ${plan.compose} restart`, root, log, 5 * 60_000);
+        else await sh(upCmd, root, log, 20 * 60_000);
+      } catch (e) {
         // Compose breakages Docker does not repair itself (a container pointing at a network that is gone, a name
         // still taken, an orphan): take the project's containers down (volumes and data stay) and try once more.
         const tail = read(logFile(root)).slice(-4000);
@@ -467,7 +475,9 @@ async function run(root: string, why: string) {
       const img = imageName(root), expose = Number(/^\s*EXPOSE\s+(\d+)/mi.exec(read(path.join(root, plan.dockerfile)))?.[1]) || 8080;
       const host = await freePort(expose);
       step(1);
-      await sh(`docker build -t ${img} -f ${plan.dockerfile} .`, root, log, 20 * 60_000);
+      const built = await out('docker', ['image', 'inspect', img], root).then(() => true, () => false);
+      if (mode === 'build' || !built) await sh(`docker build -t ${img} -f ${plan.dockerfile} .`, root, log, 20 * 60_000);
+      else log.write(`\nUsing the built image ${img} (Rebuild builds it again).\n`);
       step(2);
       container = img;
       await sh(`docker rm -f ${img} >/dev/null 2>&1; docker run -d --name ${img} -p 127.0.0.1:${host}:${expose}${has(root, '.env') ? ' --env-file .env' : ''} ${img}`, root, log, 120_000);
@@ -476,7 +486,8 @@ async function run(root: string, why: string) {
     } else {
       pids = [];
       const taken = new Set<number>();
-      for (const p of plan.procs) for (const cmd of p.setup ?? []) await sh(cmd, p.cwd, log, 15 * 60_000);
+      // Installs and migrations only on a (re)build, or on a first start that has never installed.
+      for (const p of plan.procs) for (const cmd of p.setup ?? []) if (mode === 'build' || (mode === 'start' && /install|venv|deps\.get|sync/.test(cmd) && !old.head)) await sh(cmd, p.cwd, log, 15 * 60_000);
       step(1);
       for (const p of plan.procs) {
         // The wanted port may be taken (another project, an old run): the next free one, so the link is right.
@@ -537,12 +548,16 @@ export async function stop(root: string) {
 // Is the running copy behind the project folder? Then it rebuilds, for the changes that need it.
 const NO_BUILD = /(^|\/)(docs?|\.justcode|\.github|\.claude|e2e|tests?|__tests__|spec)\/|\.(md|mdx|txt|png|jpe?g|gif|svg|pdf)$|(^|\/)(README|CHANGELOG|LICENSE|TASKS)[^/]*$|\.(spec|test)\.[jt]sx?$/i;
 export const needsBuild = (files: string[]) => files.some(f => !NO_BUILD.test(f));
+// Changes only a rebuild picks up: images, compose, dependencies, migrations. Anything else: a restart is enough.
+const BUILD_INPUT = /(^|\/)(Dockerfile[^/]*|[^/]*\.dockerfile|\.dockerignore|(docker-)?compose[^/]*\.ya?ml|package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|Gemfile(\.lock)?|composer\.(json|lock)|go\.(mod|sum)|Cargo\.(toml|lock)|mix\.(exs|lock)|pom\.xml|build\.gradle(\.kts)?|[^/]*\.csproj|nginx[^/]*\.conf|\.env\.example)$|(^|\/)migrations\//i;
+export const modeFor = (files: string[]): Mode => files.some(f => BUILD_INPUT.test(f)) ? 'build' : 'restart';
 
-// After a sprint merged (always, when code changed) or a task merged into the checked-out branch (when the app runs).
+// After a sprint merged (always, when code changed) or a task merged into the checked-out branch (when the app runs):
+// rebuild only when the change needs it, otherwise restart.
 export async function afterMerge(root: string, files: string[], why: string, always: boolean) {
   if (!needsBuild(files)) return;
   const s = load(root);
   if (!always && s.state !== 'running') return;
   if (!detect(root)) return;
-  await start(root, why);
+  await start(root, why, s.state === 'running' || s.head ? modeFor(files) : 'build');
 }
