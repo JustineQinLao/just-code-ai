@@ -60,7 +60,7 @@
     if (t.status === 'todo') return t.queued ? { text: `Queued #${c.queue.queued.indexOf(id) + 1}${c.queue.blocker ? ` · waits for “${c.queue.blocker.title.slice(0, 40)}”, which ${c.queue.blocker.why}` : ''}`, tone: 'muted', actions: [['▶ Run now', () => post('runNow', { id })]] }
       : { text: 'Ready', tone: 'muted', actions: [['▶ Run', () => post('run', { id })]] };
     if (t.conflicts?.length) return { text: `Conflicts with ${t.base} in ${t.conflicts.length} file(s): ${t.conflicts.slice(0, 3).join(', ')}${t.conflicts.length > 3 ? '…' : ''}`, tone: 'err',
-      actions: [['Resolve with Claude', () => post('resolve', { id })], ['Open task folder', () => post('openFolder', { id })], discard] };
+      actions: [['Resolve with Claude', () => post('resolve', { id })], ['✓ Mark resolved', () => post('resolved', { id }), 'ghost'], ['Open task folder', () => post('openFolder', { id })], discard] };
     if (t.status === 'review' && t.checks?.state === 'fail') {
       const bad = t.checks.results.filter(x => !x.ok && !x.preexisting);
       const first = (bad[0]?.tail || '').split('\n').map(x => x.trim()).find(Boolean);

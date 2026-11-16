@@ -479,7 +479,21 @@ export class Runner {
       const now = await g.dirtyFiles(this.root).catch(() => [] as string[]);
       this.store.updateTask(id, { directFiles: now.filter(f => !before.includes(f)) });
     }
-    if (t.worktree && fs.existsSync(t.worktree) && !t.conflicts?.length) {
+    // Claude resolved the conflicts this turn (no markers, nothing unmerged): finish the merge and carry on to checks,
+    // review and merge, instead of leaving the card on "Conflicts" until someone clicks Mark resolved.
+    let conflicted = !!t.conflicts?.length;
+    if (conflicted && t.worktree && fs.existsSync(t.worktree)) {
+      const unmerged = (await g.git(t.worktree, ['diff', '--name-only', '--diff-filter=U']).catch(() => 'x')).trim();
+      if (!unmerged && !g.markersLeft(t.worktree, t.conflicts!).length) {
+        try {
+          if (await g.merging(t.worktree)) await g.finishResolve(t.worktree);
+          this.store.updateTask(id, { conflicts: undefined, warning: undefined });
+          this.audit('conflicts.resolved', id, t.conflicts!.join(', '), 'justcode');
+          conflicted = false;
+        } catch (e: any) { this.store.updateTask(id, { warning: `Conflicts look resolved, but finishing the merge failed: ${e.message}` }); }
+      }
+    }
+    if (t.worktree && fs.existsSync(t.worktree) && !conflicted) {
       try { committed = await g.commitAll(t.worktree, t.title, this.secretScan()); } catch (e: any) {
         if (e instanceof SecretsFound) return this.secretsBlocked(id, e, cost);
         this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });

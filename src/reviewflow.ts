@@ -38,8 +38,15 @@ export const reviewMethods = {
     this.sweeping = true;
     try {
       for (const t of [...this.store.data.tasks]) {
-        if (t.archived || t.status === 'done' || t.init || t.remote || !t.branch || !t.worktree || t.conflicts?.length || t.error || t.limited) continue;
+        if (t.archived || t.status === 'done' || t.init || t.remote || !t.branch || !t.worktree || t.error || t.limited) continue;
         if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') continue;
+        // Conflicts someone resolved (Claude, or you in the folder) with no session to notice: finish them here.
+        if (t.conflicts?.length) {
+          if (this.busy.has(t.id) || !fs.existsSync(t.worktree)) continue;
+          const unmerged = (await g.git(t.worktree, ['diff', '--name-only', '--diff-filter=U']).catch(() => 'x')).trim();
+          if (!unmerged && !g.markersLeft(t.worktree, t.conflicts).length) await this.markResolved(t.id);
+          continue;
+        }
         if (this.reviews.has(t.id) || this.busy.has(t.id) || this.starting.has(t.id) || this.checking.has(t.id)) continue;
         if (t.status === 'review' && !t.review && !this.emptyAt.has(t.id) && await this.hasWork(t.id)) {
           if (await this.check(t.id) !== 'fail') await this.review(t.id);  // the reviewer only sees work whose checks pass

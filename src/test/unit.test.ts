@@ -1406,3 +1406,23 @@ test('app: a "building" state left by a reloaded window is checked, not waited o
   assert.equal(App.load(root).state, 'running');
   srv.close();
 });
+
+test('conflicts: when Claude resolved and staged them, the turn end finishes the merge and clears the card', async () => {
+  const { execFileSync: x } = require('child_process');
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-conf-'));
+  const git = (...a: string[]) => x('git', a, { cwd: repo, env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } }).toString();
+  git('init', '-q', '-b', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'base\n'); git('add', '-A'); git('commit', '-qm', 'base');
+  git('checkout', '-qb', 'task'); fs.writeFileSync(path.join(repo, 'a.txt'), 'task\n'); git('commit', '-qam', 'task');
+  git('checkout', '-q', 'main'); fs.writeFileSync(path.join(repo, 'a.txt'), 'main\n'); git('commit', '-qam', 'main');
+  git('checkout', '-q', 'task');
+  try { git('merge', '--no-edit', 'main'); } catch { /* the conflict */ }
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'task and main\n'); git('add', 'a.txt');   // what Claude did
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'jc-confs-')));
+  const t = store.addTask({ title: 'T', status: 'doing', mode: 'default', worktree: repo, branch: 'task', base: 'main', conflicts: ['a.txt'] } as any);
+  const { Runner } = require('../runner');
+  const r = new Runner(store, { settings: () => ({ review: { auto: false }, checks: '', setup: '' }), notify: () => {}, limits: { held: () => false, update: () => {}, setReached: () => {} }, bin: () => undefined } as any);
+  await r.turnEnded(t.id, { ok: true, text: 'Resolved.' } as any);
+  assert.equal(store.task(t.id)!.conflicts, undefined);
+  assert.match(git('log', '-1', '--format=%P'), / /, 'the merge commit was made');
+  r.dispose();
+});
