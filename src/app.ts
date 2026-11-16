@@ -433,7 +433,16 @@ async function run(root: string, why: string) {
     if (plan.compose) {
       await dockerUp(root, log);
       step(1);
-      await sh(`docker compose -f ${plan.compose} up -d --build --remove-orphans`, root, log, 20 * 60_000);
+      const upCmd = `docker compose -f ${plan.compose} up -d --build --remove-orphans`;
+      try { await sh(upCmd, root, log, 20 * 60_000); } catch (e) {
+        // Compose breakages Docker does not repair itself (a container pointing at a network that is gone, a name
+        // still taken, an orphan): take the project's containers down (volumes and data stay) and try once more.
+        const tail = read(logFile(root)).slice(-4000);
+        if (!/network [0-9a-f]+ not found|failed to set up container networking|is already in use by container|No such container|orphan|Conflict\. The container name|endpoint .* already exists|has active endpoints/i.test(tail)) throw e;
+        log.write('\nDocker left stale containers or networks behind: recreating them (your data volumes stay)…\n');
+        await sh(`docker compose -f ${plan.compose} down --remove-orphans`, root, log, 5 * 60_000).catch(() => undefined);
+        await sh(`${upCmd} --force-recreate`, root, log, 20 * 60_000);
+      }
       step(2);
       const ps = parsePs(await out('docker', ['compose', '-f', plan.compose, 'ps', '--format', 'json'], root)), env = readEnv(path.join(root, '.env'));
       const published = ps.flatMap(c => (c.Publishers ?? []).filter(p => p.PublishedPort).map(p => ({ target: p.TargetPort ?? 0, port: p.PublishedPort!, service: c.Service })));

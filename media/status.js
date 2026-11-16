@@ -69,6 +69,13 @@
     }
     if (t.reviewing) return { text: `AI reviewer is testing it · ${elapsed(t.reviewing)}`, tone: 'run', actions: [] };
     if (t.status === 'doing') return r?.state === 'fail' ? { text: `Claude is fixing ${open(r).length} review issue(s) (round ${r.attempts} of ${max})`, tone: 'run', actions: [] } : { text: 'Paused', tone: 'muted', actions: [resume] };
+    if (t.quick && t.status === 'review' && (t.appFix || t.title === 'Get the app running') && !c.remote) {
+      const a = c.app || {}, building = a.busy || a.state === 'building', front = (a.links || []).find(l => l.role === 'frontend' && l.up) || (a.links || [])[0];
+      const openApp = ['▶ App', () => c.openApp && c.openApp(), 'ghost'], close = ['✓ Close', () => post('merge', { id }), 'ghost'];
+      if (building) return { text: 'Claude finished: rebuilding the app to check the fix…', tone: 'run', actions: [openApp] };
+      if (a.state === 'running' && front) return { text: `Fixed: the app runs at ${front.url}`, tone: 'ok', actions: [['↗ Open app', () => post('openUrl', { url: front.url })], openApp, close] };
+      return { text: `Still not running${a.error ? `: ${a.error.slice(0, 140)}` : ''}`, tone: 'err', actions: [openApp, ['Reply', () => c.open(id, 'activity')], close] };
+    }
     if (t.quick && t.status === 'review') {
       const n = (t.directFiles || []).length, links = c.remote ? [] : (c.appLinks ? c.appLinks(t.reply) : []);
       return n ? { text: `⚡ Done: changed ${n} file(s)${t.reply ? `. "${t.reply.slice(0, 120)}"` : ''}`, tone: 'ok',

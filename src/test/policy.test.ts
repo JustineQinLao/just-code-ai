@@ -174,3 +174,11 @@ test('status: a finished run-the-app task opens the app, not a wall of text', ()
   assert.deepEqual(posts.pop(), { type: 'openUrl', url: 'http://localhost:4209/sign-in' });
   assert.ok(!status.nextStep(t, { ...c, remote: true }).actions.some((a: any) => /Open app/.test(a[0])));
 });
+
+test('status: an Ask-Claude fix card follows ▶ App, not URLs guessed from the reply', () => {
+  const c = (app: any) => ({ settings: { review: { maxAttempts: 3, auto: true }, maxCheckRounds: 2 }, queue: { queued: [] }, post: () => {}, open: () => {}, lastTool: () => '', appLinks: () => ['http://localhost/'], app });
+  const t = { id: 'f', title: 'Get the app running', status: 'review', quick: true, appFix: true, where: 'direct', reply: 'Frontend: http://localhost/' };
+  assert.match(status.nextStep(t, c({ state: 'failed', error: 'network not found', links: [] })).text, /Still not running: network not found/);
+  assert.match(status.nextStep(t, c({ state: 'building', busy: true })).text, /rebuilding/);
+  assert.match(status.nextStep(t, c({ state: 'running', links: [{ role: 'frontend', url: 'https://viaje.test', up: true }] })).text, /https:\/\/viaje\.test/);
+});
