@@ -358,6 +358,12 @@
           "type": "number",
           "default": 7979,
           "description": "Port for the mobile board server."
+        },
+        "justCode.cleanupAfterDays": {
+          "type": "integer",
+          "default": 14,
+          "minimum": 0,
+          "description": "Finished tasks' transcripts, screenshots, logs and attachments in .justcode/ are deleted this many days after the task finished (briefs, handoffs and reviews stay). 0 = never. Task copies and archived tasks are only removed from 🧹 Clean up."
         }
       }
     },

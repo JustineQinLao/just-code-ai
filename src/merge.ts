@@ -39,8 +39,13 @@ export const mergeMethods = {
     const t = this.store.task(id);
     if (!t || this.busy.has(id)) return;
     this.busy.add(id);
+    // A refused or failed action (Merge, Mark resolved, PR) says why on the card, not only in a toast, until the next try.
+    if (t.warning) this.store.updateTask(id, { warning: undefined });
     this.changed();
-    try { return await this.serial(() => fn(t)); } catch (e: any) { this.d.notify('error', e.message, id); } finally { this.busy.delete(id); this.changed(); }
+    try { return await this.serial(() => fn(t)); } catch (e: any) {
+      if (this.store.task(id)) this.store.updateTask(id, { warning: String(e?.message ?? e).slice(0, 400) });
+      this.d.notify('error', e.message, id);
+    } finally { this.busy.delete(id); this.changed(); }
   },
 
   // Base is brought into the branch first, inside the task's folder; conflicts stop there, never in the user's checkout.

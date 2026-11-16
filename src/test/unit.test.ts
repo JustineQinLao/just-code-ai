@@ -1327,3 +1327,34 @@ test('ignoreJustcode: adds /.justcode/ to .gitignore once, and respects an exist
   g.ignoreJustcode(f);
   assert.equal(fs.readFileSync(path.join(f, '.gitignore'), 'utf8'), 'node_modules\n\n# JustCode (local board, task folders, logs)\n/.justcode/\n');
 });
+
+test('chat never blocks: a chat with changed files is not an open project-folder task', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-od-'));
+  const store = new Store(root);
+  store.addTask({ title: 'Chat', chat: true, where: 'direct', status: 'review', mode: 'default', directFiles: ['a.ts'] } as any);
+  const { Runner } = require('../runner');
+  const r = new Runner(store, { settings: () => ({ review: {} }), notify: () => {}, limits: { held: () => false }, bin: () => undefined } as any);
+  assert.equal(r.openDirect(), undefined);
+  const q = store.addTask({ title: 'Quick fix', where: 'direct', status: 'review', mode: 'default', directFiles: ['b.ts'] } as any);
+  assert.equal(r.openDirect()?.id, q.id);
+  r.dispose();
+});
+
+test('cleanup: finished tasks lose transcripts and screenshots, keep brief and handoff; deleted tasks go whole', () => {
+  const C = require('../cleanup');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-clean-'));
+  const w = (p: string, c = 'x') => { fs.mkdirSync(path.dirname(path.join(root, p)), { recursive: true }); fs.writeFileSync(path.join(root, p), c); };
+  w('.justcode/tasks/done1/transcript.jsonl', 'x'.repeat(5000)); w('.justcode/tasks/done1/brief.md'); w('.justcode/tasks/done1/handoff.md'); w('.justcode/tasks/done1/shots/a.png', 'png');
+  w('.justcode/tasks/live1/transcript.jsonl'); w('.justcode/tasks/gone1/brief.md'); w('.justcode/attachments/gone1/a.png');
+  const tasks = [{ id: 'done1', status: 'done', doneAt: Date.now() - 20 * 86400000 }, { id: 'live1', status: 'doing' }] as any;
+  const items = C.scan(root, tasks);
+  const by = (k: string) => items.find((i: any) => i.kind === k);
+  assert.equal(by('logs').count, 1);
+  assert.equal(by('gone').count, 2);
+  assert.equal(C.scan(root, tasks, 30).find((i: any) => i.kind === 'logs'), undefined, 'not yet 30 days old');
+  C.removeFiles(items.filter((i: any) => i.kind === 'logs' || i.kind === 'gone'));
+  assert.ok(fs.existsSync(path.join(root, '.justcode/tasks/done1/brief.md')) && fs.existsSync(path.join(root, '.justcode/tasks/done1/handoff.md')));
+  assert.ok(!fs.existsSync(path.join(root, '.justcode/tasks/done1/transcript.jsonl')) && !fs.existsSync(path.join(root, '.justcode/tasks/done1/shots')));
+  assert.ok(fs.existsSync(path.join(root, '.justcode/tasks/live1/transcript.jsonl')));
+  assert.ok(!fs.existsSync(path.join(root, '.justcode/tasks/gone1')) && !fs.existsSync(path.join(root, '.justcode/attachments/gone1')));
+});

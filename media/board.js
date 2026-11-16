@@ -177,6 +177,7 @@
     const editable = tasks.filter(t => t.status === 'todo' && !t.worktree && !t.queued);
     const extra = [
       ['+ Sprint', 'Start a new sprint', () => JC.newSprint()],
+      !REMOTE && ['🧹 Clean up .justcode…', 'See what finished tasks, old task copies and archived tasks take up, and delete it', () => JC.cleanupDialog()],
       sprint && editable.length && ['✦ Edit sprint (' + editable.length + ')', `Edit every not-started task in ${sprint.name} with one prompt`, () => S.planner ? JC.openPlanner() : JC.planDialog(editable.map(t => t.id), sprint, true)],
       sprint && !sprint.active && ['Set active', `Make ${sprint.name} the active sprint`, () => post('activateSprint', { sprintId: sprint.id })],
       sprint && ['Close sprint', `Close ${sprint.name}`, () => post('closeSprint', { sprintId: sprint.id })],
@@ -269,6 +270,7 @@
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
+      t.warning ? h('div', { class: 'cardwarn', title: t.warning }, `⚠ ${t.warning}`) : '',
       nx.tone === 'run' ? h('div', { class: 'pulsebar' }) : '',
       ...(t.asks || []).map(a => JC.askBox(t, a)),
       nx.actions.length ? h('div', { class: 'acts' }, nx.actions.map(([l, fn, style], i) => btn(l, fn, i === 0 ? 'primary' : style || 'ghost'))) : '');
@@ -419,6 +421,7 @@
     else if (m.type === 'shots') { shots[m.id] = m.images; if (m.id === open) JC.renderDrawer(); }
     else if (m.type === 'focus') JC.openTask(m.id);
     else if (m.type === 'openApp') JC.appDialog();
+    else if (m.type === 'cleanup') JC.cleanupDialog(m);
     else if (m.type === 'usedSource') { JC.srcOff.delete(m.sourceId); JC.renderAddOptions(); }
     else if (m.type === 'picked') JC.addPicked(m.files);
     else if (m.type === 'dialog') JC.bridged(m);

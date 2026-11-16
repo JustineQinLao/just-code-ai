@@ -125,8 +125,9 @@ export const queueMethods = {
   },
 
   // The direct task (other than `except`) still working or waiting to be finished in the project folder.
+  // A 💬 chat is not one: its edits are yours, like a terminal's, and never hold up a merge or another task.
   openDirect(this: Runner, except?: string) {
-    return this.store.data.tasks.find(o => o.id !== except && o.where === 'direct' && !o.init && !o.archived && o.status !== 'done'
+    return this.store.data.tasks.find(o => o.id !== except && o.where === 'direct' && !o.init && !o.chat && !o.archived && o.status !== 'done'
       && (o.directFiles?.length || this.starting.has(o.id) || this.sessions.get(o.id)?.open));
   },
 

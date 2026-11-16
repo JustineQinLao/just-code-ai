@@ -30,6 +30,8 @@ import { fix, recheck } from './setupflow';
 import { publishArtifact, saveArtifactSource } from './artifact-terminal';
 import { sendSteps } from './boardstate';
 import * as App from './app';
+import * as Cleanup from './cleanup';
+import { sweepStacks } from './docker';
 
 // Messages from the board (desktop or phone) and the actions they start.
 
@@ -390,6 +392,24 @@ export async function handle(m: any, remote = false) {
       return;
     }
     case 'deleteChat': if (!remote && t?.chat) { await r.remove(t.id); } return;
+    case 'cleanupScan': emit({ type: 'cleanup', items: Cleanup.scan(r.root, s.data.tasks) }); return;
+    case 'cleanupRun': {
+      // 🧹 The kinds you ticked. Task copies and archived tasks go through the runner (worktree, branch, Docker stack, board).
+      if (remote) return;
+      const kinds: string[] = Array.isArray(m.kinds) ? m.kinds.map(String) : [];
+      const items = Cleanup.scan(r.root, s.data.tasks).filter(i => kinds.includes(i.kind));
+      const before = items.reduce((n, i) => n + i.bytes, 0);
+      Cleanup.removeFiles(items);
+      for (const it of items) {
+        if (it.kind === 'worktrees') for (const p of it.paths) await g.removeWorktree(r.root, p).catch(e => r.d.notify('warn', `Could not remove ${path.basename(p)}: ${e.message}`));
+        if (it.kind === 'archived') for (const id of it.ids ?? []) await r.remove(id);
+      }
+      const live = s.data.tasks.filter(x => x.worktree && x.status !== 'done' && !x.archived).map(x => x.worktree!);
+      const stacks = await sweepStacks(r.root, live).catch(() => [] as string[]);
+      r.audit('cleanup', undefined, `${kinds.join(', ')}: ${Cleanup.human(before)}${stacks.length ? `, ${stacks.length} Docker stack(s)` : ''}`, who);
+      emit({ type: 'cleanup', items: Cleanup.scan(r.root, s.data.tasks), freed: before, stacks: stacks.length });
+      return push();
+    }
     case 'appStart': if (!remote) void App.start(r.root); return;
     case 'appStop': if (!remote) await App.stop(r.root); return;
     case 'appLog': if (!remote) void vscode.window.showTextDocument(vscode.Uri.file(App.logFile(r.root))); return;

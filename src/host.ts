@@ -17,6 +17,7 @@ import * as R from './registry';
 import * as Audit from './audit';
 import { writeSprintReport } from './report';
 import { loadPolicy, policyFile } from './policy';
+import * as Cleanup from './cleanup';
 import type { Actor } from './audit';
 import * as C from './checks';
 import * as D from './design';
@@ -111,7 +112,8 @@ export const runnerFor = (root: string) => {
       const pref = setting<string>('notifications', 'actionable');
       if (pref === 'off' || (pref === 'errors' && level !== 'error')) return;
       if (!toast && level !== 'error') return;
-      if (taskId && st.panel?.visible && st.current === root) return;
+      // An error always shows: a refused Merge, for one, leaves nothing on the card.
+      if (taskId && st.panel?.visible && st.current === root && level !== 'error') return;
       const key = `${root}\n${text}`, now = Date.now();
       if ((recent.get(key) ?? 0) > now - 60_000) return;
       recent.set(key, now);
@@ -137,6 +139,16 @@ export const runnerFor = (root: string) => {
   r.store.onChange(push);
   r.store.watch();
   runners.set(root, r);
+  // 🧹 Finished tasks' transcripts, screenshots, logs and attachments go after justCode.cleanupAfterDays (0 = never).
+  // Task copies and archived tasks are only removed from the Clean up dialog, where you see them first.
+  const days = setting<number>('cleanupAfterDays', 14);
+  if (days > 0) setTimeout(() => {
+    try {
+      const items = Cleanup.scan(root, r!.store.data.tasks, days).filter(i => i.kind === 'logs' || i.kind === 'attachments' || i.kind === 'gone' || i.kind === 'scratch');
+      const freed = Cleanup.removeFiles(items);
+      if (freed > 1 << 20) out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] info: cleaned ${Cleanup.human(freed)} of finished tasks' files older than ${days} days`);
+    } catch { /* a busy file: next start */ }
+  }, 15_000).unref?.();
   return r;
 };
 

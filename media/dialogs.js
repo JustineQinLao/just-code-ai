@@ -380,6 +380,27 @@
       !JC.REMOTE ? JC.h('div', { class: 'row' }, JC.btn('Open policy.json', () => JC.post('openPolicy'), 'ghost'), JC.btn('Export audit log', () => JC.post('exportAudit'), 'ghost')) : '');
   }
 
+  // 🧹 Clean up: what .justcode/ holds that can go, with sizes; you tick what to delete.
+  const cleanPick = new Set(['logs', 'attachments', 'gone', 'scratch']);   // safe kinds ticked by default
+  function cleanupDialog(m) {
+    if (!m) { dialog('Clean up .justcode', JC.h('p', { class: 'muted' }, 'Measuring…')).dataset.kind = 'cleanup'; JC.post('cleanupScan'); return; }
+    const d0 = JC.$('#dlg');
+    if (!d0.open || d0.dataset.kind !== 'cleanup') return;
+    const items = m.items || [], human = b => b >= 1 << 30 ? `${(b / (1 << 30)).toFixed(1)} GB` : b >= 1 << 20 ? `${(b / (1 << 20)).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`;
+    const total = () => items.filter(i => cleanPick.has(i.kind)).reduce((n, i) => n + i.bytes, 0);
+    let go;
+    const d = dialog('Clean up .justcode',
+      m.freed !== undefined ? JC.h('p', { class: 'ok' }, `Freed ${human(m.freed)}${m.stacks ? ` and stopped ${m.stacks} Docker stack(s)` : ''}.`) : '',
+      items.length ? JC.h('ul', { class: 'cleanlist' }, items.map(i => JC.h('li', {},
+        JC.h('label', { class: 'row' }, JC.h('input', { type: 'checkbox', checked: cleanPick.has(i.kind), onchange: e => { e.target.checked ? cleanPick.add(i.kind) : cleanPick.delete(i.kind); go.textContent = `Delete ${human(total())}`; } }),
+          JC.h('span', { class: 'grow' }, JC.h('b', {}, i.label), JC.h('span', { class: 'muted small' }, ` · ${i.count} · ${human(i.bytes)}`)),
+          ['worktrees', 'archived'].includes(i.kind) ? JC.h('span', { class: 'tag warn' }, 'cannot be undone') : ''),
+        JC.h('p', { class: 'muted small' }, i.detail)))) : JC.h('p', { class: 'muted' }, 'Nothing to clean: .justcode holds only what the board uses.'),
+      JC.h('p', { class: 'muted small' }, 'Always kept: the board, policy, audit log, project.md, design, sources, and every unfinished task\'s files. Finished tasks\' transcripts, screenshots and attachments are also deleted by themselves after the days set in justCode.cleanupAfterDays (default 14).'),
+      items.length ? JC.h('div', { class: 'row' }, go = JC.btn(`Delete ${human(total())}`, () => { go.disabled = true; go.textContent = 'Cleaning…'; JC.post('cleanupRun', { kinds: [...cleanPick] }); }, 'primary')) : '');
+    d.dataset.kind = 'cleanup';
+  }
+
   // ▶ App: the project run from its folder (current branch), its links, and Start / Rebuild / Stop. No task, no Claude.
   function appDialog() {
     const a = JC.S.app || { state: 'stopped', links: [] }, building = a.busy || a.state === 'building';
@@ -473,5 +494,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, setupDialog, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, appDialog, designDialog, guide });
+  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, setupDialog, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, appDialog, cleanupDialog, designDialog, guide });
 })();

@@ -70,6 +70,7 @@ test('policy on runs and merges: forbidden mode and model refused, bypass-all ne
   await r.merge(u.id);
   assert.match(notes.pop()!, /requires passing checks/);
   assert.notEqual(store.task(u.id)!.status, 'done');
+  assert.match(store.task(u.id)!.warning ?? '', /requires passing checks/, 'a refused Merge says why on the card');
   r.dispose();
 });
 
