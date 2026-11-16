@@ -310,7 +310,7 @@ export function nginxHosts(root: string): { host: string; ssl: boolean }[] {
       for (const block of text.split(/\bserver\s*\{/).slice(1)) {
         const ssl = /listen\s+[^;]*\b443\b|listen\s+[^;]*\bssl\b|ssl_certificate\s/.test(block);
         for (const m of block.matchAll(/server_name\s+([^;]+);/g))
-          for (const h of m[1].trim().split(/\s+/)) if (!LOCAL_NAME.test(h) && !/[~$*]/.test(h)) found.set(h, (found.get(h) ?? false) || ssl);
+          for (const h of m[1].trim().split(/[\s,]+/).filter(Boolean)) if (!LOCAL_NAME.test(h) && !/[~$*]/.test(h)) found.set(h, (found.get(h) ?? false) || ssl);
       }
     }
   };
@@ -333,14 +333,24 @@ export async function configuredLinks(root: string, env: Record<string, string>,
     const via = ssl && tls ? { scheme: 'https', p: tls.port, std: 443 } : plain ? { scheme: 'http', p: plain.port, std: 80 } : ssl ? { scheme: 'https', p: 443, std: 443 } : undefined;
     if (via) add({ label: `nginx ${host}`, url: `${via.scheme}://${host}${via.p === via.std ? '' : `:${via.p}`}`, role: 'frontend' });
   }
+  // Only addresses that lead to this machine are the local app. A name that resolves to the internet is a real
+  // deployment (production, staging): left out. One that does not resolve is listed under Other with the hosts-file fix.
+  const isLoop = (ip: string) => /^127\.|^::1$|^0\.0\.0\.0$|^::ffff:127\./.test(ip);
+  const kept: AppLink[] = [];
   for (const l of links) {
     const host = (() => { try { return new URL(l.url).hostname; } catch { return ''; } })();
-    if (!host || LOCAL_NAME.test(host)) continue;
-    const ok = await new Promise<boolean>(res => dns.lookup(host, e => res(!e)));
-    if (!ok) l.note = `${host} does not resolve on this machine: add "127.0.0.1 ${host}" to /etc/hosts`;
+    if (!host) continue;
+    if (LOCAL_NAME.test(host)) { kept.push(l); continue; }
+    const ips = await new Promise<string[]>(res => dns.lookup(host, { all: true }, (e, a) => res(e ? [] : (a as dns.LookupAddress[]).map(x => x.address))));
+    if (ips.length && !ips.some(isLoop)) continue;
+    const sub = host.split('.')[0];
+    l.role = /^(api|backend|server|graphql|gql)$/i.test(sub) ? 'backend' : /^(docs?|s3|s3console|minio|console|admin|mail|status|grafana|cdn|assets|static|storybook)$/i.test(sub) ? 'other' : l.role;
+    if (!ips.length) { l.role = 'other'; l.note = `${host} does not resolve here: add "127.0.0.1 ${host}" to /etc/hosts to use it`; }
     else if (l.url.startsWith('https:')) l.note = 'self-signed? Your browser may ask you to accept the certificate once';
+    kept.push(l);
   }
-  return links;
+  const order: Record<Role, number> = { frontend: 0, backend: 1, other: 2 };
+  return kept.sort((a, b) => order[a.role] - order[b.role]).slice(0, 10);
 }
 async function waitUp(links: AppLink[], ms: number, refresh?: () => void) {
   // Done when every link answers, or when a frontend does and the rest had 20 s more (a name that does not resolve
