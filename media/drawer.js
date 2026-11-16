@@ -334,7 +334,7 @@
       const d = JC.h('details', { class: `csteps${now ? ' now' : ''}${errs ? ' haserr' : ''}`, ...(openGroups.has(key) ? { open: true } : {}),
         ontoggle: e => e.target.open ? openGroups.add(key) : openGroups.delete(key) },
         JC.h('summary', {}, JC.h('span', { class: 'cdot' }),
-          now ? `Working · ${tools.length ? tools[tools.length - 1].text.slice(0, 80) : '…'}` : `Ran ${tools.length || it.steps.length} ${tools.length === 1 ? 'step' : 'steps'}${kinds ? ` · ${kinds}` : ''}${errs ? ` · ${errs} failed` : ''}`),
+          now ? [`Working · ${tools.length ? tools[tools.length - 1].text.slice(0, 80) : '…'}`, tools.length && tools[tools.length - 1].time ? JC.h('span', { class: 'elapsed', 'data-since': Date.parse(tools[tools.length - 1].time) }) : ''] : `Ran ${tools.length || it.steps.length} ${tools.length === 1 ? 'step' : 'steps'}${kinds ? ` · ${kinds}` : ''}${errs ? ` · ${errs} failed` : ''}`),
         JC.h('div', { class: 'csteplist' }, it.steps.map(s => s.kind === 'tool' ? JC.h('code', { class: 'ccmd' }, s.text)
           : JC.h('pre', { class: `cout${s.kind === 'error' ? ' err' : ''}` }, s.text))));
       return d;
@@ -354,7 +354,7 @@
       if (s.kind === 'say') return JC.h('div', { class: `${cls} md` }, ...JC.md(txt));
       if (s.kind === 'user') return JC.h('div', { class: `${cls} md you` }, JC.h('b', {}, 'You'), ...JC.md(txt));
       if (s.kind === 'result') return JC.h('pre', { class: 'tlout' }, txt);
-      return JC.h('p', { class: cls }, last ? JC.h('b', {}, txt) : s.kind === 'tool' ? txt : JC.rich(txt));
+      return JC.h('p', { class: cls }, last ? [JC.h('b', {}, txt), s.time ? JC.h('span', { class: 'elapsed muted small', 'data-since': Date.parse(s.time) }) : ''] : s.kind === 'tool' ? txt : JC.rich(txt));
     }));
     // The ask boxes (above the timeline) stay in view while Claude waits for an answer.
     keepScroll(t, !!t.asks?.length);

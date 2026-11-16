@@ -432,6 +432,13 @@
     else if (m.type === 'showSetup') { showSetup = true; render(); }
   });
   // Live timers (working for 2m 10s) tick without a state change.
+  // A running step shows how long it has been running (" · 2:31"), so a long wait is visibly alive.
+  setInterval(() => {
+    for (const el of document.querySelectorAll('.elapsed[data-since]')) {
+      const s = Math.max(0, Math.round((Date.now() - Number(el.dataset.since)) / 1000));
+      el.textContent = ` · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}${s >= 120 ? ' (still running)' : ''}`;
+    }
+  }, 1000);
   setInterval(() => {
     if (!S || S.empty) return;
     if (S.board.tasks.some(t => t.run === 'running' || t.reviewing)) { renderLanes(); if (open && tab === 'agents') JC.renderDrawer(); }

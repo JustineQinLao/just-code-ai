@@ -1365,3 +1365,14 @@ test('app: a command that hangs is stopped at its timeout, with everything it st
   assert.equal(typeof await App.pingDocker(), 'boolean');
   assert.ok(Date.now() - t0 < 15000, 'the Docker check never hangs');
 });
+
+test('app: links from nginx server names (https when ssl) and .env URLs, with a note for a name that does not resolve', async () => {
+  const App = require('../app');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-ngx-'));
+  fs.mkdirSync(path.join(d, 'nginx'));
+  fs.writeFileSync(path.join(d, 'nginx', 'default.conf'), 'server { listen 80; server_name _; }\nserver { listen 443 ssl; server_name viaje.test www.viaje.test; ssl_certificate /c.pem; }\nserver { listen 80; server_name localhost; }');
+  assert.deepEqual(App.nginxHosts(d), [{ host: 'viaje.test', ssl: true }, { host: 'www.viaje.test', ssl: true }]);
+  const links = await App.configuredLinks(d, { FRONTEND_URL: 'http://localhost:4200', API_URL: 'http://localhost:8882/api/', SECRET: 'x' }, [{ target: 443, port: 8443, service: 'nginx' }, { target: 80, port: 8080, service: 'nginx' }]);
+  assert.deepEqual(links.map((l: any) => [l.role, l.url]), [['frontend', 'http://localhost:4200'], ['backend', 'http://localhost:8882/api/'], ['frontend', 'https://viaje.test:8443'], ['frontend', 'https://www.viaje.test:8443']]);
+  assert.match(links[2].note, /\/etc\/hosts/);
+});

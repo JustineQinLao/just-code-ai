@@ -58,7 +58,7 @@ export async function handle(m: any, remote = false) {
     case 'removeProject': return removeProject(m.root);
     case 'fix': return fix(m.action);
     case 'guideSeen': await st.ctx.globalState.update('guideSeen', true); return;
-    case 'openUrl': if (/^https:\/\//.test(m.url) || (!remote && /^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/.test(m.url))) { if (remote) hub.emit({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
+    case 'openUrl': if (/^https:\/\//.test(m.url) || (!remote && (/^http:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/.test(m.url) || [...runners.keys()].some(root => App.load(root).links.some(l => l.url === m.url))))) { if (remote) hub.emit({ type: 'open', url: m.url }); else void vscode.env.openExternal(vscode.Uri.parse(m.url)); } return;
     case 'settings':
       if (m.values && 'bypassAll' in m.values) {
         if (m.values.bypassAll === true && !bypassAllOn() && !await canEnableBypassAll(remote, () => ensureBypassAll())) m = { ...m, values: { ...m.values, bypassAll: false } };
@@ -418,10 +418,11 @@ export async function handle(m: any, remote = false) {
       // The app would not come up: a ⚡ task in the project folder, with what JustCode tried and the log.
       if (remote) return;
       const a = App.view(r.root);
-      const task = s.addTask({ title: 'Get the app running', where: 'direct', quick: true, mode: setting('defaultMode', 'auto'),
+      const task = s.addTask({ title: 'Get the app running', where: 'direct', quick: true, appFix: true, mode: setting('defaultMode', 'auto'),
         description: `JustCode could not run this project's app from the project folder${a.kind ? ` (detected: ${a.kind})` : ''}: ${a.error ?? 'it did not answer'}.\n\n` +
-          `Last lines of .justcode/app.log:\n\`\`\`\n${a.log.slice(-2500)}\n\`\`\`\n\nFix the environment or setup so it builds and answers (prefer config such as .env or ` +
-          'a missing dependency over code changes), start it detached, and confirm the frontend and backend answer. Reply short: "Frontend: <url>", "Backend: <url>", then one line on what you fixed.' });
+          `Last lines of .justcode/app.log:\n\`\`\`\n${a.log.slice(-2500)}\n\`\`\`\n\nFix the environment or setup so it builds and starts (prefer config such as .env, a missing dependency ` +
+          'or a stale container over code changes). Do not wait for it in long loops and do not check its URLs yourself: when you finish your turn, ' +
+          'JustCode rebuilds it and checks every link (nginx server names and .env URLs included), and shows the result in ▶ App. Reply short: what was wrong and what you changed.' });
       r.audit('task.create', task.id, task.title, who);
       await r.run(task.id);
       return;

@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
 import { sweepStacks } from './docker';
+import * as App from './app';
 import { setupSkillBody, designFromCodeBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
@@ -487,6 +488,7 @@ export class Runner {
     }
     if (t.sessionId) try { A.archiveTranscript(this.root, id, transcript(t.worktree ?? this.root, t.sessionId), t.sessionId); } catch { /* the archive is a convenience */ }
     const reply = turn.text.trim().slice(-4000) || undefined;
+    if (t.appFix) void App.start(this.root, 'after Claude\'s fix').catch(() => undefined);   // ▶ App shows whether the fix worked
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
     else this.store.updateTask(id, { status: t.status === 'done' ? 'done' : 'review', live: undefined, reply, costUsd: cost });
     if (!t.init && this.checkBudget(id)) return;

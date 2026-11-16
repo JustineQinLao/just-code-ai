@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as net from 'net';
 import * as http from 'http';
+import * as https from 'https';
+import * as dns from 'dns';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import { EventEmitter } from 'events';
@@ -15,7 +17,7 @@ import { EventEmitter } from 'events';
 // corrected from the dev server's own "http://localhost:NNNN" line when it prints one.
 
 export type Role = 'frontend' | 'backend' | 'other';
-export interface AppLink { label: string; url: string; role: Role; up?: boolean }
+export interface AppLink { label: string; url: string; role: Role; up?: boolean; note?: string }
 export interface AppState {
   state: 'stopped' | 'building' | 'running' | 'failed';
   kind?: string;          // what was detected: "Docker Compose", "Angular + Django", …
@@ -276,15 +278,80 @@ export async function freePort(want: number, taken: Set<number> = new Set()) {
   return want;
 }
 
-async function up(url: string) {
-  try { const r = await fetch(url, { signal: AbortSignal.timeout(3000), redirect: 'manual' }); return r.status < 500; } catch { return false; }
+// Does it answer? Any status under 500, redirects included; a self-signed certificate (local nginx) counts.
+export function up(url: string): Promise<boolean> {
+  return new Promise(res => {
+    let u: URL;
+    try { u = new URL(url); } catch { return res(false); }
+    const lib = u.protocol === 'https:' ? https : http;
+    const req = lib.request(u, { method: 'GET', timeout: 3000, ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}) }, r => { r.resume(); res((r.statusCode ?? 500) < 500); });
+    req.on('timeout', () => { req.destroy(); res(false); }); req.on('error', () => res(false)); req.end();
+  });
+}
+
+/* ---------- configured addresses: .env URLs and nginx server names ---------- */
+
+const FRONT_KEY = /^(NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|PUBLIC_)?(APP|FRONTEND|SITE|WEB|CLIENT|BASE|PUBLIC)_?URL$/i;
+const BACK_KEY = /^(NEXT_PUBLIC_|VITE_|REACT_APP_|NUXT_PUBLIC_|PUBLIC_)?(API|BACKEND|SERVER)_?(BASE_?)?URL$/i;
+const LOCAL_NAME = /^(_|localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|::1?)$/i;
+
+// Server names the project's nginx config answers on, and whether it serves them over https.
+export function nginxHosts(root: string): { host: string; ssl: boolean }[] {
+  const found = new Map<string, boolean>();
+  const walk = (d: string, depth: number) => {
+    for (const f of files(d)) {
+      if (/^(node_modules|\.git|\.justcode|vendor|dist|build|\.venv|venv)$/.test(f)) continue;
+      const p = path.join(d, f);
+      let st: fs.Stats; try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) { if (depth < 4) walk(p, depth + 1); continue; }
+      if (!/(nginx.*|\.conf|\.conf\.template|\.nginx)$/i.test(f) || st.size > 200_000) continue;
+      const text = read(p);
+      if (!/server\s*\{/.test(text)) continue;
+      for (const block of text.split(/\bserver\s*\{/).slice(1)) {
+        const ssl = /listen\s+[^;]*\b443\b|listen\s+[^;]*\bssl\b|ssl_certificate\s/.test(block);
+        for (const m of block.matchAll(/server_name\s+([^;]+);/g))
+          for (const h of m[1].trim().split(/\s+/)) if (!LOCAL_NAME.test(h) && !/[~$*]/.test(h)) found.set(h, (found.get(h) ?? false) || ssl);
+      }
+    }
+  };
+  walk(root, 0);
+  return [...found].map(([host, ssl]) => ({ host, ssl }));
+}
+
+// Addresses the project itself says it is opened at: .env URL variables, then nginx server names on the published
+// http/https ports. A name this machine cannot resolve gets a note on how to reach it.
+export async function configuredLinks(root: string, env: Record<string, string>, published: { target: number; port: number; service: string }[]): Promise<AppLink[]> {
+  const links: AppLink[] = [];
+  const add = (l: AppLink) => { if (!links.some(x => x.url.replace(/\/$/, '') === l.url.replace(/\/$/, ''))) links.push(l); };
+  for (const [k, v] of Object.entries(env)) {
+    if (!/^https?:\/\//.test(v)) continue;
+    if (FRONT_KEY.test(k)) add({ label: k, url: v, role: 'frontend' }); else if (BACK_KEY.test(k)) add({ label: k, url: v, role: 'backend' });
+  }
+  const web = published.filter(p => p.target === 80 || p.target === 443 || p.target === 8080 || p.target === 8443);
+  for (const { host, ssl } of nginxHosts(root)) {
+    const tls = web.find(p => p.target === 443 || p.target === 8443), plain = web.find(p => p.target === 80 || p.target === 8080);
+    const via = ssl && tls ? { scheme: 'https', p: tls.port, std: 443 } : plain ? { scheme: 'http', p: plain.port, std: 80 } : ssl ? { scheme: 'https', p: 443, std: 443 } : undefined;
+    if (via) add({ label: `nginx ${host}`, url: `${via.scheme}://${host}${via.p === via.std ? '' : `:${via.p}`}`, role: 'frontend' });
+  }
+  for (const l of links) {
+    const host = (() => { try { return new URL(l.url).hostname; } catch { return ''; } })();
+    if (!host || LOCAL_NAME.test(host)) continue;
+    const ok = await new Promise<boolean>(res => dns.lookup(host, e => res(!e)));
+    if (!ok) l.note = `${host} does not resolve on this machine: add "127.0.0.1 ${host}" to /etc/hosts`;
+    else if (l.url.startsWith('https:')) l.note = 'self-signed? Your browser may ask you to accept the certificate once';
+  }
+  return links;
 }
 async function waitUp(links: AppLink[], ms: number, refresh?: () => void) {
+  // Done when every link answers, or when a frontend does and the rest had 20 s more (a name that does not resolve
+  // must not hold the whole build for minutes).
   const end = Date.now() + ms;
+  let frontAt = 0;
   for (;;) {
     refresh?.();
     for (const l of links) if (!l.up) l.up = await up(l.url);
-    if (links.every(l => l.up) || Date.now() > end) return;
+    if (!frontAt && links.some(l => l.role === 'frontend' && l.up)) frontAt = Date.now();
+    if (links.every(l => l.up) || (frontAt && Date.now() - frontAt > 20_000) || Date.now() > end) return;
     await new Promise(r => setTimeout(r, 2000));
   }
 }
@@ -368,7 +435,13 @@ async function run(root: string, why: string) {
       step(1);
       await sh(`docker compose -f ${plan.compose} up -d --build --remove-orphans`, root, log, 20 * 60_000);
       step(2);
-      links = composeLinks(parsePs(await out('docker', ['compose', '-f', plan.compose, 'ps', '--format', 'json'], root)), readEnv(path.join(root, '.env')));
+      const ps = parsePs(await out('docker', ['compose', '-f', plan.compose, 'ps', '--format', 'json'], root)), env = readEnv(path.join(root, '.env'));
+      const published = ps.flatMap(c => (c.Publishers ?? []).filter(p => p.PublishedPort).map(p => ({ target: p.TargetPort ?? 0, port: p.PublishedPort!, service: c.Service })));
+      // The project's own addresses (nginx server names, .env URLs) come first; the localhost ports stay listed after them.
+      const named = await configuredLinks(root, env, published);
+      const local = composeLinks(ps, env);
+      if (named.some(l => l.role === 'frontend')) for (const l of local) if (l.role === 'frontend') l.role = 'other';
+      links = [...named, ...local.filter(l => !named.some(n => n.url.replace(/\/$/, '') === l.url))];
     } else if (plan.dockerfile) {
       // A lone Dockerfile: build it and publish the port it EXPOSEs on the same port (or the next free one).
       await dockerUp(root, log);
@@ -415,6 +488,10 @@ async function run(root: string, why: string) {
     };
     if (!plan.compose) step(plan.dockerfile ? 3 : 2);
     if (printed.size) { const end = Date.now() + 90_000; while (!links.length && Date.now() < end) { refresh(); await new Promise(r => setTimeout(r, 1500)); } }
+    if (!plan.compose) {
+      const named = await configuredLinks(root, readEnv(path.join(root, '.env')), []);
+      if (named.length) { if (named.some(l => l.role === 'frontend')) for (const l of links) if (l.role === 'frontend') l.role = 'other'; links.unshift(...named.filter(n => !links.some(l => l.url === n.url))); }
+    }
     // A backend-only app (Django templates, Rails, Laravel…) is what the user opens.
     if (links.length && !links.some(l => l.role === 'frontend')) links[0].role = 'frontend';
     if (!links.length) throw new Error('It started, but JustCode found no web address (no published port and none printed). See the log, or use "Ask Claude to fix it".');
@@ -422,7 +499,7 @@ async function run(root: string, why: string) {
     save(root, { ...load(root), state: 'building', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head, stepNo: steps.length - 1, stepAt: Date.now() });
     // Each link shows "answers" as soon as it does.
     await waitUp(links, 5 * 60_000, () => { refresh(); save(root, { ...load(root), links: links.map(l => ({ ...l })) }); });
-    const front = links.find(l => l.role === 'frontend') ?? links[0];
+    const front = links.find(l => l.role === 'frontend' && l.up) ?? links.find(l => l.role === 'frontend') ?? links[0];
     save(root, { ...load(root), state: front.up ? 'running' : 'failed', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head,
       error: front.up ? undefined : `${front.url} does not answer after 5 minutes. The log says why; "Ask Claude to fix it" can repair the setup.` });
   } catch (e: any) {

@@ -33,6 +33,7 @@ export interface Task {
   pr?: string;                // remote PR URL, when pushed
   review?: Review;            // AI review of the task's branch
   limited?: boolean;          // a usage limit stopped this task; it continues by itself after the reset
+  appFix?: boolean;           // "Ask Claude to fix it" from ▶ App: when its turn ends, the app is rebuilt and checked
   chatAt?: number;            // 💬 Chat: when it was last used (the history list's order)
   chat?: boolean;             // 💬 Chat: a conversation in the project folder; never on the board, no commit, checks, review or merge
   quick?: boolean;            // ⚡ Quick: runs at once in the workspace; no checks, no AI review (Finish or Discard after)

@@ -525,3 +525,4 @@ b.app-failed { color: var(--err); }
 .appsteps li.todo { color: var(--muted); }
 .appsteps li.now .mark::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--work); animation: jcpulse 1.2s ease-in-out infinite; }
 .appsteps .last { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; margin-top: 2px; }
+.warnnote { color: var(--needs, #b7791f); margin-top: 2px; }

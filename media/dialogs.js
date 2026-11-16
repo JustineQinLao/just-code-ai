@@ -420,7 +420,8 @@
       steps,
       a.error && !building ? JC.h('p', { class: 'err small' }, a.error) : '',
       (a.links || []).length ? JC.h('ul', { class: 'applinks' }, a.links.map(l => JC.h('li', { class: 'row' },
-        JC.h('span', { class: 'tag' }, role[l.role] || l.role), JC.h('span', { class: 'grow' }, JC.h('a', { href: '#', onclick: e => { e.preventDefault(); JC.post('openUrl', { url: l.url }); } }, l.url), JC.h('span', { class: 'muted small' }, ` ${l.label}`)),
+        JC.h('span', { class: 'tag' }, role[l.role] || l.role), JC.h('span', { class: 'grow' }, JC.h('a', { href: '#', onclick: e => { e.preventDefault(); JC.post('openUrl', { url: l.url }); } }, l.url), JC.h('span', { class: 'muted small' }, ` ${l.label}`),
+          l.note ? JC.h('div', { class: 'small warnnote' }, l.note) : ''),
         JC.h('span', { class: `small ${l.up ? 'ok' : 'muted'}` }, l.up ? '● answers' : building ? 'waiting…' : '○ no answer'),
         JC.btn('Open', () => JC.post('openUrl', { url: l.url }), l.role === 'frontend' ? 'primary small' : 'ghost small'),
         JC.btn('Copy', () => JC.post('copy', { text: l.url }), 'ghost small')))) :

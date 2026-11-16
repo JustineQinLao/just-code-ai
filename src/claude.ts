@@ -141,6 +141,8 @@ export const TASK_APPEND = `You are running as a JustCode task: one focused chan
 Work efficiently: read only the files the task needs, prefer Grep/Glob over broad directory reads, and do not re-read files you already have.
 Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
 (e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands to verify your work.
+Never wait in long loops (sleep inside for/while, retries for minutes): one command should finish within about a minute.
+To wait for something, check once, then check again in a later command, so the user sees progress.
 Exception: when the task itself asks you to run, start or serve the app (so the user can open it), start it detached so your turn can end
 (e.g. docker compose up -d --build, or a background process with its output in a log file), wait until it answers, then give the frontend and backend URLs (from the .env the build uses: its host and port variables) and any logins, and leave it running.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
@@ -150,7 +152,8 @@ If the superpowers plugin is loaded, follow its test-driven-development and veri
 // 💬 Chat: Claude Code as in a terminal, in the project folder. No brief, handoff, checks, review or merge.
 export const CHAT_APPEND = `You are chatting with the user through JustCode, in their project folder, the way Claude Code works in a terminal.
 Answer questions, explain code, run commands and change files when they ask. Nothing you do here is reviewed, committed or merged by JustCode:
-the user commits themselves. Keep replies short and concrete. Do not start long-running servers in the foreground: start them detached.`;
+the user commits themselves. Keep replies short and concrete. Do not start long-running servers in the foreground: start them detached.
+Never wait in long loops (sleep inside for/while): one command should finish within about a minute, so the user sees progress.`;
 
 // Which Claude settings a session loads. Lean (default): the project's own (.claude/, CLAUDE.md, settings.local.json),
 // not your personal plugins, skills, memory and MCP servers, which add ~7k tokens to every request. Your personal
