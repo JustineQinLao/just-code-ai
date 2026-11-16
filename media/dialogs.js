@@ -419,12 +419,17 @@
         JC.h('span', { class: 'muted' }, ` · ${a.kind || a.detected || 'not detected'}${a.head ? ` · ${a.head}` : ''}${a.why && a.why !== 'you' ? ` · ${a.why}` : ''}`)),
       steps,
       a.error && !building ? JC.h('p', { class: 'err small' }, a.error) : '',
-      (a.links || []).length ? JC.h('ul', { class: 'applinks' }, a.links.map(l => JC.h('li', { class: 'row' },
-        JC.h('span', { class: 'tag' }, role[l.role] || l.role), JC.h('span', { class: 'grow' }, JC.h('a', { href: '#', onclick: e => { e.preventDefault(); JC.post('openUrl', { url: l.url }); } }, l.url), JC.h('span', { class: 'muted small' }, ` ${l.label}`),
-          l.note ? JC.h('div', { class: 'small warnnote' }, l.note) : ''),
-        JC.h('span', { class: `small ${l.up ? 'ok' : 'muted'}` }, l.up ? '● answers' : building ? 'waiting…' : '○ no answer'),
-        JC.btn('Open', () => JC.post('openUrl', { url: l.url }), l.role === 'frontend' ? 'primary small' : 'ghost small'),
-        JC.btn('Copy', () => JC.post('copy', { text: l.url }), 'ghost small')))) :
+      (a.links || []).length ? (() => {
+        const row = l => JC.h('li', { class: `row${l.role === 'other' ? '' : ' main'}` },
+          JC.h('span', { class: 'tag' }, role[l.role] || l.role), JC.h('span', { class: 'grow' }, JC.h('a', { href: '#', onclick: e => { e.preventDefault(); JC.post('openUrl', { url: l.url }); } }, l.url), JC.h('span', { class: 'muted small' }, ` ${l.label}`),
+            l.note ? JC.h('div', { class: 'small warnnote' }, l.note) : ''),
+          JC.h('span', { class: `small ${l.up ? 'ok' : 'muted'}`, title: l.why || '' }, l.up ? '● answers' : building ? `waiting${l.why ? `: ${l.why}` : '…'}` : `○ ${l.why || 'no answer'}`),
+          JC.btn('Open', () => JC.post('openUrl', { url: l.url }), l.role === 'frontend' ? 'primary small' : 'ghost small'),
+          JC.btn('Copy', () => JC.post('copy', { text: l.url }), 'ghost small'));
+        const main = a.links.filter(l => l.role !== 'other'), other = a.links.filter(l => l.role === 'other');
+        return [JC.h('ul', { class: 'applinks' }, main.map(row)),
+          other.length ? JC.h('details', { class: 'small' }, JC.h('summary', {}, `Other services (${other.length})`), JC.h('ul', { class: 'applinks' }, other.map(row))) : ''];
+      })() :
         building ? '' : JC.h('p', { class: 'muted small' }, a.detected ? 'Start builds the project folder and lists its frontend and backend links.' : 'JustCode could not tell how to run this project. Ask Claude to set it up.'),
       JC.h('div', { class: 'row' },
         ...(building ? [JC.btn('Working…', () => {}, 'primary', 'See the steps above')]

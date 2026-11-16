@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 // corrected from the dev server's own "http://localhost:NNNN" line when it prints one.
 
 export type Role = 'frontend' | 'backend' | 'other';
-export interface AppLink { label: string; url: string; role: Role; up?: boolean; note?: string }
+export interface AppLink { label: string; url: string; role: Role; up?: boolean; note?: string; why?: string }
 export interface AppState {
   state: 'stopped' | 'building' | 'running' | 'failed';
   kind?: string;          // what was detected: "Docker Compose", "Angular + Django", …
@@ -279,13 +279,20 @@ export async function freePort(want: number, taken: Set<number> = new Set()) {
 }
 
 // Does it answer? Any status under 500, redirects included; a self-signed certificate (local nginx) counts.
-export function up(url: string): Promise<boolean> {
+export const up = (url: string) => probe(url).then(p => p.ok);
+// The same check, with why it does not answer yet: "502 Bad Gateway", "connection refused", "no answer in 3 s"…
+export function probe(url: string): Promise<{ ok: boolean; why?: string }> {
   return new Promise(res => {
     let u: URL;
-    try { u = new URL(url); } catch { return res(false); }
+    try { u = new URL(url); } catch { return res({ ok: false, why: 'not a valid address' }); }
     const lib = u.protocol === 'https:' ? https : http;
-    const req = lib.request(u, { method: 'GET', timeout: 3000, ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}) }, r => { r.resume(); res((r.statusCode ?? 500) < 500); });
-    req.on('timeout', () => { req.destroy(); res(false); }); req.on('error', () => res(false)); req.end();
+    const req = lib.request(u, { method: 'GET', timeout: 3000, ...(u.protocol === 'https:' ? { rejectUnauthorized: false } : {}) }, r => {
+      r.resume(); const c = r.statusCode ?? 500;
+      res(c < 500 ? { ok: true } : { ok: false, why: `${c} ${http.STATUS_CODES[c] ?? ''}`.trim() });
+    });
+    req.on('timeout', () => { req.destroy(); res({ ok: false, why: 'no answer in 3 s' }); });
+    req.on('error', (e: any) => res({ ok: false, why: { ECONNREFUSED: 'connection refused (nothing listening yet)', ENOTFOUND: 'name does not resolve', ECONNRESET: 'connection reset', EHOSTUNREACH: 'host unreachable' }[e?.code as string] ?? String(e?.code || e?.message || 'error') }));
+    req.end();
   });
 }
 
@@ -352,16 +359,22 @@ export async function configuredLinks(root: string, env: Record<string, string>,
   const order: Record<Role, number> = { frontend: 0, backend: 1, other: 2 };
   return kept.sort((a, b) => order[a.role] - order[b.role]).slice(0, 10);
 }
-async function waitUp(links: AppLink[], ms: number, refresh?: () => void) {
-  // Done when every link answers, or when a frontend does and the rest had 20 s more (a name that does not resolve
-  // must not hold the whole build for minutes).
-  const end = Date.now() + ms;
-  let frontAt = 0;
+async function waitUp(links: AppLink[], ms: number, refresh?: () => void, log?: fs.WriteStream) {
+  // What matters is the frontend and the backend: done when one of each (that exists) answers. Other links (docs,
+  // storage consoles) are checked along the way but never hold it up. Every 30 s the log says what it still waits for.
+  const start = Date.now(), end = start + ms;
+  const need = (['frontend', 'backend'] as Role[]).filter(r => links.some(l => l.role === r));
+  let said = start;
   for (;;) {
     refresh?.();
-    for (const l of links) if (!l.up) l.up = await up(l.url);
-    if (!frontAt && links.some(l => l.role === 'frontend' && l.up)) frontAt = Date.now();
-    if (links.every(l => l.up) || (frontAt && Date.now() - frontAt > 20_000) || Date.now() > end) return;
+    for (const l of links) if (!l.up) { const p = await probe(l.url); l.up = p.ok; l.why = p.ok ? undefined : p.why; }
+    if (need.every(r => links.some(l => l.role === r && l.up)) || Date.now() > end) return;
+    if (log && Date.now() - said >= 30_000) {
+      said = Date.now();
+      const s = Math.round((said - start) / 1000);
+      const waiting = links.filter(l => !l.up && need.includes(l.role) && !links.some(o => o.role === l.role && o.up));
+      log.write(`\n… still waiting · ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} · ${waiting.map(l => `${l.role} ${l.url}: ${l.why ?? 'no answer'}`).join(' · ')}\n`);
+    }
     await new Promise(r => setTimeout(r, 2000));
   }
 }
@@ -527,11 +540,20 @@ async function run(root: string, why: string, mode: Mode) {
     if (!links.length) throw new Error('It started, but JustCode found no web address (no published port and none printed). See the log, or use "Ask Claude to fix it".');
     const head = await headOf(root);
     save(root, { ...load(root), state: 'building', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head, stepNo: steps.length - 1, stepAt: Date.now() });
-    // Each link shows "answers" as soon as it does.
-    await waitUp(links, 5 * 60_000, () => { refresh(); save(root, { ...load(root), links: links.map(l => ({ ...l })) }); });
+    // While it waits, the containers' own output streams into the log (a frontend still compiling, a crash loop).
+    // Only the frontend's and backend's containers (and the proxy in front of them): not every database and worker.
+    const svc = plan.compose ? (await out('docker', ['compose', '-f', plan.compose, 'ps', '--services'], root).catch(() => '')).split('\n').map(x => x.trim()).filter(x => x && FRONT_NAME.test(x) || BACK_NAME.test(x)) : [];
+    const follow = plan.compose ? spawn('/bin/sh', ['-c', `docker compose -f ${plan.compose} logs -f --tail 20 --no-color ${svc.map(q).join(' ')}`], { cwd: root, env: ENV, detached: true }) : undefined;
+    follow?.stdout?.on('data', b => log.write(b)); follow?.stderr?.on('data', b => log.write(b));
+    // Each link shows "answers" as soon as it does, or why not yet.
+    try {
+      await waitUp(links, 5 * 60_000, () => { refresh(); save(root, { ...load(root), links: links.map(l => ({ ...l })) }); }, log);
+    } finally { if (follow?.pid) try { process.kill(-follow.pid, 'SIGTERM'); } catch { /* gone */ } }
     const front = links.find(l => l.role === 'frontend' && l.up) ?? links.find(l => l.role === 'frontend') ?? links[0];
+    const backDown = links.some(l => l.role === 'backend') && !links.some(l => l.role === 'backend' && l.up) ? links.find(l => l.role === 'backend') : undefined;
     save(root, { ...load(root), state: front.up ? 'running' : 'failed', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head,
-      error: front.up ? undefined : `${front.url} does not answer after 5 minutes. The log says why; "Ask Claude to fix it" can repair the setup.` });
+      error: !front.up ? `The frontend ${front.url} does not answer after 5 minutes (${front.why ?? 'no answer'}). The log says why; "Ask Claude to fix it" can repair the setup.`
+        : backDown ? `The frontend runs, but the backend ${backDown.url} does not answer (${backDown.why ?? 'no answer'}). See the log.` : undefined });
   } catch (e: any) {
     save(root, { ...load(root), state: 'failed', error: String(e?.message ?? e) });   // stepNo stays on the step that failed
   } finally { clearInterval(tick); log.end(); }
