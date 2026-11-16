@@ -29,6 +29,7 @@ import { PHONE_BYPASS_TEXT, bypassAllOn, cfg, checkBypassAll, confirm, emit, lim
 import { addProject, remoteTerms } from './messages';
 import { recheck } from './setupflow';
 import { appEvents } from './app';
+import { sweepAll } from './docker';
 
 
 export function activate(context: vscode.ExtensionContext) {
@@ -47,6 +48,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   limits.onChange(push);
   appEvents.on('change', () => push());
+  // Docker left by finished tasks of every project (not only the open ones), and the networks they held.
+  setTimeout(() => void sweepAll().then(n => { if (n.length) out.appendLine(`${new Date().toLocaleTimeString()} info: stopped ${n.length} Docker stack(s) left by finished tasks: ${n.join(', ')}`); }).catch(() => undefined), 20_000).unref?.();
   limits.onReset(() => { for (const r of runners.values()) r.afterReset(); });
 
   // Left side of a review diff: the file at the merge base, straight from git.

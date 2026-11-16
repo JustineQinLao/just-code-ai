@@ -48,6 +48,11 @@ export const mergeMethods = {
     } finally { this.busy.delete(id); this.changed(); }
   },
 
+  mergeLater(this: Runner, t: Task) {
+    this.store.updateTask(t.id, { mergeWhenReady: true, warning: undefined });
+    this.d.notify('info', `"${t.title}" will ${t.where === 'direct' && !t.init ? 'finish' : 'merge'} by itself when Claude, the checks and the review are done and pass.`, t.id);
+  },
+
   // Base is brought into the branch first, inside the task's folder; conflicts stop there, never in the user's checkout.
   merge(this: Runner, id: string, auto = false, by: Audit.Actor = 'user') {
     return this.guarded(id, async t => {
@@ -69,6 +74,7 @@ export const mergeMethods = {
       }
       if (t.where === 'direct' && !t.init) {
         const s0 = this.sessions.get(id);
+        if (!auto && (this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle') || t.status === 'doing')) return this.mergeLater(t);
         if (t.status !== 'review' || this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle')) throw new Error('Claude is still working on this task. Wait for it to finish, then Finish.');
         const files = t.directFiles ?? [];
         if (files.length) await g.commitFiles(this.root, t.title, files, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
@@ -86,6 +92,8 @@ export const mergeMethods = {
       const dirty = this.openDirect(id);
       if (dirty?.directFiles?.length) throw new Error(`"${dirty.title}" has uncommitted files in the project folder. Finish or Discard it first, then merge.`);
       const s = this.sessions.get(id);
+      // Busy (Claude, the checks or the review): remembered, and merged by the sweep once they pass.
+      if (!auto && ((s?.open && s.state !== 'idle') || this.checking.has(id) || this.reviews.has(id))) return this.mergeLater(t);
       if (s?.open && s.state !== 'idle') throw new Error('Claude is still working on this task. Wait for it to finish, or stop it.');
       if (this.checking.has(id)) throw new Error('The checks are still running in this task\'s folder. Merge when they finish.');
       this.stop(id);
@@ -110,7 +118,7 @@ export const mergeMethods = {
       }
       // The merge is in git. A folder that will not go away must not leave the task in Review, or Merge runs again.
       await this.cleanup(t).catch(e => this.d.notify('warn', `Merged "${t.title}", but could not remove its folder (${e.message}). Delete ${t.worktree} by hand.`, id));
-      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now() });
+      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now(), mergeWhenReady: undefined });
       this.audit('merge', id, `${t.branch} into ${t.base}${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}${t.review?.unreviewed ? ', unreviewed' : ''}`, auto ? 'justcode' : by);
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
       if (t.sprintId) await this.mergeSprint(t.sprintId);

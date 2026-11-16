@@ -44,3 +44,28 @@ export async function sweepStacks(root: string, live: string[]) {
   for (const p of stale) await docker(['compose', '-p', p.Name, 'down', '-v', '--remove-orphans', '--timeout', '5'], 120_000).catch(() => undefined);
   return stale.map(p => p.Name);
 }
+
+// Across every project on this machine: stacks started in a JustCode task folder whose task is over (folder gone,
+// or that project's board says done, archived or deleted). A project whose board cannot be read is left alone.
+const json = (f: string) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return undefined; } };
+export function staleAcross(list: Stack[], boardOf: (root: string) => { tasks?: { worktree?: string; status?: string; archived?: boolean }[] } | undefined) {
+  return list.filter(p => (p.ConfigFiles ?? '').split(',').some(f => {
+    const m = /^(.*)[\\/]\.justcode[\\/]worktrees[\\/]([^\\/]+)[\\/]/.exec(f);
+    if (!m) return false;
+    const wt = path.join(m[1], '.justcode', 'worktrees', m[2]);
+    if (!fs.existsSync(wt)) return true;
+    const board = boardOf(m[1]);
+    if (!board?.tasks) return false;
+    return !board.tasks.some(t => t.worktree && real(t.worktree) === real(wt) && t.status !== 'done' && !t.archived);
+  }));
+}
+
+// Stops those stacks, then removes Compose networks no container uses: Docker has only about 30 address pools.
+export async function sweepAll() {
+  let list: Stack[] = [];
+  try { list = JSON.parse(await docker(['compose', 'ls', '-a', '--format', 'json'], 15_000) || '[]'); } catch { return []; }
+  const stale = staleAcross(list, root => json(path.join(root, '.justcode', 'board.json')));
+  for (const p of stale) await docker(['compose', '-p', p.Name, 'down', '-v', '--remove-orphans', '--timeout', '5'], 120_000).catch(() => undefined);
+  await docker(['network', 'prune', '-f', '--filter', 'label=com.docker.compose.project'], 60_000).catch(() => undefined);
+  return stale.map(p => p.Name);
+}

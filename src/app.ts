@@ -7,6 +7,7 @@ import * as dns from 'dns';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import { EventEmitter } from 'events';
+import { sweepAll } from './docker';
 
 // The project's app, run from the project folder (the current branch) for the user to open: no task, no Claude.
 // JustCode works out how to run it, where it listens and keeps one copy running per project. In order of preference:
@@ -491,10 +492,17 @@ async function run(root: string, why: string, mode: Mode) {
         // Compose breakages Docker does not repair itself (a container pointing at a network that is gone, a name
         // still taken, an orphan): take the project's containers down (volumes and data stay) and try once more.
         const tail = read(logFile(root)).slice(-4000);
+        if (/address pools have been fully subnetted|could not find an available, non-overlapping/i.test(tail)) {
+          log.write('\nDocker ran out of networks: stopping stacks left by finished tasks and removing unused networks…\n');
+          const freed = await sweepAll().catch(() => [] as string[]);
+          log.write(`Freed ${freed.length} stack(s). Trying again…\n`);
+          await sh(upCmd, root, log, 20 * 60_000);
+        } else {
         if (!/network [0-9a-f]+ not found|failed to set up container networking|is already in use by container|No such container|orphan|Conflict\. The container name|endpoint .* already exists|has active endpoints/i.test(tail)) throw e;
         log.write('\nDocker left stale containers or networks behind: recreating them (your data volumes stay)…\n');
         await sh(`docker compose -f ${plan.compose} down --remove-orphans`, root, log, 5 * 60_000).catch(() => undefined);
         await sh(`${upCmd} --force-recreate`, root, log, 20 * 60_000);
+        }
       }
       const proxies = (await out('docker', ['compose', '-f', plan.compose, 'ps', '--services'], root).catch(() => '')).split('\n').map(x => x.trim()).filter(x => x && PROXY_NAME.test(x));
       if (proxies.length) {

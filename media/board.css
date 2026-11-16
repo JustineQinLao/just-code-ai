@@ -527,3 +527,4 @@ b.app-failed { color: var(--err); }
 .appsteps .last { font-family: var(--vscode-editor-font-family, monospace); word-break: break-all; margin-top: 2px; }
 .warnnote { color: var(--needs, #b7791f); margin-top: 2px; }
 .applinks li.main a { font-weight: 600; }
+.cardnote { font-size: 12px; color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); border-radius: 6px; padding: 4px 8px; margin-top: 6px; }

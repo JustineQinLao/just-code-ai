@@ -1426,3 +1426,40 @@ test('conflicts: when Claude resolved and staged them, the turn end finishes the
   assert.match(git('log', '-1', '--format=%P'), / /, 'the merge commit was made');
   r.dispose();
 });
+
+test('merge: clicked while the checks run, it is remembered and done once they and the review pass', async () => {
+  const store = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'jc-later-')));
+  const t = store.addTask({ title: 'T', status: 'review', mode: 'default', worktree: '/w', branch: 'b', base: 'main' } as any);
+  const { Runner } = require('../runner');
+  const r = new Runner(store, { settings: () => ({ review: { auto: true } }), notify: () => {}, limits: { held: () => false }, bin: () => undefined } as any);
+  r.holdsLease = () => true; r.requireLease = () => {};
+  r.checking.add(t.id);
+  await r.merge(t.id);
+  assert.equal(store.task(t.id)!.mergeWhenReady, true);
+  const merged: string[] = [];
+  r.merge = async (id: string) => { merged.push(id); };
+  await r.sweep();
+  assert.deepEqual(merged, [], 'still checking');
+  r.checking.delete(t.id);
+  store.updateTask(t.id, { review: { state: 'pass', attempts: 1 } } as any);
+  await r.sweep();
+  assert.deepEqual(merged, [t.id]);
+  store.updateTask(t.id, { mergeWhenReady: true, review: { state: 'fail', attempts: 1, issues: [] } } as any);
+  await r.sweep();
+  assert.match(store.task(t.id)!.warning ?? '', /Not merged: the AI review found issues/);
+  r.dispose();
+});
+
+test('docker: stacks of finished or gone task folders, in any project, are stale; live ones and unreadable boards are kept', () => {
+  const { staleAcross } = require('../docker');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-all-'));
+  const wt = (id: string) => { const d = path.join(root, '.justcode', 'worktrees', id); fs.mkdirSync(d, { recursive: true }); return d; };
+  const live = wt('live1'), done = wt('done1');
+  const list = [
+    { Name: 'live1', ConfigFiles: `${live}/docker-compose.yml` }, { Name: 'done1', ConfigFiles: `${done}/docker-compose.yml` },
+    { Name: 'gone1', ConfigFiles: `${root}/.justcode/worktrees/gone1/docker-compose.yml` }, { Name: 'proj', ConfigFiles: `${root}/docker-compose.yml` },
+  ];
+  const board = { tasks: [{ worktree: live, status: 'doing' }, { worktree: done, status: 'done' }] };
+  assert.deepEqual(staleAcross(list, () => board).map((s: any) => s.Name), ['done1', 'gone1']);
+  assert.deepEqual(staleAcross(list, () => undefined).map((s: any) => s.Name), ['gone1'], 'no board: only folders that are gone');
+});

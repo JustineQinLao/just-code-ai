@@ -271,6 +271,7 @@
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
       t.warning ? h('div', { class: 'cardwarn', title: t.warning }, `⚠ ${t.warning}`) : '',
+      t.mergeWhenReady ? h('div', { class: 'cardnote' }, '✓ Merge requested: it merges by itself when the checks and review pass') : '',
       nx.tone === 'run' ? h('div', { class: 'pulsebar' }) : '',
       ...(t.asks || []).map(a => JC.askBox(t, a)),
       nx.actions.length ? h('div', { class: 'acts' }, nx.actions.map(([l, fn, style], i) => btn(l, fn, i === 0 ? 'primary' : style || 'ghost'))) : '');

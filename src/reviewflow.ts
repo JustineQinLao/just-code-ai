@@ -34,10 +34,22 @@ export const reviewMethods = {
   // whose session had closed go back to Claude. One at a time, never during a usage limit.
   async sweep(this: Runner) {
     const o = this.d.settings().review;
-    if (this.disposed || this.sweeping || !o.auto || this.d.limits.held() || !this.holdsLease()) return;
+    if (this.disposed || this.sweeping || this.d.limits.held() || !this.holdsLease()) return;
     this.sweeping = true;
     try {
+      // A remembered Merge: once nothing runs on the task, merge it if the checks and review passed, else say why not.
       for (const t of [...this.store.data.tasks]) {
+        if (!t.mergeWhenReady || t.archived || t.status === 'done') continue;
+        const s = this.sessions.get(t.id);
+        if ((s?.open && s.state !== 'idle') || this.checking.has(t.id) || this.reviews.has(t.id) || this.busy.has(t.id) || t.status !== 'review') continue;
+        const no = (why: string) => this.store.updateTask(t.id, { mergeWhenReady: undefined, warning: `Not merged: ${why}. Fix it, then Merge again.` });
+        if (t.conflicts?.length) no('it conflicts with its base');
+        else if (t.error) no(t.error);
+        else if (t.checks?.state === 'fail') no('the checks failed');
+        else if (t.review?.state === 'fail') no('the AI review found issues');
+        else if (t.review?.state === 'pass' || !o.auto || t.review?.state === 'error') { this.store.updateTask(t.id, { mergeWhenReady: undefined }); await this.merge(t.id); }
+      }
+      for (const t of o.auto ? [...this.store.data.tasks] : []) {   // the rest is the automatic review's
         if (t.archived || t.status === 'done' || t.init || t.remote || !t.branch || !t.worktree || t.error || t.limited) continue;
         if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') continue;
         // Conflicts someone resolved (Claude, or you in the folder) with no session to notice: finish them here.
