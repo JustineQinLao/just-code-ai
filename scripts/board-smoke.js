@@ -142,6 +142,7 @@ async function takeShots(json) {
   const views = [['board', 'JC.closeTask && JC.closeTask()'],
     ...['activity', 'changes', 'review', 'details'].map(t => ['task-' + t, `JC.openTask(STATE.board.tasks.find(t => t.review && t.review.state === 'fail')?.id ?? STATE.board.tasks[0].id, '${t}')`]),
     ['planner', 'JC.openPlanner()'],
+    ['app', `window.postMessage({ ...STATE, app: { state: 'building', busy: true, kind: 'Docker Compose', steps: ['Check that Docker is running', 'Build and start the containers', 'Find the links', 'Wait until it answers'], stepNo: 1, stepAt: Date.now() - 83000, buildAt: Date.now() - 95000, links: [], lastLine: '#12 [frontend 4/6] RUN npm ci', log: '# Docker Compose\\n$ docker info\\n$ docker compose up -d --build\\n#12 [frontend 4/6] RUN npm ci' } }, '*'); await new Promise(r => setTimeout(r, 200)); JC.appDialog()`],
     ['chat', `window.postMessage({ ...STATE, chats: [{ id: 'c1', title: 'ps setup the .env', chat: true, status: 'review', where: 'direct', sessionId: 's', created: 1, costUsd: 0.3, context: 41000, directFiles: ['.env'] }] }, '*'); await new Promise(r => setTimeout(r, 200)); JC.openTask('c1', 'activity');
       window.postMessage({ type: 'steps', id: 'c1', steps: [{ kind: 'user', text: 'ps setup the .env it was missing so much' }, { kind: 'info', text: 'Model: claude-sonnet-5-5' },
         { kind: 'tool', text: 'Bash(ls -a | head -40; cat .env.example)' }, { kind: 'result', text: '.dockerignore' }, { kind: 'tool', text: 'Bash(grep -nE "change-me" .env)' }, { kind: 'result', text: '4:DJANGO_SECRET_KEY' },

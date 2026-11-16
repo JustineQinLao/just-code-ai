@@ -202,7 +202,7 @@
       !REMOTE ? btn('💬 Chat', () => post('openChat'), 'ghost', 'Talk to Claude in the project folder: no task, checks, review or merge') : '',
       !REMOTE ? (a => {
         const building = a.busy || a.state === 'building', stopped = !building && (a.state === 'stopped' || !a.state);
-        return btn(building ? '⟳ App: building…' : a.state === 'running' ? '● App running' : a.state === 'failed' ? '⚠ App not running' : '▶ Start app',
+        return btn(building ? `⟳ App: building${a.steps?.length ? ` ${(a.stepNo ?? 0) + 1}/${a.steps.length}` : '…'}` : a.state === 'running' ? '● App running' : a.state === 'failed' ? '⚠ App not running' : '▶ Start app',
           () => { if (stopped) post('appStart'); JC.appDialog(); }, `ghost app-${building ? 'building' : a.state || 'stopped'}`,
           stopped ? 'Builds the current branch in the project folder, starts it, and shows its frontend and backend links' : 'Frontend and backend links, Rebuild, Stop, log');
       })(S.app || { state: 'stopped' }) : '',

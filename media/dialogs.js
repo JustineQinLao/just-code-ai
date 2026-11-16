@@ -404,26 +404,36 @@
   // ▶ App: the project run from its folder (current branch), its links, and Start / Rebuild / Stop. No task, no Claude.
   function appDialog() {
     const a = JC.S.app || { state: 'stopped', links: [] }, building = a.busy || a.state === 'building';
-    const say = building ? 'Building and starting…' : a.state === 'running' ? 'Running' : a.state === 'failed' ? 'Not running' : 'Stopped';
+    const mmss = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+    const say = building ? `Building and starting · ${mmss(Date.now() - (a.buildAt || Date.now()))}` : a.state === 'running' ? 'Running' : a.state === 'failed' ? 'Not running' : 'Stopped';
     const role = { frontend: 'Frontend', backend: 'Backend', other: 'Other' };
+    const failedAt = a.state === 'failed' ? a.stepNo : undefined;
+    const steps = (a.steps || []).length && (building || a.state === 'failed') ? JC.h('ol', { class: 'appsteps' }, a.steps.map((s, i) => {
+      const st = failedAt === i ? 'fail' : i < (a.stepNo ?? 0) || a.state === 'running' ? 'done' : i === a.stepNo && building ? 'now' : 'todo';
+      return JC.h('li', { class: st }, JC.h('span', { class: 'mark' }, { done: '✓', fail: '✗', now: '', todo: '○' }[st]),
+        JC.h('span', { class: 'grow' }, s, st === 'now' && a.lastLine ? JC.h('div', { class: 'muted small last' }, a.lastLine.slice(0, 160)) : ''),
+        st === 'now' ? JC.h('span', { class: 'muted small' }, mmss(Date.now() - (a.stepAt || Date.now()))) : '');
+    })) : '';
     const d = dialog('App',
       JC.h('p', {}, JC.h('b', { class: `app-${building ? 'building' : a.state}` }, say),
-        JC.h('span', { class: 'muted' }, ` · ${a.kind || a.detected || 'not detected'}${a.head ? ` · built from ${a.head}` : ''}${a.why && a.why !== 'you' ? ` · ${a.why}` : ''}`)),
+        JC.h('span', { class: 'muted' }, ` · ${a.kind || a.detected || 'not detected'}${a.head ? ` · ${a.head}` : ''}${a.why && a.why !== 'you' ? ` · ${a.why}` : ''}`)),
+      steps,
       a.error && !building ? JC.h('p', { class: 'err small' }, a.error) : '',
       (a.links || []).length ? JC.h('ul', { class: 'applinks' }, a.links.map(l => JC.h('li', { class: 'row' },
         JC.h('span', { class: 'tag' }, role[l.role] || l.role), JC.h('span', { class: 'grow' }, JC.h('a', { href: '#', onclick: e => { e.preventDefault(); JC.post('openUrl', { url: l.url }); } }, l.url), JC.h('span', { class: 'muted small' }, ` ${l.label}`)),
-        JC.h('span', { class: `small ${l.up ? 'ok' : 'muted'}` }, l.up ? '● answers' : building ? '…' : '○ no answer'),
+        JC.h('span', { class: `small ${l.up ? 'ok' : 'muted'}` }, l.up ? '● answers' : building ? 'waiting…' : '○ no answer'),
         JC.btn('Open', () => JC.post('openUrl', { url: l.url }), l.role === 'frontend' ? 'primary small' : 'ghost small'),
         JC.btn('Copy', () => JC.post('copy', { text: l.url }), 'ghost small')))) :
-        JC.h('p', { class: 'muted small' }, building ? 'Links appear once it is up.' : a.detected ? 'Start builds the project folder and lists its frontend and backend links.' : 'JustCode could not tell how to run this project. Ask Claude to set it up.'),
+        building ? '' : JC.h('p', { class: 'muted small' }, a.detected ? 'Start builds the project folder and lists its frontend and backend links.' : 'JustCode could not tell how to run this project. Ask Claude to set it up.'),
       JC.h('div', { class: 'row' },
-        JC.btn(a.state === 'running' || a.state === 'failed' ? '↻ Rebuild' : '▶ Start', () => JC.post('appStart'), 'primary', 'Builds the current branch in the project folder and starts it'),
+        building ? JC.btn('Building…', () => {}, 'primary', 'It is building: see the steps above') : JC.btn(a.state === 'running' || a.state === 'failed' ? '↻ Rebuild' : '▶ Start', () => JC.post('appStart'), 'primary', 'Builds the current branch in the project folder and starts it'),
         a.state === 'running' || building ? JC.btn('■ Stop', () => JC.post('appStop'), 'ghost') : '',
         a.log ? JC.btn('Open log', () => JC.post('appLog'), 'ghost') : '',
         (a.state === 'failed' || !a.detected) && !building ? JC.btn('Ask Claude to fix it', () => { JC.post('appFix'); d.close(); }, 'ghost', 'A ⚡ task in the project folder gets the error and the log') : ''),
       JC.h('p', { class: 'muted small' }, 'Runs from the project folder on its current branch. It rebuilds by itself when a sprint merges, and after a merge into this branch while it runs, when code changed.'),
-      a.log ? JC.h('details', { open: a.state === 'failed' }, JC.h('summary', { class: 'small' }, 'Log'), JC.h('pre', { class: 'small applog' }, a.log.slice(-2500))) : '');
+      a.log ? JC.h('details', { open: building || a.state === 'failed' }, JC.h('summary', { class: 'small' }, 'Log'), JC.h('pre', { class: 'small applog' }, a.log.slice(-3000))) : '');
     d.dataset.kind = 'app';
+    const pre = d.querySelector('.applog'); if (pre) pre.scrollTop = pre.scrollHeight;   // newest lines in view
     return d;
   }
 

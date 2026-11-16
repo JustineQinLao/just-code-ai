@@ -25,6 +25,10 @@ export interface AppState {
   pids?: number[];        // processes JustCode started (not for compose)
   container?: string;     // the container JustCode started for a lone Dockerfile
   why?: string;           // what started the last build ("after Sprint 2", "you")
+  steps?: string[];       // this run's steps, for the modal's progress list
+  stepNo?: number;        // the step it is on (or failed on)
+  stepAt?: number;        // when that step began
+  buildAt?: number;       // when this run began
 }
 export interface Proc {
   label: string; role: Role; cwd: string; cmd: string;
@@ -55,10 +59,11 @@ function save(root: string, s: AppState) {
 export function view(root: string) {
   const s = load(root);
   let tail = '';
-  try { tail = fs.readFileSync(logFile(root), 'utf8').slice(-4000); } catch { /* no log yet */ }
+  try { tail = fs.readFileSync(logFile(root), 'utf8').slice(-6000); } catch { /* no log yet */ }
   let detected: string | undefined;
   try { detected = detect(root)?.kind; } catch { /* unreadable project */ }
-  return { ...s, busy: busy.has(root), log: tail, detected };
+  const lastLine = tail.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n|\r/).map(l => l.trim()).filter(l => l && !l.startsWith('#')).pop();
+  return { ...s, busy: busy.has(root), log: tail, detected, lastLine };
 }
 
 /* ---------- detection ---------- */
@@ -297,7 +302,11 @@ function sh(cmd: string, cwd: string, log: fs.WriteStream, timeout: number, env:
 }
 const out = (cmd: string, args: string[], cwd: string) => new Promise<string>((res, rej) => execFile(cmd, args, { cwd, env: ENV, timeout: 30_000, maxBuffer: 8 << 20 }, (e, o) => e ? rej(e) : res(o)));
 const headOf = (root: string) => out('git', ['rev-parse', '--short', 'HEAD'], root).then(s => s.trim(), () => undefined);
-const dockerUp = (root: string, log: fs.WriteStream) => sh('docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop, then Rebuild."; exit 1; }', root, log, 30_000);
+// Docker not running: start Docker Desktop (macOS, Linux desktop) and wait up to 2 minutes for it.
+const dockerUp = (root: string, log: fs.WriteStream) => sh('docker info >/dev/null 2>&1 || { echo "Docker is not running: starting Docker Desktop…"; ' +
+  '(open -a Docker 2>/dev/null || systemctl --user start docker-desktop 2>/dev/null || true); ' +
+  'i=0; while [ $i -lt 60 ]; do sleep 2; docker info >/dev/null 2>&1 && { echo "Docker is up."; exit 0; }; i=$((i+1)); done; ' +
+  'echo "Docker did not start in 2 minutes. Start Docker Desktop yourself, then Rebuild."; exit 1; }', root, log, 150_000);
 const imageName = (root: string) => `justcode-${path.basename(root).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
 function killAll(pids?: number[]) {
@@ -321,7 +330,13 @@ async function run(root: string, why: string) {
   fs.mkdirSync(dir(root), { recursive: true });
   const log = fs.createWriteStream(logFile(root), { flags: 'w' });
   log.write(`# ${plan.kind} · ${new Date().toISOString()} · ${why}\n`);
-  save(root, { ...old, state: 'building', kind: plan.kind, why, error: undefined });
+  // The steps the modal lists, with a live timer and the log's last line: refreshed every 1.5 s while it builds.
+  const steps = plan.compose ? ['Check that Docker is running', 'Build and start the containers', 'Find the links', 'Wait until it answers']
+    : plan.dockerfile ? ['Check that Docker is running', 'Build the image', 'Start the container', 'Wait until it answers']
+    : ['Install dependencies and prepare', `Start ${plan.procs.map(p => p.label).join(' and ')}`, 'Find the links', 'Wait until it answers'];
+  const step = (i: number) => save(root, { ...load(root), stepNo: i, stepAt: Date.now() });
+  const tick = setInterval(() => appEvents.emit('change', root), 1500);
+  save(root, { ...old, state: 'building', kind: plan.kind, why, error: undefined, steps, stepNo: 0, stepAt: Date.now(), buildAt: Date.now(), links: [] });
   killAll(old.pids);
   if (old.container) await out('docker', ['rm', '-f', old.container], root).catch(() => '');
   try {
@@ -331,14 +346,18 @@ async function run(root: string, why: string) {
     if (!has(root, '.env') && has(root, '.env.example')) fs.copyFileSync(path.join(root, '.env.example'), path.join(root, '.env'));
     if (plan.compose) {
       await dockerUp(root, log);
+      step(1);
       await sh(`docker compose -f ${plan.compose} up -d --build --remove-orphans`, root, log, 20 * 60_000);
+      step(2);
       links = composeLinks(parsePs(await out('docker', ['compose', '-f', plan.compose, 'ps', '--format', 'json'], root)), readEnv(path.join(root, '.env')));
     } else if (plan.dockerfile) {
       // A lone Dockerfile: build it and publish the port it EXPOSEs on the same port (or the next free one).
       await dockerUp(root, log);
       const img = imageName(root), expose = Number(/^\s*EXPOSE\s+(\d+)/mi.exec(read(path.join(root, plan.dockerfile)))?.[1]) || 8080;
       const host = await freePort(expose);
+      step(1);
       await sh(`docker build -t ${img} -f ${plan.dockerfile} .`, root, log, 20 * 60_000);
+      step(2);
       container = img;
       await sh(`docker rm -f ${img} >/dev/null 2>&1; docker run -d --name ${img} -p 127.0.0.1:${host}:${expose}${has(root, '.env') ? ' --env-file .env' : ''} ${img}`, root, log, 120_000);
       links = [{ label: 'container', url: `http://localhost:${host}`, role: 'frontend' }];
@@ -346,8 +365,9 @@ async function run(root: string, why: string) {
     } else {
       pids = [];
       const taken = new Set<number>();
+      for (const p of plan.procs) for (const cmd of p.setup ?? []) await sh(cmd, p.cwd, log, 15 * 60_000);
+      step(1);
       for (const p of plan.procs) {
-        for (const step of p.setup ?? []) await sh(step, p.cwd, log, 15 * 60_000);
         // The wanted port may be taken (another project, an old run): the next free one, so the link is right.
         const want = p.port;
         if (p.port) { p.port = await freePort(p.port, taken); taken.add(p.port); }
@@ -374,18 +394,21 @@ async function run(root: string, why: string) {
         for (const [i, u] of urls.entries()) if (!links.some(l => l.url === u)) links.push({ label: urls.length > 1 ? `${p.label} ${i + 1}` : p.label, url: u, role: i === 0 && !links.some(l => l.role === 'frontend') ? 'frontend' : p.role === 'backend' ? 'backend' : 'other' });
       }
     };
+    if (!plan.compose) step(plan.dockerfile ? 3 : 2);
     if (printed.size) { const end = Date.now() + 90_000; while (!links.length && Date.now() < end) { refresh(); await new Promise(r => setTimeout(r, 1500)); } }
     // A backend-only app (Django templates, Rails, Laravel…) is what the user opens.
     if (links.length && !links.some(l => l.role === 'frontend')) links[0].role = 'frontend';
     if (!links.length) throw new Error('It started, but JustCode found no web address (no published port and none printed). See the log, or use "Ask Claude to fix it".');
-    save(root, { state: 'building', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head: await headOf(root) });
-    await waitUp(links, 5 * 60_000, refresh);
+    const head = await headOf(root);
+    save(root, { ...load(root), state: 'building', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head, stepNo: steps.length - 1, stepAt: Date.now() });
+    // Each link shows "answers" as soon as it does.
+    await waitUp(links, 5 * 60_000, () => { refresh(); save(root, { ...load(root), links: links.map(l => ({ ...l })) }); });
     const front = links.find(l => l.role === 'frontend') ?? links[0];
-    save(root, { state: front.up ? 'running' : 'failed', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head: await headOf(root),
-      error: front.up ? undefined : `${front.url} does not answer. The log says why; "Ask Claude to fix it" can repair the setup.` });
+    save(root, { ...load(root), state: front.up ? 'running' : 'failed', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head,
+      error: front.up ? undefined : `${front.url} does not answer after 5 minutes. The log says why; "Ask Claude to fix it" can repair the setup.` });
   } catch (e: any) {
-    save(root, { ...load(root), state: 'failed', error: String(e?.message ?? e) });
-  } finally { log.end(); }
+    save(root, { ...load(root), state: 'failed', error: String(e?.message ?? e) });   // stepNo stays on the step that failed
+  } finally { clearInterval(tick); log.end(); }
 }
 
 export async function stop(root: string) {
