@@ -1463,3 +1463,12 @@ test('docker: stacks of finished or gone task folders, in any project, are stale
   assert.deepEqual(staleAcross(list, () => board).map((s: any) => s.Name), ['done1', 'gone1']);
   assert.deepEqual(staleAcross(list, () => undefined).map((s: any) => s.Name), ['gone1'], 'no board: only folders that are gone');
 });
+
+test('checks: a command that leaves a background process holding its output still finishes', async () => {
+  const C = require('../checks');
+  const t0 = Date.now();
+  const r = await C.runCommand('(sleep 30 &) ; echo done', os.tmpdir(), { ...process.env }, 60_000);
+  assert.equal(r.code, 0);
+  assert.match(r.out, /done/);
+  assert.ok(Date.now() - t0 < 10_000, `took ${Date.now() - t0} ms`);
+});

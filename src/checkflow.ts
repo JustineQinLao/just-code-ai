@@ -59,13 +59,26 @@ export const checkMethods = {
     this.setPhase(id, `Running checks: ${checks.map(c => c.name).join(', ')}…`);
     let results: C.CheckResult[], log: string;
     try {
-      ({ results, log } = await C.runChecks(checks, cwd, this.folderEnv(id, cwd), set.checkTimeoutMinutes * 60_000));
+      // A cap on the whole step (every check at its limit, plus the base run for failures), so it can never hang.
+      const cap = (checks.length * 2 + 2) * set.checkTimeoutMinutes * 60_000;
+      let capTimer: NodeJS.Timeout | undefined;
+      const stuck = new Promise<never>((_, rej) => { capTimer = setTimeout(() => rej(new Error(`the checks did not finish in ${Math.round(cap / 60_000)} min`)), cap); });
+      try {
+        ({ results, log } = await Promise.race([C.runChecks(checks, cwd, this.folderEnv(id, cwd), set.checkTimeoutMinutes * 60_000), stuck]));
+      } catch (e: any) {
+        results = checks.map(c => ({ ...c, ok: false, code: null, ms: cap, tail: String(e.message), timedOut: true }));
+        log = `${e.message}\n`;
+      } finally { clearTimeout(capTimer); }
       const failing = results.filter(r => !r.ok);
       if (failing.length) {
         const bl = await this.baseline(base, failing.map(f => f.cmd));
         for (const r of failing) if (bl.get(r.cmd) === false) r.preexisting = true;
       }
-    } finally { this.setPhase(id); this.checking.delete(id); }
+    } finally {
+      this.setPhase(id); this.checking.delete(id);
+      const w = this.store.task(id)?.warning;
+      if (w && /checks are still running/i.test(w)) this.store.updateTask(id, { warning: undefined });   // no longer true
+    }
     const now = this.store.task(id);
     // Merged, discarded or deleted while the checks ran: their results no longer belong to anything.
     if (!now || now.status === 'done' || now.worktree !== t.worktree || (!direct && (!now.worktree || !fs.existsSync(path.join(now.worktree, '.git'))))) return 'none';

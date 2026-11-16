@@ -61,7 +61,8 @@ export function runCommand(cmd: string, cwd: string, env: Record<string, string>
     p.stdout.on('data', keep);
     p.stderr.on('data', keep);
     const kill = () => { try { if (WIN) spawn('taskkill', ['/pid', String(p.pid), '/t', '/f']); else process.kill(-p.pid!, 'SIGKILL'); } catch { /* gone */ } };
-    const timer = setTimeout(() => { timedOut = true; kill(); }, timeoutMs);
+    // At the time limit the tree is killed, and the result is in 5 s later whatever is left holding its output.
+    const timer = setTimeout(() => { timedOut = true; kill(); setTimeout(() => { p.stdout.destroy(); p.stderr.destroy(); finish(null); }, 5000).unref?.(); }, timeoutMs);
     const abort = () => kill();
     signal?.addEventListener('abort', abort, { once: true });
     const finish = (code: number | null) => {
@@ -73,6 +74,9 @@ export function runCommand(cmd: string, cwd: string, env: Record<string, string>
     };
     p.on('error', e => { out += `\n${e.message}`; finish(127); });
     p.on('close', code => finish(code));
+    // The command exited but something it left in the background (a browser, a server, a docker helper) still holds
+    // its output: 'close' would never come. Its exit code counts, after 3 s for the last output to arrive.
+    p.on('exit', code => setTimeout(() => { if (done) return; p.stdout.destroy(); p.stderr.destroy(); finish(code); }, 3000).unref?.());
   });
 }
 
