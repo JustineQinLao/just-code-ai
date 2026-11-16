@@ -436,6 +436,7 @@
           : (a.state === 'running' ? [['restart', 'primary'], ['build', 'ghost']] : a.state === 'failed' ? [['build', 'primary'], ['restart', 'ghost']] : [['start', 'primary'], ['build', 'ghost']])
             .map(([mode, cls]) => JC.btn({ start: '▶ Start', restart: '↻ Restart', build: '⟳ Rebuild' }[mode], () => JC.post('appStart', { mode }), cls,
               { start: 'Starts it with what is already built (builds only what is missing)', restart: 'Restarts what runs: nothing is built or installed (fast)', build: 'Builds the current branch again (images, dependencies, migrations), then starts it' }[mode]))),
+        !building && (a.links || []).length ? JC.btn('↻ Check', () => JC.post('appCheck'), 'ghost', 'Asks every link again; nothing is restarted') : '',
         a.state === 'running' || building ? JC.btn('■ Stop', () => JC.post('appStop'), 'ghost') : '',
         JC.btn('Show in terminal', () => JC.post('appTerminal'), 'ghost', 'The build and run output, live, in a terminal panel'),
         (a.state === 'failed' || !a.detected) && !building ? JC.btn('Ask Claude to fix it', () => { JC.post('appFix'); d.close(); }, 'ghost', 'A ⚡ task in the project folder gets the error and the log') : ''),

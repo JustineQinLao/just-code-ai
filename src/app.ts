@@ -61,6 +61,8 @@ function save(root: string, s: AppState) {
 }
 export function view(root: string) {
   const s = load(root);
+  // "building" with no run behind it: the window that ran it was reloaded or closed. Check the links instead of waiting forever.
+  if (s.state === 'building' && !busy.has(root) && !checking.has(root)) void check(root, 'the run was interrupted (window reloaded)');
   let tail = '';
   try { tail = fs.readFileSync(logFile(root), 'utf8').slice(-6000); } catch { /* no log yet */ }
   let detected: string | undefined;
@@ -425,6 +427,21 @@ const imageName = (root: string) => `justcode-${path.basename(root).toLowerCase(
 
 function killAll(pids?: number[]) {
   for (const pid of pids ?? []) { try { process.kill(-pid, 'SIGTERM'); } catch { try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ } } }
+}
+
+// ↻ Check: asks every link again, nothing restarted. Running when the frontend answers.
+const checking = new Set<string>();
+export async function check(root: string, why?: string) {
+  if (busy.has(root) || checking.has(root)) return;
+  checking.add(root);
+  try {
+    const s = load(root);
+    const links = await Promise.all((s.links || []).map(async l => { const p = await probe(l.url); return { ...l, up: p.ok, why: p.ok ? undefined : p.why }; }));
+    const front = links.find(l => l.role === 'frontend' && l.up) ?? links.find(l => l.role === 'frontend') ?? links[0];
+    const backDown = links.some(l => l.role === 'backend') && !links.some(l => l.role === 'backend' && l.up) ? links.find(l => l.role === 'backend') : undefined;
+    save(root, { ...s, links, state: front?.up ? 'running' : links.length ? 'failed' : 'stopped',
+      error: !front ? undefined : !front.up ? `The frontend ${front.url} does not answer (${front.why ?? 'no answer'})${why ? `; ${why}` : ''}.` : backDown ? `The frontend runs, but the backend ${backDown.url} does not answer (${backDown.why ?? 'no answer'}).` : undefined });
+  } finally { checking.delete(root); }
 }
 
 // How a run gets the app up: 'build' rebuilds images and reinstalls; 'start' reuses what is built (building only what

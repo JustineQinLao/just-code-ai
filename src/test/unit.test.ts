@@ -1393,3 +1393,16 @@ test('app: test and job containers are never the frontend or backend', () => {
   ]));
   assert.deepEqual(App.composeLinks(ps, {}).map((l: any) => [l.label, l.role]), [['frontend', 'frontend'], ['api', 'backend'], ['playwright-worker', 'other']]);
 });
+
+test('app: a "building" state left by a reloaded window is checked, not waited on forever', async () => {
+  const App = require('../app');
+  const http = require('http');
+  const srv = http.createServer((_q: any, r: any) => r.end('ok')); await new Promise(r => srv.listen(0, '127.0.0.1', r));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-stale-'));
+  fs.mkdirSync(path.join(root, '.justcode'));
+  fs.writeFileSync(path.join(root, '.justcode', 'app.json'), JSON.stringify({ state: 'building', links: [{ role: 'frontend', label: 'web', url: `http://127.0.0.1:${srv.address().port}` }] }));
+  App.view(root);
+  for (let i = 0; i < 20 && App.load(root).state === 'building'; i++) await new Promise(r => setTimeout(r, 100));
+  assert.equal(App.load(root).state, 'running');
+  srv.close();
+});

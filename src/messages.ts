@@ -411,6 +411,7 @@ export async function handle(m: any, remote = false) {
       return push();
     }
     case 'appStart': if (!remote) { void App.start(r.root, 'you', ['build', 'start', 'restart'].includes(m.mode) ? m.mode : 'build'); appTerminal(r.root, false); } return;
+    case 'appCheck': if (!remote) void App.check(r.root); return;
     case 'appTerminal': if (!remote) appTerminal(r.root, true); return;
     case 'appStop': if (!remote) await App.stop(r.root); return;
     case 'appLog': if (!remote) void vscode.window.showTextDocument(vscode.Uri.file(App.logFile(r.root))); return;
