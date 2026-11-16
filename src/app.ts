@@ -232,7 +232,12 @@ export function detect(root: string): Plan | undefined {
 
 const NOT_HTTP = new Set([5432, 3306, 6379, 27017, 5672, 11211, 9200, 9300, 1025, 2525, 587, 25, 1433, 1521, 5433, 6380, 4222, 9092, 2181, 15672, 9000, 1883]);
 const FRONT_NAME = /front|web|client|ui|site|nginx|caddy|traefik|proxy|^app$|portal|dashboard|admin|wordpress|storefront/i;
-const BACK_NAME = /back|api|server|django|rails|laravel|php|node|express|nest|flask|fastapi|uvicorn|gunicorn|spring|^go$|worker/i;
+const BACK_NAME = /back|api|server|django|rails|laravel|php|node|express|nest|flask|fastapi|uvicorn|gunicorn|spring|^go$/i;
+// Containers that run beside the app (tests, jobs, tooling): never its frontend or backend.
+const SIDE_NAME = /playwright|selenium|cypress|test|worker|cron|queue|scheduler|beat|celery|sidekiq|horizon|init|migrat|seed|mail|smtp|pgadmin|adminer|grafana|prometheus|kibana|flower|minio|rabbit|jaeger|phpmyadmin|redis|mongo-express|docs?$|storybook/i;
+// Reverse proxies resolve their upstreams once, at start: after the containers behind them are recreated they keep
+// the old addresses and answer 502. Restarting them after every start is cheap and makes the links work.
+const PROXY_NAME = /nginx|caddy|traefik|haproxy|envoy|apache|httpd|proxy|gateway/i;
 
 // `docker compose ps --format json` prints an array (Compose ≥ 2.21) or one object per line (older).
 export function parsePs(out: string): { Service: string; Publishers?: { URL?: string; PublishedPort?: number; TargetPort?: number }[] }[] {
@@ -251,7 +256,7 @@ export function composeLinks(ps: ReturnType<typeof parsePs>, env: Record<string,
     seen.add(port);
     const name = c.Service || '';
     const role: Role = String(port) === env.FRONTEND_PORT ? 'frontend' : String(port) === env.BACKEND_PORT ? 'backend'
-      : /mail|smtp|pgadmin|adminer|grafana|prometheus|kibana|flower|minio|rabbit|jaeger|phpmyadmin|redis-?insight|mongo-express/i.test(name) ? 'other'
+      : SIDE_NAME.test(name) ? 'other'
       : FRONT_NAME.test(name) ? 'frontend' : BACK_NAME.test(name) ? 'backend' : 'other';
     links.push({ label: name || `port ${port}`, url: `http://localhost:${port}`, role });
   }
@@ -474,6 +479,11 @@ async function run(root: string, why: string, mode: Mode) {
         await sh(`docker compose -f ${plan.compose} down --remove-orphans`, root, log, 5 * 60_000).catch(() => undefined);
         await sh(`${upCmd} --force-recreate`, root, log, 20 * 60_000);
       }
+      const proxies = (await out('docker', ['compose', '-f', plan.compose, 'ps', '--services'], root).catch(() => '')).split('\n').map(x => x.trim()).filter(x => x && PROXY_NAME.test(x));
+      if (proxies.length) {
+        log.write(`\nRestarting ${proxies.join(', ')} so it reaches the containers' new addresses…\n`);
+        await sh(`docker compose -f ${plan.compose} restart ${proxies.map(q).join(' ')}`, root, log, 2 * 60_000).catch(() => undefined);
+      }
       step(2);
       const ps = parsePs(await out('docker', ['compose', '-f', plan.compose, 'ps', '--format', 'json'], root)), env = readEnv(path.join(root, '.env'));
       const published = ps.flatMap(c => (c.Publishers ?? []).filter(p => p.PublishedPort).map(p => ({ target: p.TargetPort ?? 0, port: p.PublishedPort!, service: c.Service })));
@@ -542,7 +552,7 @@ async function run(root: string, why: string, mode: Mode) {
     save(root, { ...load(root), state: 'building', kind: plan.kind, links, pids, container, why, startedAt: Date.now(), head, stepNo: steps.length - 1, stepAt: Date.now() });
     // While it waits, the containers' own output streams into the log (a frontend still compiling, a crash loop).
     // Only the frontend's and backend's containers (and the proxy in front of them): not every database and worker.
-    const svc = plan.compose ? (await out('docker', ['compose', '-f', plan.compose, 'ps', '--services'], root).catch(() => '')).split('\n').map(x => x.trim()).filter(x => x && FRONT_NAME.test(x) || BACK_NAME.test(x)) : [];
+    const svc = plan.compose ? (await out('docker', ['compose', '-f', plan.compose, 'ps', '--services'], root).catch(() => '')).split('\n').map(x => x.trim()).filter(x => x && !SIDE_NAME.test(x) && (FRONT_NAME.test(x) || BACK_NAME.test(x))) : [];
     const follow = plan.compose ? spawn('/bin/sh', ['-c', `docker compose -f ${plan.compose} logs -f --tail 20 --no-color ${svc.map(q).join(' ')}`], { cwd: root, env: ENV, detached: true }) : undefined;
     follow?.stdout?.on('data', b => log.write(b)); follow?.stderr?.on('data', b => log.write(b));
     // Each link shows "answers" as soon as it does, or why not yet.

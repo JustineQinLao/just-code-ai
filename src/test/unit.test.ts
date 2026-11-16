@@ -1383,3 +1383,13 @@ test('app: after a merge it rebuilds only for build inputs, otherwise restarts',
   for (const f of ['Dockerfile', 'frontend/Dockerfile.dev', 'docker-compose.yml', 'frontend/package.json', 'package-lock.json', 'backend/requirements.txt', 'backend/app/migrations/0004_x.py', 'go.mod', 'nginx/nginx.conf'])
     assert.equal(App.modeFor(['src/a.ts', f]), 'build', f);
 });
+
+test('app: test and job containers are never the frontend or backend', () => {
+  const App = require('../app');
+  const ps = App.parsePs(JSON.stringify([
+    { Service: 'api', Publishers: [{ PublishedPort: 9009, TargetPort: 9009 }] },
+    { Service: 'playwright-worker', Publishers: [{ PublishedPort: 3001, TargetPort: 3000 }] },
+    { Service: 'frontend', Publishers: [{ PublishedPort: 4200, TargetPort: 4200 }] },
+  ]));
+  assert.deepEqual(App.composeLinks(ps, {}).map((l: any) => [l.label, l.role]), [['frontend', 'frontend'], ['api', 'backend'], ['playwright-worker', 'other']]);
+});
