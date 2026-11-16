@@ -428,7 +428,7 @@
       JC.h('div', { class: 'row' },
         building ? JC.btn('Building…', () => {}, 'primary', 'It is building: see the steps above') : JC.btn(a.state === 'running' || a.state === 'failed' ? '↻ Rebuild' : '▶ Start', () => JC.post('appStart'), 'primary', 'Builds the current branch in the project folder and starts it'),
         a.state === 'running' || building ? JC.btn('■ Stop', () => JC.post('appStop'), 'ghost') : '',
-        a.log ? JC.btn('Open log', () => JC.post('appLog'), 'ghost') : '',
+        JC.btn('Show in terminal', () => JC.post('appTerminal'), 'ghost', 'The build and run output, live, in a terminal panel'),
         (a.state === 'failed' || !a.detected) && !building ? JC.btn('Ask Claude to fix it', () => { JC.post('appFix'); d.close(); }, 'ghost', 'A ⚡ task in the project folder gets the error and the log') : ''),
       JC.h('p', { class: 'muted small' }, 'Runs from the project folder on its current branch. It rebuilds by itself when a sprint merges, and after a merge into this branch while it runs, when code changed.'),
       a.log ? JC.h('details', { open: building || a.state === 'failed' }, JC.h('summary', { class: 'small' }, 'Log'), JC.h('pre', { class: 'small applog' }, a.log.slice(-3000))) : '');

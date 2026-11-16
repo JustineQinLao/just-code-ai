@@ -410,7 +410,8 @@ export async function handle(m: any, remote = false) {
       emit({ type: 'cleanup', items: Cleanup.scan(r.root, s.data.tasks), freed: before, stacks: stacks.length });
       return push();
     }
-    case 'appStart': if (!remote) void App.start(r.root); return;
+    case 'appStart': if (!remote) { void App.start(r.root); appTerminal(r.root, false); } return;
+    case 'appTerminal': if (!remote) appTerminal(r.root, true); return;
     case 'appStop': if (!remote) await App.stop(r.root); return;
     case 'appLog': if (!remote) void vscode.window.showTextDocument(vscode.Uri.file(App.logFile(r.root))); return;
     case 'appFix': {
@@ -611,3 +612,33 @@ async function initialize(r: Runner) {
   await r.run(task.id);
   open(task.id);
 }
+
+// "JustCode App" terminal: the app's build and run output, live, as in a terminal (follows .justcode/app.log;
+// a new build starts a new section). One per project; reopening shows it again.
+const appTerms = new Map<string, vscode.Terminal>();
+function appTerminal(root: string, focus: boolean) {
+  const have = appTerms.get(root);
+  if (have && vscode.window.terminals.includes(have)) { have.show(!focus); return; }
+  const write = new vscode.EventEmitter<string>();
+  let offset = 0, timer: NodeJS.Timeout | undefined;
+  const crlf = (s: string) => s.replace(/\r?\n/g, '\r\n');
+  const pump = () => {
+    let st: fs.Stats;
+    try { st = fs.statSync(App.logFile(root)); } catch { return; }
+    if (st.size < offset) { write.fire('\r\n\x1b[2m──────── new build ────────\x1b[0m\r\n'); offset = 0; }
+    if (st.size === offset) return;
+    const fd = fs.openSync(App.logFile(root), 'r'), buf = Buffer.alloc(st.size - offset);
+    try { fs.readSync(fd, buf, 0, buf.length, offset); } finally { fs.closeSync(fd); }
+    offset = st.size;
+    write.fire(crlf(buf.toString('utf8')));
+  };
+  const pty: vscode.Pseudoterminal = {
+    onDidWrite: write.event,
+    open: () => { write.fire(`\x1b[1mJustCode App · ${path.basename(root)}\x1b[0m\r\n\x1b[2mLive output of ▶ Start app / Rebuild. Closing this terminal does not stop the app.\x1b[0m\r\n\r\n`); pump(); timer = setInterval(pump, 400); },
+    close: () => { if (timer) clearInterval(timer); appTerms.delete(root); },
+  };
+  const term = vscode.window.createTerminal({ name: `JustCode App · ${path.basename(root)}`, pty, iconPath: new vscode.ThemeIcon('server-process') });
+  appTerms.set(root, term);
+  term.show(!focus);
+}
+

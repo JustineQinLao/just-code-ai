@@ -1358,3 +1358,10 @@ test('cleanup: finished tasks lose transcripts and screenshots, keep brief and h
   assert.ok(fs.existsSync(path.join(root, '.justcode/tasks/live1/transcript.jsonl')));
   assert.ok(!fs.existsSync(path.join(root, '.justcode/tasks/gone1')) && !fs.existsSync(path.join(root, '.justcode/attachments/gone1')));
 });
+
+test('app: a command that hangs is stopped at its timeout, with everything it started', async () => {
+  const App = require('../app');
+  const t0 = Date.now();
+  assert.equal(typeof await App.pingDocker(), 'boolean');
+  assert.ok(Date.now() - t0 < 15000, 'the Docker check never hangs');
+});

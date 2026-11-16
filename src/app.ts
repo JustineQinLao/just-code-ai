@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as net from 'net';
+import * as http from 'http';
 import * as path from 'path';
 import { spawn, execFile } from 'child_process';
 import { EventEmitter } from 'events';
@@ -293,20 +294,38 @@ async function waitUp(links: AppLink[], ms: number, refresh?: () => void) {
 function sh(cmd: string, cwd: string, log: fs.WriteStream, timeout: number, env: NodeJS.ProcessEnv = ENV) {
   return new Promise<void>((resolve, reject) => {
     log.write(`\n$ ${cmd}\n`);
-    const p = spawn('/bin/sh', ['-c', cmd], { cwd, env });
-    p.stdout.pipe(log, { end: false }); p.stderr.pipe(log, { end: false });
-    const t = setTimeout(() => { p.kill('SIGTERM'); reject(new Error(`${cmd} took longer than ${Math.round(timeout / 60000)} min`)); }, timeout);
+    // Its own process group: a timeout stops the command and everything it started (a hung docker call included).
+    const p = spawn('/bin/sh', ['-c', cmd], { cwd, env, detached: true });
+    p.stdout.on('data', b => log.write(b)); p.stderr.on('data', b => log.write(b));
+    const t = setTimeout(() => { try { process.kill(-p.pid!, 'SIGKILL'); } catch { p.kill('SIGKILL'); } reject(new Error(`${cmd.slice(0, 120)} took longer than ${Math.round(timeout / 60000) || 1} min and was stopped`)); }, timeout);
     p.on('error', e => { clearTimeout(t); reject(e); });
-    p.on('close', code => { clearTimeout(t); code === 0 ? resolve() : reject(new Error(`${cmd} failed (exit ${code}); see the log`)); });
+    p.on('exit', code => { clearTimeout(t); code === 0 ? resolve() : reject(new Error(`${cmd.slice(0, 120)} failed (exit ${code}); see the log`)); });
   });
 }
 const out = (cmd: string, args: string[], cwd: string) => new Promise<string>((res, rej) => execFile(cmd, args, { cwd, env: ENV, timeout: 30_000, maxBuffer: 8 << 20 }, (e, o) => e ? rej(e) : res(o)));
 const headOf = (root: string) => out('git', ['rev-parse', '--short', 'HEAD'], root).then(s => s.trim(), () => undefined);
+// Is the Docker engine answering? Its socket's /_ping, 3 s at most: a hung `docker info` can never stall a build.
+export function pingDocker(): Promise<boolean> {
+  const host = process.env.DOCKER_HOST?.startsWith('unix://') ? process.env.DOCKER_HOST.slice(7) : undefined;
+  const socks = [host, path.join(os.homedir(), '.docker', 'run', 'docker.sock'), path.join(os.homedir(), '.docker', 'desktop', 'docker.sock'), '/var/run/docker.sock'].filter((s): s is string => !!s && fs.existsSync(s));
+  return socks.reduce<Promise<boolean>>((prev, sock) => prev.then(ok => ok || new Promise(res => {
+    const req = http.request({ socketPath: sock, path: '/_ping', timeout: 3000 }, r => { r.resume(); res(r.statusCode === 200); });
+    req.on('timeout', () => { req.destroy(); res(false); }); req.on('error', () => res(false)); req.end();
+  })), Promise.resolve(false));
+}
 // Docker not running: start Docker Desktop (macOS, Linux desktop) and wait up to 2 minutes for it.
-const dockerUp = (root: string, log: fs.WriteStream) => sh('docker info >/dev/null 2>&1 || { echo "Docker is not running: starting Docker Desktop…"; ' +
-  '(open -a Docker 2>/dev/null || systemctl --user start docker-desktop 2>/dev/null || true); ' +
-  'i=0; while [ $i -lt 60 ]; do sleep 2; docker info >/dev/null 2>&1 && { echo "Docker is up."; exit 0; }; i=$((i+1)); done; ' +
-  'echo "Docker did not start in 2 minutes. Start Docker Desktop yourself, then Rebuild."; exit 1; }', root, log, 150_000);
+async function dockerUp(root: string, log: fs.WriteStream) {
+  log.write('\n$ checking Docker…\n');
+  if (await pingDocker()) { log.write('Docker is running.\n'); return; }
+  log.write('Docker is not answering: starting Docker Desktop…\n');
+  await sh('open -a Docker 2>/dev/null || systemctl --user start docker-desktop 2>/dev/null || true', root, log, 20_000).catch(() => undefined);
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    if (await pingDocker()) { log.write('Docker is up.\n'); return; }
+    if (i % 5 === 4) log.write(`still waiting for Docker (${(i + 1) * 2} s)…\n`);
+  }
+  throw new Error('Docker did not answer within 2 minutes. Open Docker Desktop (quit and reopen it if it is stuck), then Rebuild.');
+}
 const imageName = (root: string) => `justcode-${path.basename(root).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
 function killAll(pids?: number[]) {
