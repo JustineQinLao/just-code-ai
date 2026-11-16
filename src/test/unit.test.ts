@@ -1472,3 +1472,16 @@ test('checks: a command that leaves a background process holding its output stil
   assert.match(r.out, /done/);
   assert.ok(Date.now() - t0 < 10_000, `took ${Date.now() - t0} ms`);
 });
+
+test('checks: watch-mode test runners run once', () => {
+  const C = require('../checks');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-once-'));
+  fs.writeFileSync(path.join(d, 'karma.conf.js'), '');
+  assert.equal(C.oneShot('ng test', d), '--watch=false --browsers=ChromeHeadless');
+  assert.equal(C.oneShot('ng test --watch=false', d), '');
+  assert.equal(C.oneShot('vitest', d), '--run');
+  assert.equal(C.oneShot('vitest run', d), '');
+  assert.equal(C.oneShot('react-scripts test', d), '--watchAll=false');
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: 'ng test' } }));
+  assert.equal(C.detectChecks(d).find((c: any) => c.name === 'tests').cmd, 'npm test --silent -- --watch=false --browsers=ChromeHeadless');
+});

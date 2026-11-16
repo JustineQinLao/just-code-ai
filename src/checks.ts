@@ -22,6 +22,17 @@ export function packageManager(dir: string) {
 const LOCKS = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock'];
 
 // The checks a project has, from its own files. Only commands that run once and exit; never a dev server.
+// A check must run once and exit. Test runners that watch by default (Angular/Karma keeps Chrome open and waits for
+// file changes, a check that never ends) get the flags that make them run once, headless.
+export function oneShot(script: string, dir: string): string {
+  const karma = has(dir, 'karma.conf.js') || has(dir, 'karma.conf.cjs') || has(dir, 'karma.conf.ts') || /:karma"/.test(read(path.join(dir, 'angular.json')));
+  if (/\bng\s+test\b/.test(script) && !/--watch[= ]false|--no-watch/.test(script)) return `--watch=false${karma ? ' --browsers=ChromeHeadless' : ''}`;
+  if (/\bkarma\s+start\b/.test(script) && !/--single-run/.test(script)) return '--single-run --browsers=ChromeHeadless';
+  if (/\bvitest\b/.test(script) && !/\bvitest\s+run\b|--run\b/.test(script)) return '--run';
+  if (/\b(react-scripts|craco|jest)\b/.test(script) && !/--watchAll[= ]false|--ci\b/.test(script)) return '--watchAll=false';
+  return '';
+}
+
 export function detectChecks(dir: string): Check[] {
   const out: Check[] = [];
   let pkg: any;
@@ -32,7 +43,10 @@ export function detectChecks(dir: string): Check[] {
     const tc = ['typecheck', 'type-check', 'check-types', 'tsc'].find(k => s[k]);
     if (tc) out.push({ name: 'type check', cmd: run(tc) });
     else if (has(dir, 'tsconfig.json') && (pkg.devDependencies?.typescript || pkg.dependencies?.typescript)) out.push({ name: 'type check', cmd: 'npx --no-install tsc --noEmit' });
-    if (s.test && !/no test specified/.test(s.test) && !/\b(watch|--watch)\b/.test(s.test)) out.push({ name: 'tests', cmd: pm === 'npm' ? 'npm test --silent' : `${pm} test` });
+    if (s.test && !/no test specified/.test(s.test) && !/\b(watch|--watch)\b/.test(s.test)) {
+      const once = oneShot(s.test, dir);
+      out.push({ name: 'tests', cmd: `${pm === 'npm' ? 'npm test --silent' : `${pm} test`}${once ? ` -- ${once}` : ''}` });
+    }
   }
   const py = has(dir, 'pytest.ini') || /\[tool\.pytest|pytest/.test(read(path.join(dir, 'pyproject.toml'))) || /pytest/.test(read(path.join(dir, 'setup.cfg'))) || /pytest/.test(read(path.join(dir, 'requirements-dev.txt')));
   if (has(dir, 'manage.py')) out.push({ name: 'tests', cmd: 'python manage.py test' });
