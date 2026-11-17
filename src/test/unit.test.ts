@@ -852,6 +852,78 @@ test('mergeBranch reports conflicts and changes nothing', async () => {
   assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'main');
 });
 
+test('merge into the checked-out branch: your uncommitted files in the way stop it cleanly; JustCode\'s own are reset; task commits skip .justcode', async () => {
+  const { root, sh } = leaseRepo();
+  fs.mkdirSync(path.join(root, '.justcode', 'plugin'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'plugin', 'p.json'), '1'); sh('add', '-A'); sh('commit', '-qm', 'tracked .justcode');
+  const wt = path.join(root, '.wt'); sh('worktree', 'add', '-q', '-b', 'side', wt);
+  fs.writeFileSync(path.join(wt, 'a.txt'), 'side'); fs.writeFileSync(path.join(wt, '.justcode', 'plugin', 'p.json'), '2');
+  assert.equal(await g.commitAll(wt, 'work'), true);
+  assert.deepEqual(sh('diff', '--name-only', 'main', 'side').toString().trim().split('\n'), ['a.txt'], '.justcode stays off the branch');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'mine');                         // your uncommitted edit, in the way
+  fs.writeFileSync(path.join(root, '.justcode', 'plugin', 'p.json'), '3');   // JustCode's own, rewritten locally
+  const head = sh('rev-parse', 'main').toString();
+  await assert.rejects(g.mergeBranch(root, 'main', 'side', 'x'), (e: any) => e instanceof g.LocalChanges && e.files.join() === 'a.txt' && /Commit or discard/.test(e.message));
+  assert.equal(sh('rev-parse', 'main').toString(), head, 'nothing merged');
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'mine', 'your edit is untouched');
+  sh('checkout', '--', 'a.txt');
+  assert.deepEqual(await g.mergeBranch(root, 'main', 'side', 'x'), []);
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'side');
+});
+
+test('a sprint whose merge is held up by your uncommitted files: the task is still merged, the sprint says why, and it merges once clear', async () => {
+  const { root, sh } = leaseRepo();
+  const store = new Store(root), notes: string[] = [];
+  const r = leaseRunner(store, notes);
+  const sp = store.addSprint('S1');
+  const branch = `jc/sprint-x`; sh('branch', branch);
+  store.updateSprint(sp.id, { branch, target: 'main' });
+  const wt = path.join(root, '.wt'); sh('worktree', 'add', '-q', wt, branch);
+  fs.writeFileSync(path.join(wt, 'a.txt'), 'sprint'); sh('-C', wt, 'commit', '-qam', 's'); sh('worktree', 'remove', '--force', wt);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'mine');
+  await r.mergeSprint(sp.id);
+  assert.match(store.sprint(sp.id)!.blocked ?? '', /uncommitted changes in main.*a\.txt/);
+  assert.equal(store.sprint(sp.id)!.branch, branch);
+  sh('checkout', '--', 'a.txt');
+  await r.sweep();
+  assert.equal(store.sprint(sp.id)!.branch, undefined, 'merged by the sweep');
+  assert.equal(store.sprint(sp.id)!.blocked, undefined);
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'sprint');
+  r.dispose();
+});
+
+test('a sprint held up by your files asks what to do: commit is recommended when they do not clash, Later when they do', async () => {
+  const { root, sh } = leaseRepo();
+  const lines = (n: number, at: number, v: string) => Array.from({ length: n }, (_, i) => i === at ? v : `line ${i}`).join('\n') + '\n';
+  fs.writeFileSync(path.join(root, 'b.txt'), lines(10, -1, '')); sh('add', '-A'); sh('commit', '-qm', 'b');
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const asked: string[][] = [];
+  r.d.choose = async (_text: string, ...b: string[]) => { asked.push(b); return b[0]; };   // take the recommendation
+  const sp = store.addSprint('S1'), branch = 'jc/sprint-y'; sh('branch', branch);
+  store.updateSprint(sp.id, { branch, target: 'main' });
+  const wt = path.join(root, '.wt'); sh('worktree', 'add', '-q', wt, branch);
+  fs.writeFileSync(path.join(wt, 'b.txt'), lines(10, 0, 'sprint')); sh('-C', wt, 'commit', '-qam', 's'); sh('worktree', 'remove', '--force', wt);
+  // Clashing edit (same line): Later is recommended, and nothing changes.
+  fs.writeFileSync(path.join(root, 'b.txt'), lines(10, 0, 'mine'));
+  await r.mergeSprint(sp.id);
+  for (let i = 0; i < 50 && !asked.length; i++) await new Promise(res => setTimeout(res, 20));
+  assert.match(asked[0][0], /^Later \(recommended\)/);
+  assert.equal(store.sprint(sp.id)!.branch, branch);
+  assert.match(fs.readFileSync(path.join(root, 'b.txt'), 'utf8'), /mine/);
+  // An edit elsewhere in the file: commit is recommended, and taking it commits then merges.
+  fs.writeFileSync(path.join(root, 'b.txt'), lines(10, 8, 'mine'));
+  store.updateSprint(sp.id, { blocked: undefined, blockedBy: undefined });
+  await r.mergeSprint(sp.id);
+  for (let i = 0; i < 100 && store.sprint(sp.id)!.branch; i++) await new Promise(res => setTimeout(res, 20));
+  assert.match(asked[1][0], /^Commit them, then merge \(recommended\)/);
+  assert.equal(store.sprint(sp.id)!.branch, undefined, 'merged');
+  const merged = fs.readFileSync(path.join(root, 'b.txt'), 'utf8');
+  assert.ok(merged.includes('sprint') && merged.includes('mine'), merged);
+  assert.equal(sh('status', '--porcelain', '--', '.', ':(exclude).justcode').toString().trim(), '');
+  r.dispose();
+});
+
 test('a merged task still lists what it changed, from its merge commit', async () => {
   const { root } = leaseRepo();
   const store = new Store(root);

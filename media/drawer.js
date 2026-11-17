@@ -187,7 +187,7 @@
       JC.h('div', { class: 'row' }, JC.h('span', { class: 'tags grow' }, tags.map(x => JC.h('span', { class: 'tag' }, x))), JC.btn('✕', closeTask, 'ghost icon', 'Close (Esc)')),
       JC.h('h3', { class: `dtitle${fullTitle === t.id ? ' full' : ''}`, title: 'Click to show or hide the whole title', onclick: () => { fullTitle = fullTitle === t.id ? null : t.id; renderDrawer(); } }, t.title),
       JC.h('div', { class: 'stepper' }, window.JCStatus.STEPS.map((s, i) => JC.h('span', { class: i < st ? 'ok' : i === st ? 'now' : '' }, i < st ? `✓ ${s}` : s))),
-      t.warning ? JC.h('div', { class: 'cardwarn' }, `⚠ ${t.warning}`) : '',
+      t.warning && t.status !== 'done' ? JC.h('div', { class: 'cardwarn' }, `⚠ ${t.warning}`) : '',
       t.mergeWhenReady ? JC.h('div', { class: 'cardnote' }, '✓ Merge requested: it merges by itself when the checks and review pass') : '',
       JC.h('div', { class: `next dnext ${nx.tone}` }, JC.h('span', {}, nx.text), nx.actions.length ? JC.h('div', { class: 'acts' }, nx.actions.slice(0, 3).map(([l, fn], i) => JC.btn(l, fn, i === 0 ? 'primary' : 'ghost'))) : ''),
       JC.h('nav', { class: 'tabs' }, [['activity', 'Activity'], ['changes', 'Changes'], ['review', 'Review'], ['details', 'Details']]

@@ -49,6 +49,8 @@ export const reviewMethods = {
         else if (t.review?.state === 'fail') no('the AI review found issues');
         else if (t.review?.state === 'pass' || !o.auto || t.review?.state === 'error') { this.store.updateTask(t.id, { mergeWhenReady: undefined }); await this.merge(t.id); }
       }
+      // A finished sprint whose merge was held up (your uncommitted files, conflicts): it goes in once the way is clear.
+      for (const sp of this.store.data.sprints) if (sp.blocked && sp.branch) await this.mergeSprint(sp.id).catch(() => undefined);
       for (const t of o.auto ? [...this.store.data.tasks] : []) {   // the rest is the automatic review's
         if (t.archived || t.status === 'done' || t.init || t.remote || !t.branch || !t.worktree || t.error || t.limited) continue;
         if (this.sessions.get(t.id)?.open && this.sessions.get(t.id)!.state !== 'idle') continue;

@@ -124,7 +124,7 @@ export class Runner {
     // Docker stacks left by task folders that are gone (merged or discarded before this cleanup existed, or while closed).
     setTimeout(() => void sweepStacks(this.root, this.store.data.tasks.filter(t => t.worktree && t.status !== 'done').map(t => t.worktree!))
       .then(n => n.length && this.d.notify('info', `Stopped ${n.length} Docker stack(s) left by finished tasks.`, undefined, true)), 5000).unref?.();
-    this.leaseTimer = setInterval(() => this.renewLease(), LEASE_MS / 4);
+    this.leaseTimer = setInterval(() => { this.renewLease(); if (this.store.data.sprints.some(s => s.blocked)) this.sweepSoon(); }, LEASE_MS / 4);
     this.leaseTimer.unref?.();
   }
 

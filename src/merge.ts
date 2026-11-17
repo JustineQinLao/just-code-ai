@@ -121,7 +121,8 @@ export const mergeMethods = {
       this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now(), mergeWhenReady: undefined });
       this.audit('merge', id, `${t.branch} into ${t.base}${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}${t.review?.unreviewed ? ', unreviewed' : ''}`, auto ? 'justcode' : by);
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
-      if (t.sprintId) await this.mergeSprint(t.sprintId);
+      // The task is merged: a sprint merge that cannot go yet is the sprint's problem (shown on the board), not this task's.
+      if (t.sprintId) await this.mergeSprint(t.sprintId).catch(e => this.d.notify('error', e.message));
       this.pump();  // its slot is free: the next queued task starts on top of this merge
     });
   },
@@ -139,22 +140,57 @@ export const mergeMethods = {
     if (tasks.some(x => (x.sprintId === id && !x.archived && x.status !== 'done') || (x.base === sp.branch && x.worktree && x.status !== 'done'))) return;
     this.requireLease();
     const before = await g.git(this.root, ['rev-parse', `refs/heads/${sp.target}`]).catch(() => '');
+    // Not merged yet: said once, kept on the sprint (a board banner), and tried again by the sweep until it goes in.
+    const block = (why: string, files?: string[]) => {
+      const fresh = sp.blocked !== why;
+      this.store.updateSprint(id, { blocked: why, blockedBy: files });
+      if (!fresh) return;
+      // Your own files in the way: ask what to do, with a recommendation (not awaited: a dialog must not hold the queue).
+      if (files) void this.askBlocked(id);
+      else this.d.notify('warn', `${sp.name} is done, but not merged into ${sp.target} yet: ${why}`, undefined, true);
+    };
     if (await g.branchExists(this.root, sp.branch)) {
-      const conflicts = await g.mergeBranch(this.root, sp.target, sp.branch, `Merge sprint ${sp.name} (${sp.branch})`);
-      if (conflicts.length) {
-        this.d.notify('warn', `${sp.name} is done, but ${sp.branch} conflicts with ${sp.target} in: ${conflicts.join(', ')}. ` +
-          `Merge it by hand (git merge ${sp.branch} on ${sp.target}), then use Merge sprint.`, undefined, true);
-        return;
+      let conflicts: string[];
+      try { conflicts = await g.mergeBranch(this.root, sp.target, sp.branch, `Merge sprint ${sp.name} (${sp.branch})`); } catch (e: any) {
+        if (!(e instanceof g.LocalChanges)) throw e;
+        const by = tasks.filter(x => !x.archived && x.directFiles?.some(f => e.files.includes(f))).map(x => `${x.chat ? 'chat' : 'task'} "${x.title.slice(0, 40)}"`);
+        return block(`${e.message}${by.length ? ` They come from ${by.join(', ')}.` : ''}`, e.files);
       }
+      if (conflicts.length) return block(`${sp.branch} conflicts with ${sp.target} in: ${conflicts.join(', ')}. Merge it by hand (git merge ${sp.branch} on ${sp.target}), then Merge sprint.`);
       await g.deleteBranch(this.root, sp.branch).catch(() => undefined);
     }
-    this.store.updateSprint(id, { branch: undefined, target: undefined });
+    this.store.updateSprint(id, { branch: undefined, target: undefined, blocked: undefined, blockedBy: undefined });
     this.d.notify('info', `${sp.name} is done: merged ${sp.branch} into ${sp.target}.`, undefined, true);
     // The sprint is in: free Docker of every task stack, then rebuild the project's app from the project folder when code changed.
     const live = this.store.data.tasks.filter(x => x.worktree && x.status !== 'done').map(x => x.worktree!);
     await sweepStacks(this.root, live).catch(() => []);
     const files = before ? (await g.git(this.root, ['diff', '--name-only', before, sp.target]).catch(() => '')).split('\n').filter(Boolean) : [];
     void App.afterMerge(this.root, files, `after ${sp.name}`, true).catch(() => undefined);  // not awaited: a build can take minutes
+  },
+
+  // A done sprint held up by your uncommitted files in the project folder: you choose, JustCode recommends. Committing
+  // them is recommended when they merge cleanly with the sprint; when they change the same lines, look first.
+  async askBlocked(this: Runner, id: string) {
+    const sp = this.store.sprint(id), files = sp?.blockedBy;
+    if (!sp?.branch || !sp.target || !files?.length) return;
+    const clash = await g.wouldConflict(this.root, sp.target, sp.branch, files).catch(() => files);
+    const COMMIT = `Commit them, then merge${clash.length ? '' : ' (recommended)'}`, DISCARD = 'Discard my changes, then merge', LATER = `Later${clash.length ? ' (recommended)' : ''}`;
+    const list = `${files.slice(0, 5).join(', ')}${files.length > 5 ? ` and ${files.length - 5} more` : ''}`;
+    const c = await this.d.choose(`${sp.name} is done, but your uncommitted changes in ${sp.target} are in the way of its merge: ${list}.\n\n` +
+      (clash.length ? `${clash.join(', ')} change${clash.length === 1 ? 's' : ''} the same lines as the sprint: committing leads to a conflict you resolve by hand. Recommended: look at them first (keep, commit or discard), and the sprint merges by itself once they are out of the way.`
+        : 'They do not clash with the sprint. Recommended: commit them; the sprint then merges on top.'),
+      ...(clash.length ? [LATER, COMMIT, DISCARD] : [COMMIT, DISCARD, LATER]));
+    const now = this.store.sprint(id);
+    if (!now?.branch || now.blockedBy?.join() !== files.join() || (c !== COMMIT && c !== DISCARD)) return;
+    await this.serial(async () => {
+      if (c === COMMIT) await g.commitFiles(this.root, `Your changes before merging ${sp.name}`, files, this.secretScan());
+      else await g.revertFiles(this.root, files);
+      this.audit(c === COMMIT ? 'finish' : 'discard', undefined, `${files.join(', ')} (in the way of ${sp.name})`, 'user');
+      // Chats and direct tasks that listed these files no longer have them uncommitted.
+      for (const t of this.store.data.tasks) if (t.directFiles?.some(f => files.includes(f))) this.store.updateTask(t.id, { directFiles: t.directFiles.filter(f => !files.includes(f)) });
+      this.store.updateSprint(id, { blocked: undefined, blockedBy: undefined });
+      await this.mergeSprint(id);
+    }).catch(e => this.d.notify('error', e.message));
   },
 
   resolveWithClaude(this: Runner, id: string) {

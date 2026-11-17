@@ -10,7 +10,7 @@ export type Mode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissi
 // sources: ids of the project sources this sprint's tasks and plans use; undefined (sprints made before) = all of them.
 // branch: the sprint's own branch, cut from `target` (the branch you were on) when its first task starts. Its tasks
 // merge into it; when the last one merges, it merges into `target` and both are cleared.
-export interface Sprint { id: string; name: string; goal?: string; active?: boolean; closed?: boolean; sources?: string[]; branch?: string; target?: string }
+export interface Sprint { id: string; name: string; goal?: string; active?: boolean; closed?: boolean; sources?: string[]; branch?: string; target?: string; blocked?: string; blockedBy?: string[] }
 
 export interface Task {
   id: string;

@@ -155,6 +155,8 @@
     }
     const over = S.board.tasks.find(t => !t.archived && /^Budget reached/.test(t.error || ''));
     if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in ⚙ Settings → Policy, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
+    for (const sp of (S.board.sprints || []).filter(s => s.blocked && s.branch)) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, `${sp.name} is not in ${sp.target} yet. `), sp.blocked, ' It merges by itself once that is done.'),
+      btn(sp.blockedBy?.length ? 'What to do…' : 'Merge sprint now', () => post('mergeSprint', { sprintId: sp.id }), sp.blockedBy?.length ? 'primary' : 'ghost')));
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => JC.openTask(init.running.id), 'primary')));
@@ -271,7 +273,7 @@
         t.agents?.length > 1 ? h('span', { class: 'tag' }, `${t.agents.length - 1} subagent${t.agents.length > 2 ? 's' : ''}`) : '',
         usageTotal(t) ? h('span', { class: 'tag muted', title: usageTitle(t) }, tokShort(usageTotal(t))) : ''),
       h('div', { class: `next ${nx.tone}`, title: nx.tone === 'err' ? nx.text : undefined }, nx.text),
-      t.warning ? h('div', { class: 'cardwarn', title: t.warning }, `⚠ ${t.warning}`) : '',
+      t.warning && t.status !== 'done' ? h('div', { class: 'cardwarn', title: t.warning }, `⚠ ${t.warning}`) : '',
       t.mergeWhenReady ? h('div', { class: 'cardnote' }, '✓ Merge requested: it merges by itself when the checks and review pass') : '',
       nx.tone === 'run' ? h('div', { class: 'pulsebar' }) : '',
       ...(t.asks || []).map(a => JC.askBox(t, a)),

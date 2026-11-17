@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -201,7 +202,8 @@ export const isMerged = (repo: string, branch: string, base: string) => ok(repo,
 export async function commitAll(dir: string, message: string, secretScan = false) {
   // Unresolved conflicts: committing now would put the markers on the branch.
   if ((await git(dir, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim()) return false;
-  await git(dir, ['add', '-A']);
+  // JustCode's own files (some projects track .justcode/) never ride along on a task's branch.
+  await git(dir, ['add', '-A', '--', '.', ':(exclude).justcode']);
   if (await ok(dir, ['diff', '--cached', '--quiet'])) return false;
   await scanStaged(dir, secretScan);
   await git(dir, ['commit', '-q', '-m', message]);
@@ -221,6 +223,7 @@ async function scanStaged(dir: string, on: boolean, files?: string[]) {
 export async function commitFiles(repo: string, message: string, files: string[], secretScan = false) {
   const use: string[] = [];
   for (const f of files) {
+    if (isJustcode(f)) continue;
     if (await ok(repo, ['add', '-A', '--', f])) use.push(f);
   }
   const staged = (await git(repo, ['diff', '--cached', '--name-only', '-z', '--', ...(use.length ? use : ['.'])])).split('\0').filter(Boolean);
@@ -330,8 +333,56 @@ export async function finishResolve(dir: string) {
 // Step 2: the branch now contains base, so merging it into base cannot conflict.
 // Base checked out in the main folder: a normal --no-ff merge there (git refuses if local edits would be overwritten).
 // Otherwise the merge commit is built without a checkout and base is moved only if it hasn't moved meanwhile.
+const isJustcode = (f: string) => /^\.justcode(\/|$)/.test(f);
+
+// Uncommitted files in the project folder that a merge into its checked-out branch would overwrite: those
+// `branch` changes (since it left `target`) and that are modified, staged or untracked in the checkout.
+export class LocalChanges extends Error {
+  constructor(public files: string[], target: string) {
+    super(`You have uncommitted changes in ${target} that this merge would overwrite: ${files.slice(0, 5).join(', ')}${files.length > 5 ? ` and ${files.length - 5} more` : ''}. Commit or discard them, and it merges.`);
+  }
+}
+
+// Before `git merge` in the user's checkout: JustCode's own files there (.justcode/, which it rewrites anyway) are put
+// back to HEAD; your own uncommitted work in the way stops the merge with a LocalChanges error instead of git's.
+export async function clearWayFor(repo: string, target: string, branch: string) {
+  const incoming = new Set((await git(repo, ['diff', '--name-only', '-z', `${target}...${branch}`]).catch(() => '')).split('\0').filter(Boolean));
+  const dirty = (await git(repo, ['status', '--porcelain', '-z', '--untracked-files=all'])).split('\0').filter(Boolean)
+    .filter(l => l.length > 3).map(l => l.slice(3));
+  const blocking = [...new Set(dirty.filter(f => incoming.has(f)))];
+  const ours = blocking.filter(isJustcode), theirs = blocking.filter(f => !isJustcode(f));
+  if (theirs.length) throw new LocalChanges(theirs, target);
+  for (const f of ours) {
+    if (await ok(repo, ['cat-file', '-e', `HEAD:${f}`])) await git(repo, ['checkout', 'HEAD', '--', f]);
+    else fs.rmSync(path.join(repo, f), { force: true });
+  }
+}
+
+// Files whose uncommitted version in the checkout would conflict with `branch` once committed on `target`
+// (same lines changed on both sides). The others merge cleanly after a commit.
+export async function wouldConflict(repo: string, target: string, branch: string, files: string[]) {
+  const base = await git(repo, ['merge-base', target, branch]).catch(() => '');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jc-mf-'));
+  const show = async (ref: string, f: string, to: string) => {   // raw bytes (git() trims the last newline)
+    fs.writeFileSync(to, ref ? await exec('git', ['show', `${ref}:${f}`], { cwd: repo, env: GIT_ENV, maxBuffer: 64 << 20, encoding: 'buffer' }).then(r => r.stdout, () => Buffer.alloc(0)) : Buffer.alloc(0));
+    return to;
+  };
+  const out: string[] = [];
+  try {
+    for (const f of files) {
+      const cur = path.join(repo, f);
+      if (!fs.existsSync(cur)) { out.push(f); continue; }
+      const b = await show(base, f, path.join(tmp, 'base')), o = await show(branch, f, path.join(tmp, 'other'));
+      const c = path.join(tmp, 'cur'); fs.copyFileSync(cur, c);
+      if (!await ok(repo, ['merge-file', '-q', '-p', c, b, o])) out.push(f);
+    }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  return out;
+}
+
 export async function mergeIntoBase(repo: string, base: string, branch: string, message: string) {
   if (await currentBranch(repo) === base) {
+    await clearWayFor(repo, base, branch);
     await git(repo, ['merge', '--no-ff', '-m', message, branch]);
     return;
   }
@@ -361,7 +412,7 @@ export async function mergeBranch(repo: string, target: string, branch: string, 
     if (!lines.length) throw new Error(`git merge-tree: ${(tree as any).err.trim()}`);
     return [...new Set(lines.slice(1))];
   }
-  if (await currentBranch(repo) === target) { await git(repo, ['merge', '--no-ff', '-m', message, branch]); return []; }
+  if (await currentBranch(repo) === target) { await clearWayFor(repo, target, branch); await git(repo, ['merge', '--no-ff', '-m', message, branch]); return []; }
   const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
   for (const block of (await git(repo, ['worktree', 'list', '--porcelain'])).split('\n\n')) {
     const where = block.split('\n').includes(`branch refs/heads/${target}`) && block.split('\n').find(l => l.startsWith('worktree '))?.slice(9);

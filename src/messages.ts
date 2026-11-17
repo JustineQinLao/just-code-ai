@@ -160,7 +160,8 @@ export async function handle(m: any, remote = false) {
       return;
     case 'mergeSprint': {
       const sp = s.sprint(m.sprintId);
-      if (sp?.branch && await confirm(`Merge ${sp.branch} into ${sp.target}?`, 'Merge sprint')) await r.finishSprint(sp.id);
+      if (sp?.branch && sp.blockedBy?.length && !remote) await r.askBlocked(sp.id);   // your files are in the way: choose what to do with them
+      else if (sp?.branch && await confirm(`Merge ${sp.branch} into ${sp.target}?`, 'Merge sprint')) await r.finishSprint(sp.id);
       return;
     }
     case 'run': r.audit('task.run', m.id, undefined, who); await r.requestRun(m.id); return;
