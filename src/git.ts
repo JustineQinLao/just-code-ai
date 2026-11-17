@@ -203,7 +203,9 @@ export async function commitAll(dir: string, message: string, secretScan = false
   // Unresolved conflicts: committing now would put the markers on the branch.
   if ((await git(dir, ['diff', '--name-only', '--diff-filter=U']).catch(() => '')).trim()) return false;
   // JustCode's own files (some projects track .justcode/) never ride along on a task's branch.
-  await git(dir, ['add', '-A', '--', '.', ':(exclude).justcode']);
+  // (Staged, then taken back out: naming .justcode in the add itself fails when .gitignore lists it.)
+  await git(dir, ['add', '-A']);
+  if ((await git(dir, ['diff', '--cached', '--name-only', '--', '.justcode']).catch(() => '')).trim()) await git(dir, ['reset', '-q', '--', '.justcode']);
   if (await ok(dir, ['diff', '--cached', '--quiet'])) return false;
   await scanStaged(dir, secretScan);
   await git(dir, ['commit', '-q', '-m', message]);

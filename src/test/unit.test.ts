@@ -886,6 +886,15 @@ test('merge into the checked-out branch: your uncommitted files in the way stop 
   assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'side');
 });
 
+test('commitAll works when .gitignore lists .justcode (the usual case)', async () => {
+  const { root, sh } = leaseRepo();
+  fs.writeFileSync(path.join(root, '.gitignore'), '/.justcode/\n'); sh('add', '-A'); sh('commit', '-qm', 'ignore');
+  fs.mkdirSync(path.join(root, '.justcode'), { recursive: true }); fs.writeFileSync(path.join(root, '.justcode', 'board.json'), '{}');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'work');
+  assert.equal(await g.commitAll(root, 'work'), true);
+  assert.deepEqual(sh('show', '--name-only', '--format=', 'HEAD').toString().trim().split('\n'), ['a.txt']);
+});
+
 test('a sprint whose merge is held up by your uncommitted files: the task is still merged, the sprint says why, and it merges once clear', async () => {
   const { root, sh } = leaseRepo();
   const store = new Store(root), notes: string[] = [];
