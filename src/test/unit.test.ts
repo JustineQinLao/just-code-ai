@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { matches, alwaysChoice, parseRule } from '../policy';
+import { matches, alwaysChoice, parseRule, setBudget } from '../policy';
 import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store, resolveWhere, splitTitle, runsApp } from '../store';
@@ -945,6 +945,25 @@ test('a sprint held up by your files asks what to do: commit is recommended when
   const merged = fs.readFileSync(path.join(root, 'b.txt'), 'utf8');
   assert.ok(merged.includes('sprint') && merged.includes('mine'), merged);
   assert.equal(sh('status', '--porcelain', '--', '.', ':(exclude).justcode').toString().trim(), '');
+  r.dispose();
+});
+
+test('raising a budget clears every stop it covers and puts the To do tasks back in the queue', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  r.pump = () => {};   // nothing really starts here
+  const sp = store.addSprint('S1');
+  setBudget(root, 'sprint', 50);
+  const spent = store.addTask({ title: 'Spent', mode: 'auto', sprintId: sp.id }); store.updateTask(spent.id, { status: 'done', costUsd: 50.41 });
+  const why = 'Budget reached: $50.41 of $50 (sprint). Raise the sprint budget in ⚙ Settings → Policy, then press Resume.';
+  const a = store.addTask({ title: 'A', mode: 'auto', sprintId: sp.id }), b = store.addTask({ title: 'B', mode: 'auto', sprintId: sp.id });
+  store.updateTask(a.id, { error: why }); store.updateTask(b.id, { error: why });
+  assert.equal(r.budgetRaised(), 0, 'still over: nothing changes');
+  setBudget(root, 'sprint', 100);
+  assert.equal(r.budgetRaised(), 2);
+  assert.equal(store.task(a.id)!.error, undefined);
+  assert.deepEqual(store.queue, [a.id, b.id]);
   r.dispose();
 });
 

@@ -375,9 +375,12 @@ export async function handle(m: any, remote = false) {
       const was = loadPolicy(r.root).policy.maxCostUsd[m.key as 'task'];
       setBudget(r.root, m.key, Number(m.usd));
       r.audit('policy.change', undefined, `maxCostUsd.${m.key}: ${was} → ${Number(m.usd)}`, who);
+      // Every task the old budget stopped and the new one covers carries on (To do ones go back in the queue).
+      const wasStopped = t && /^Budget reached/.test(t.error ?? '') && t.status !== 'todo';
+      r.budgetRaised();
       push();
-      // "Raise and resume" on a task the budget stopped: the task continues under the new budget.
-      if (t) await r.say(m.id, 'Continue the task.');
+      // "Raise and resume" on a started task the budget stopped: it continues under the new budget.
+      if (wasStopped) await r.say(m.id, 'Continue the task.');
       return;
     }
     case 'openChat': case 'newChat': {

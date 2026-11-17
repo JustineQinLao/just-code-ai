@@ -29,6 +29,7 @@ export interface Task {
   base?: string;              // branch the task forks from and merges back into
   branch?: string;            // jc/<slug>-<id>
   worktree?: string;          // <project>/.justcode/worktrees/<id>
+  resolveTries?: number;      // times Claude was asked to resolve merge conflicts by itself (at most 2)
   conflicts?: string[];       // files left conflicted by "bring base in"; merge is blocked until resolved
   pr?: string;                // remote PR URL, when pushed
   review?: Review;            // AI review of the task's branch

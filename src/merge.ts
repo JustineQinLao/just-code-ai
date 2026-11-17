@@ -103,8 +103,14 @@ export const mergeMethods = {
         await g.commitAll(t.worktree, t.title, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
         const conflicts = await g.syncWithBase(t.worktree, t.base);
         if (conflicts.length) {
-          this.store.updateTask(id, { conflicts, status: 'review' });
-          this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card, then merge again.`, id, true);
+          // Its base moved on while it waited (other tasks merged). Claude resolves them by itself (twice at most); the
+          // task then goes through checks and review again and merges, as a click on Merge asked.
+          const tries = (t.resolveTries ?? 0) + 1;
+          this.store.updateTask(id, { conflicts, status: 'review', resolveTries: tries, ...(auto ? {} : { mergeWhenReady: true }) });
+          if (tries <= 2 && !this.overBudget(t) && !this.d.limits.held()) {
+            this.d.notify('info', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s): Claude is resolving them, then it merges.`, id);
+            void Promise.resolve(this.resolveWithClaude(id)).catch(e => this.store.updateTask(id, { warning: `Could not start resolving: ${e.message}` }));
+          } else this.d.notify('warn', `"${t.title}" conflicts with ${t.base} in ${conflicts.length} file(s). Resolve them on the card (Resolve with Claude, or by hand and Mark resolved), then merge again.`, id, true);
           return;
         }
         const before = await g.git(this.root, ['rev-parse', `refs/heads/${t.base}`]).catch(() => '');
@@ -118,7 +124,7 @@ export const mergeMethods = {
       }
       // The merge is in git. A folder that will not go away must not leave the task in Review, or Merge runs again.
       await this.cleanup(t).catch(e => this.d.notify('warn', `Merged "${t.title}", but could not remove its folder (${e.message}). Delete ${t.worktree} by hand.`, id));
-      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now(), mergeWhenReady: undefined });
+      this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now(), mergeWhenReady: undefined, resolveTries: undefined });
       this.audit('merge', id, `${t.branch} into ${t.base}${acceptedIssues(t.review).length ? `, ${acceptedIssues(t.review).length} accepted review issue(s)` : ''}${t.review?.unreviewed ? ', unreviewed' : ''}`, auto ? 'justcode' : by);
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
       // The task is merged: a sprint merge that cannot go yet is the sprint's problem (shown on the board), not this task's.

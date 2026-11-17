@@ -49,6 +49,17 @@ export const guardMethods = {
     }
   },
 
+  // A budget was raised (here or by editing the policy): every task it had stopped and the new budget covers loses
+  // its stop, and the To do ones go back in the queue, in board order. Returns how many came back.
+  budgetRaised(this: Runner) {
+    const back = this.store.data.tasks.filter(t => !t.archived && /^Budget reached/.test(t.error ?? '') && !this.overBudget(t));
+    for (const t of back) this.store.updateTask(t.id, { error: undefined });
+    const todo = back.filter(t => t.status === 'todo' && !this.store.queue.includes(t.id)).map(t => t.id);
+    if (todo.length) { this.store.setQueue([...this.store.queue, ...todo]); this.pump(); }
+    if (back.length) this.changed();
+    return back.length;
+  },
+
   // After a turn or review adds cost: a used-up budget stops the task.
   checkBudget(this: Runner, id: string) {
     const t = this.store.task(id);
