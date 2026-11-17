@@ -162,7 +162,8 @@ export function saveArtifactSourceNow(root: string, src: A.Source): Promise<bool
     if (!got && missing) {
       term.dispose();
       void vscode.window.showWarningMessage(`Cannot save ${src.ref}: the claude.ai account Claude Code is signed in to cannot open it. It belongs to, or was shared with, another account or organization (or it was deleted). ` +
-        'Sign Claude Code in with that account, or ask the owner to share it with you, then press Save copy under 📎 Sources. Or save the page yourself and add the file as a source.', 'Open link', 'Sign in again')
+        'The same email can be in several organizations (your personal plan and a company workspace): compare the organization the browser shows for the link with /status in Claude Code, and /login into that one. ' +
+        'Then press Save copy under 📎 Sources. Or save the page yourself and add the file as a source.', 'Open link', 'Sign in again')
         .then(c => {
           if (c === 'Open link') void vscode.env.openExternal(vscode.Uri.parse(src.ref));
           else if (c === 'Sign in again') { const t2 = vscode.window.createTerminal({ name: 'Claude Code sign-in', cwd: root, env: { CLAUDECODE: null, CLAUDE_CODE_ENTRYPOINT: null, ANTHROPIC_API_KEY: null } }); t2.sendText([b, '/login'].map(q).join(' ')); t2.show(); }
