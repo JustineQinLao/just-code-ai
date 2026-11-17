@@ -157,6 +157,9 @@
     if (over) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Budget reached: '), `“${over.title}” spent ${over.error.replace(/^Budget reached: /, '').replace(/\s*Raise.*$/, '').trim()} Raise it in ⚙ Settings → Policy, then Resume.`), btn('Open policy.json', () => post('openPolicy'))));
     for (const sp of (S.board.sprints || []).filter(s => s.blocked && s.branch)) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, `${sp.name} is not in ${sp.target} yet. `), sp.blocked, ' It merges by itself once that is done.'),
       btn(sp.blockedBy?.length ? 'What to do…' : 'Merge sprint now', () => post('mergeSprint', { sprintId: sp.id }), sp.blockedBy?.length ? 'primary' : 'ghost')));
+    const waiting = (S.sources || []).find(x => x.asking);
+    if (waiting) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Saving a source needs your OK. '), `Claude Code asks before reading ${waiting.ref}: it cannot confirm who made it.`),
+      btn('Answer in terminal', () => post('showSaveTerminal', { sourceId: waiting.id }), 'primary')));
     const init = initState();
     if (st?.ready && init.running && init.running.asks?.length) out.push(h('div', { class: 'banner warn' }, h('div', { class: 'grow' }, h('b', {}, 'Project setup needs you. '), 'Claude is asking a question about this project.'),
       btn('Answer', () => JC.openTask(init.running.id), 'primary')));
