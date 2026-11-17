@@ -26,8 +26,18 @@ export const copyFiles = (root: string, id: string) => files(sourceCopy(root, id
 export const artifactLinksIn = (text: string) => [...new Set((text.match(/https:\/\/claude\.ai\/(?:code\/)?artifact\/[\w-]+/g) ?? []))];
 // Links from a prompt become project sources (once), so every later plan and task builds on them too.
 export const artifactKey = (url: string) => url.trim().replace(/[?#].*$/, '').replace(/\/$/, '');
+// Artifact links you deleted from the sources: a prompt that mentions one again does not add it back.
+const removedFile = (root: string) => jc(root, 'sources-removed.json');
+export function removedLinks(root: string): string[] {
+  try { const l = JSON.parse(read(removedFile(root)) || '[]'); return Array.isArray(l) ? l.filter(x => typeof x === 'string') : []; } catch { return []; }
+}
+export function markRemoved(root: string, ref: string, removed: boolean) {
+  const key = artifactKey(ref), cur = removedLinks(root).filter(l => l !== key);
+  write(removedFile(root), JSON.stringify(removed ? [...cur, key] : cur, null, 2));
+}
+
 export function addLinkSources(root: string, text: string) {
-  const all = loadSources(root), have = new Set(all.map(s => artifactKey(s.ref)));
+  const all = loadSources(root), have = new Set([...all.map(s => artifactKey(s.ref)), ...removedLinks(root)]);
   const add = artifactLinksIn(text).filter(l => !have.has(l)).map(ref => ({ id: Math.random().toString(16).slice(2, 10), kind: 'url' as const, ref, note: 'claude.ai artifact from a prompt' }));
   if (add.length) saveSources(root, [...all, ...add]);
   try { for (const l of artifactLinksIn(text)) R.upsert(root, l, { kind: 'input' }); } catch { /* the registry is a convenience */ }

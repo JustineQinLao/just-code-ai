@@ -769,6 +769,17 @@ test('sprint sources: a sprint uses the ones it lists, an older sprint all; past
   assert.deepEqual(store.addSprint('S1').sources, []);
 });
 
+test('a deleted artifact source is not added back by a prompt that mentions it, until you add it by hand', () => {
+  const { root } = leaseRepo();
+  const link = 'https://claude.ai/artifact/5gSFCPn8TRg5KYfarQHeXL';
+  assert.equal(A.addLinkSources(root, `use ${link}#page-dcb81aee8d83`).length, 1);
+  A.saveSources(root, []); A.markRemoved(root, `${link}#page-dcb81aee8d83`, true);
+  assert.equal(A.addLinkSources(root, `again ${link}`).length, 0);
+  assert.deepEqual(A.loadSources(root), []);
+  A.markRemoved(root, link, false);
+  assert.equal(A.addLinkSources(root, `again ${link}`).length, 1);
+});
+
 test('artifact links in a prompt become sources once; plans list sources; runs save them before starting', async () => {
   const { root } = leaseRepo();
   const link = 'https://claude.ai/artifact/RRgUoNaXSgxGCWotthB3qF';

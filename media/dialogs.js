@@ -310,8 +310,8 @@
         s.saving ? JC.btn('Show terminal', () => JC.post('showSaveTerminal', { sourceId: s.id }), 'ghost', 'Open the terminal saving it, e.g. if it asks for approval')
           : s.artifact && inSprint !== false ? JC.btn(s.copy ? 'Refresh' : 'Save copy', () => JC.post('saveSourceCopy', { sourceId: s.id }), s.copy ? 'ghost' : 'primary', 'Save the artifact\'s files so tasks can read them') : '',
         inSprint === false ? JC.btn('+ Use in sprint', () => JC.post('sprintSource', { sprintId: sprint.id, sourceId: s.id, on: true }), 'ghost')
-          : sprint ? JC.btn('Remove from sprint', () => JC.post('sprintSource', { sprintId: sprint.id, sourceId: s.id, on: false }), 'ghost', 'Kept in the project; other sprints are unaffected')
-          : JC.btn('Delete…', () => JC.post('removeSource', { sourceId: s.id }), 'ghost', 'Delete from the whole project (asks first)')),
+          : sprint ? JC.btn('Remove from sprint', () => JC.post('sprintSource', { sprintId: sprint.id, sourceId: s.id, on: false }), 'ghost', 'Kept in the project; other sprints are unaffected') : '',
+        JC.btn(sprint ? '🗑' : 'Delete…', () => JC.post('removeSource', { sourceId: s.id }), sprint ? 'ghost icon' : 'ghost', 'Delete from the whole project, so it no longer shows here (asks first)')),
       inSprint === false ? (s.note ? JC.h('p', { class: 'muted small' }, s.note) : '')
         : JC.h('input', { class: 'grow', value: s.note || '', placeholder: 'What is it? Claude reads this note first', onchange: e => JC.post('editSource', { sourceId: s.id, note: e.target.value }) }),
       !sprint ? JC.h('p', { class: 'muted small' }, usedBy(s).length ? `Used in: ${usedBy(s).join(', ')}` : 'Not used in any open sprint') : '');

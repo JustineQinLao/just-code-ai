@@ -299,6 +299,7 @@ export async function handle(m: any, remote = false) {
       if (!add.length) return;
       const note = await input({ title: 'What is it? (optional)', prompt: 'One line Claude reads before deciding to open it, e.g. "Product spec for v2: roles and permissions"' });
       A.saveSources(r.root, [...A.loadSources(r.root), ...add.map(a => ({ ...a, note: note?.trim() || undefined }))]);
+      for (const a of add) if (a.kind === 'url' && A.isArtifactLink(a.ref)) A.markRemoved(r.root, a.ref, false);   // added by hand: wanted again
       // Added while viewing a sprint: that sprint uses it.
       const sp = s.data.sprints.find(x => x.id === m.sprintId);
       if (sp?.sources) s.updateSprint(sp.id, { sources: [...sp.sources, ...add.map(a => a.id)] });
@@ -465,8 +466,11 @@ export async function handle(m: any, remote = false) {
       if (!src) return;
       const users = s.data.sprints.filter(x => !x.closed && (!x.sources || x.sources.includes(src.id))).map(x => x.name);
       const label = src.kind === 'url' ? src.ref : path.basename(src.ref);
-      if (!await confirm(`Delete "${label}" from the project?${users.length ? ` Used in: ${users.join(', ')}.` : ''} To stop using it in one sprint, use Remove from sprint instead.`, 'Delete')) return;
+      const art = src.kind === 'url' && A.isArtifactLink(src.ref);
+      if (!await confirm(`Delete "${label}" from the project?${users.length ? ` Used in: ${users.join(', ')}.` : ''}${art ? ' Its saved copy goes too, and prompts that mention the link no longer add it back (add it again under 📎 Sources if you need it).' : ''} To stop using it in one sprint only, use Remove from sprint instead.`, 'Delete')) return;
+      savingTerms.get(src.id)?.dispose();   // a save still running stops
       A.saveSources(r.root, A.loadSources(r.root).filter(x => x.id !== src.id));
+      if (art) { A.markRemoved(r.root, src.ref, true); fs.rmSync(A.sourceCopy(r.root, src.id), { recursive: true, force: true }); }
       for (const sp of s.data.sprints) if (sp.sources?.includes(src.id)) s.updateSprint(sp.id, { sources: sp.sources.filter(id => id !== src.id) });
       return push();
     }
