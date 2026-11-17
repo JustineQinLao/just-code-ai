@@ -433,6 +433,21 @@ export async function handle(m: any, remote = false) {
     case 'openPolicy': loadPolicy(r.root); void vscode.window.showTextDocument(vscode.Uri.file(policyFile(r.root))); return;
     case 'exportAudit': void vscode.commands.executeCommand('justCode.exportAudit'); return;
     case 'artifactNote': { const e = R.find(r.root, String(m.url)); if (e) R.upsert(r.root, e.url, { note: String(m.note ?? '').trim() || undefined }); return push(); }
+    // Off the Artifacts list for good: its source (and saved copy) go too, and prompts that mention it no longer add it back.
+    case 'removeArtifact': {
+      const e = R.find(r.root, String(m.url));
+      if (!e || remote) return;
+      if (!await confirm(`Remove ${e.title || e.url} from this project's artifacts?${e.kind === 'output' ? ' The page stays on claude.ai.' : ''} Briefs stop listing it, its source and saved copy are deleted, and prompts that mention the link no longer add it back.`, 'Remove')) return;
+      for (const src of A.loadSources(r.root).filter(x => x.kind === 'url' && A.artifactKey(x.ref) === e.url)) {
+        savingTerms.get(src.id)?.dispose();
+        fs.rmSync(A.sourceCopy(r.root, src.id), { recursive: true, force: true });
+        for (const sp of s.data.sprints) if (sp.sources?.includes(src.id)) s.updateSprint(sp.id, { sources: sp.sources.filter(id => id !== src.id) });
+      }
+      A.saveSources(r.root, A.loadSources(r.root).filter(x => !(x.kind === 'url' && A.artifactKey(x.ref) === e.url)));
+      A.markRemoved(r.root, e.url, true);
+      R.remove(r.root, e.url);
+      return push();
+    }
     case 'useArtifact': {
       // A registry artifact becomes a project source (once), used by the current sprint when it picks its sources.
       const e = R.find(r.root, String(m.url));
@@ -470,7 +485,7 @@ export async function handle(m: any, remote = false) {
       if (!await confirm(`Delete "${label}" from the project?${users.length ? ` Used in: ${users.join(', ')}.` : ''}${art ? ' Its saved copy goes too, and prompts that mention the link no longer add it back (add it again under 📎 Sources if you need it).' : ''} To stop using it in one sprint only, use Remove from sprint instead.`, 'Delete')) return;
       savingTerms.get(src.id)?.dispose();   // a save still running stops
       A.saveSources(r.root, A.loadSources(r.root).filter(x => x.id !== src.id));
-      if (art) { A.markRemoved(r.root, src.ref, true); fs.rmSync(A.sourceCopy(r.root, src.id), { recursive: true, force: true }); }
+      if (art) { A.markRemoved(r.root, src.ref, true); R.remove(r.root, src.ref); fs.rmSync(A.sourceCopy(r.root, src.id), { recursive: true, force: true }); }
       for (const sp of s.data.sprints) if (sp.sources?.includes(src.id)) s.updateSprint(sp.id, { sources: sp.sources.filter(id => id !== src.id) });
       return push();
     }

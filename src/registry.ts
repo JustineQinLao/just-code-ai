@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import { artifactKey, copyFiles } from './artifacts';
+import { artifactKey, copyFiles, removedLinks } from './artifacts';
 
 // Every claude.ai artifact the project has used or produced, in one list: .justcode/artifacts.json.
 // input: a link typed in a prompt or task, or a saved source. output: a page a task published.
@@ -45,6 +45,8 @@ export function upsert(root: string, url: string, patch: Partial<Omit<ArtifactEn
   let e = list.find(x => x.id === id);
   if (!e) {
     e = { id, url: artifactKey(url), kind: patch.kind ?? 'input', taskIds: [], sprintIds: [], firstSeen: now, lastSeen: now };
+    // An input you removed stays out (a prompt mentioning it again does not bring it back); a page a task publishes is new work and is kept.
+    if (e.kind !== 'output' && removedLinks(root).includes(e.url)) return e;
     list.push(e);
   }
   const kind = e.kind === 'output' ? 'output' : patch.kind ?? e.kind;
@@ -55,7 +57,8 @@ export function upsert(root: string, url: string, patch: Partial<Omit<ArtifactEn
 
 export function link(root: string, url: string, taskId: string, sprintId?: string, kind?: ArtifactEntry['kind']) {
   const e = upsert(root, url, kind ? { kind } : {});
-  const list = load(root), x = list.find(y => y.id === e.id)!;
+  const list = load(root), x = list.find(y => y.id === e.id);
+  if (!x) return e;   // removed: not listed
   if (!x.taskIds.includes(taskId)) x.taskIds.push(taskId);
   if (sprintId && !x.sprintIds.includes(sprintId)) x.sprintIds.push(sprintId);
   save(root, list);
@@ -99,4 +102,9 @@ export function forBrief(root: string, taskTitle: (id: string) => string | undef
     const copy = sourceCopyOf?.(e.url);
     return `- ${e.title ? `${e.title}: ` : ''}${e.url} (${e.kind}, ${who})${copy ? `, local copy: ${copy}` : ''}${e.note ? ` — ${e.note}` : ''}`;
   });
+}
+
+// Removed by you (⧉ Artifacts or 📎 Sources): off the list and out of briefs.
+export function remove(root: string, url: string) {
+  save(root, load(root).filter(e => e.id !== entryId(url)));
 }

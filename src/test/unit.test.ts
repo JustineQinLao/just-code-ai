@@ -16,6 +16,7 @@ import { setupSkill, DESIGN_SKILL_PATH } from '../skill';
 import { writePlugin } from '../plugin';
 import * as g from '../git';
 import * as A from '../artifacts';
+import * as R from '../registry';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'jc-test-'));
 
@@ -773,9 +774,12 @@ test('a deleted artifact source is not added back by a prompt that mentions it, 
   const { root } = leaseRepo();
   const link = 'https://claude.ai/artifact/5gSFCPn8TRg5KYfarQHeXL';
   assert.equal(A.addLinkSources(root, `use ${link}#page-dcb81aee8d83`).length, 1);
-  A.saveSources(root, []); A.markRemoved(root, `${link}#page-dcb81aee8d83`, true);
+  assert.equal(R.load(root).length, 1, 'listed under ⧉ Artifacts');
+  A.saveSources(root, []); A.markRemoved(root, `${link}#page-dcb81aee8d83`, true); R.remove(root, link);
   assert.equal(A.addLinkSources(root, `again ${link}`).length, 0);
+  R.link(root, link, 'task1');
   assert.deepEqual(A.loadSources(root), []);
+  assert.deepEqual(R.load(root), [], 'not back in ⧉ Artifacts either');
   A.markRemoved(root, link, false);
   assert.equal(A.addLinkSources(root, `again ${link}`).length, 1);
 });
