@@ -127,7 +127,9 @@ there today.
    built, take two screenshots at the design's \`w\`×\`h\` from \`canvas.json\` (e.g. 390×844):
    - the design: open \`file://<copy>/project/<Name>.dc.html\` with the Playwright MCP (browser_resize to the design size, then browser_take_screenshot with filename <shots>/<Name>-design.png)
      (<shots> is the absolute path under "## Screenshots go to" in your brief; the \`.dc.html\` renders close enough without the editor: its \`.css\` is beside it)
-   - the build: the same on the app's route, signed in as the screen's role, saved as \`<shots>/<Name>-app.png\`
+   - the build: the same on the app's route, signed in as the screen's role, saved as \`<shots>/<Name>-app.png\`.
+     If the app is not running, start it detached (e.g. \`docker compose up -d\`, or a background process logging to
+     \`<shots>/app.log\`), wait until it answers, and stop what you started after the last screenshot.
      Never use npx playwright or any other way to take screenshots.
    Read both images and compare: sections, labels, order, colors, type, spacing. Fix what differs, then re-shoot only
    that screen. Run only the tests for the code you changed. List any difference left in the handoff, with both

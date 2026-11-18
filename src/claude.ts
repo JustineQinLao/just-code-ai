@@ -145,6 +145,7 @@ Never wait in long loops (sleep inside for/while, retries for minutes): one comm
 To wait for something, check once, then check again in a later command, so the user sees progress.
 Exception: when the task itself asks you to run, start or serve the app (so the user can open it), start it detached so your turn can end
 (e.g. docker compose up -d --build, or a background process with its output in a log file), wait until it answers, then give the frontend and backend URLs (from the .env the build uses: its host and port variables) and any logins, and leave it running.
+A UI task that must screenshot its built screen (a design to match, or a screenshot in "Done when") may also start the app detached the same way, take the screenshots, then stop what it started.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
 When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
 If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;
@@ -541,7 +542,7 @@ How to plan:
 3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
 4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
 5. Build order: foundations first (models, tokens, shared components, layout), features next, and tasks that verify or document the whole (captures, PDFs, e2e reports) last. A task never depends on a later one. If the project has a plan-tasks skill, follow it.
-6. When a source is a design (a saved design canvas folder with project/canvas.json, mockups, screenshots), open it before proposing UI tasks. Give each UI task the exact screen files it must match in "files" (e.g. ".justcode/sources/<id>/project/Staff-Floor.dc.html") and in "done" a check that the built screen has the same sections, labels, order and styling as that file, shown by a screenshot at the design's width.
+6. When a source is a design (a saved design canvas folder with project/canvas.json, mockups, screenshots), open it before proposing UI tasks. Give each UI task the exact screen files it must match in "files" by absolute path (e.g. "<project root>/.justcode/sources/<id>/project/Staff-Floor.dc.html": tasks run in folders without .justcode) and in "done" a check that the built screen has the same sections, labels, order and styling as that file, shown by a screenshot at the design's width.
 
 After every turn, end your message with the FULL proposed To do list as one JSON block:
 \`\`\`tasks

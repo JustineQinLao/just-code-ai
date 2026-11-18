@@ -203,8 +203,9 @@ test('artifacts: brief lists sources by reference, progress keeps merged work', 
   const root = tmp();
   fs.mkdirSync(path.join(root, 'docs'));
   const sources: A.Source[] = [{ id: 's1', kind: 'file', ref: path.join(root, 'docs', 'spec.md'), note: 'Product spec' }, { id: 's2', kind: 'url', ref: 'https://example.com/design' }, { id: 's3', kind: 'folder', ref: '/outside/designs' }];
-  const t = { id: 't1', title: 'Add roles', description: 'Owner and staff', mode: 'auto', status: 'todo', created: 0, sources: ['s1', 's3'], files: ['/x/data.csv'] } as any;
+  const t = { id: 't1', title: 'Add roles', description: 'Owner and staff', mode: 'auto', status: 'todo', created: 0, sources: ['s1', 's3'], files: ['/x/data.csv', '.justcode/sources/d1/project/Floor.dc.html'] } as any;
   const brief = A.writeBrief(root, t, sources);
+  assert.ok(brief.includes(`- ${path.join(root, '.justcode/sources/d1/project/Floor.dc.html')}`), 'design screen file by absolute path: task folders have no .justcode');
   assert.match(brief, /- docs\/spec\.md — Product spec/);
   assert.doesNotMatch(brief, /example\.com/);
   assert.match(brief, /\/x\/data\.csv/);

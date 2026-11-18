@@ -163,7 +163,7 @@ export function writeBrief(root: string, t: Task, sources: Source[], taskTitle?:
     t.description?.trim() && t.description.trim() !== t.title.trim() ? t.description.trim() : '',
     picked.length || files.length || t.images?.length ? '## Sources (the basis for this task; open only what you need)' : '',
     ...picked.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`),
-    ...files.map(f => `- ${f}`),
+    ...files.map(f => `- ${/^\.justcode[\\/]/.test(f) ? path.join(root, f) : f}`), // the task's folder has no .justcode
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
     `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo).${isUiTask(t) ? ` Take screenshots only with the Playwright MCP browser_take_screenshot tool (headless), filename always an absolute path in that folder.` : ''}`,
     projectSection(root),
