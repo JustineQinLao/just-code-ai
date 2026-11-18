@@ -484,7 +484,7 @@ export async function runReview(prompt: string, o: HeadlessOpts & { shots: strin
         o, { ...base, resume: sessionId });
       usage = addUsage(usage, { input_tokens: r.usage?.input, output_tokens: r.usage?.output, cache_read_input_tokens: r.usage?.cacheRead, cache_creation_input_tokens: r.usage?.cacheWrite });
       sessionId = r.sessionId ?? sessionId;
-      costUsd += r.costUsd;
+      costUsd = r.costUsd;   // same session resumed: its total already includes the earlier attempt
     }
   }
 }

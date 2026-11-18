@@ -164,7 +164,7 @@ test('session: messages build the log, agent map and turn result', () => {
   assert.equal(s.agents.get('main')!.tokens, 120);
   assert.deepEqual(s.steps.map(x => x.kind), ['info', 'say', 'tool', 'tool']);
   assert.equal(s.steps[3].agent, 'Explore');
-  assert.deepEqual(turns, [{ ok: true, error: undefined, text: 'Done', limit: false, costUsd: 0.01, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
+  assert.deepEqual(turns, [{ ok: true, error: undefined, text: 'Done', limit: false, costUsd: 0.01, sessionId: undefined, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }]);
   assert.equal(s.state, 'idle');
   s.kill();
 });
@@ -1711,4 +1711,17 @@ test('commit messages: the project\'s own rules are found and named in the brief
   assert.equal(sh('log', '-1', '--format=%B').toString().trim(), 'feat(x): one commit\n\n- three files');
   const files = sh('diff', '--name-only', 'main', 'HEAD').toString();
   assert.ok(['f1.txt', 'f2.txt', 'f3.txt'].every(f => files.includes(f)), 'every turn\'s change is in the one commit');
+});
+
+test('cost: the SDK reports a running total per session, so each turn adds only what it rose by', () => {
+  const { spent } = require('../store');
+  let seen: any;
+  let d = spent(seen, 's1', 0.5); seen = d.seen; assert.equal(d.delta, 0.5);
+  d = spent(seen, 's1', 0.8); seen = d.seen; assert.ok(Math.abs(d.delta - 0.3) < 1e-9, 'turn 2 of the same session: only its share');
+  d = spent(seen, 's1', 1.1); seen = d.seen; assert.ok(Math.abs(d.delta - 0.3) < 1e-9, 'resumed: the restored spend is not counted again');
+  d = spent(seen, 's2', 0.2); seen = d.seen; assert.equal(d.delta, 0.2, 'another session counts on its own');
+  d = spent(seen, 's1', 0.1); assert.equal(d.delta, 0.1, 'a total that went down started over: all of it is new');
+  const root = tmp(); const store = new Store(root);
+  store.addPlannerCost(0.4, 'p'); store.addPlannerCost(0.6, 'p');
+  assert.ok(Math.abs(store.data.plannerCostUsd! - 0.6) < 1e-9);
 });

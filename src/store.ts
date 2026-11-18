@@ -53,6 +53,7 @@ export interface Task {
   remote?: boolean;           // continued in a terminal with Remote Control (phone / claude.ai); back on the board when it closes
   error?: string;             // the last run failed to start or ended on an error
   noWait?: boolean;           // Run all goes on without it (it waits for you to merge or fix it); cleared when it runs again
+  costSeen?: Record<string, number>; // the last running total seen per Claude session id (see spent())
   costUsd?: number;           // estimated cost of the task's sessions and reviews so far (API pricing; plans are not billed per task)
   output?: 'artifact';        // the result is a page published as a claude.ai artifact (not a code change)
   artifactUrl?: string;       // its link, once published
@@ -76,7 +77,15 @@ export interface Review { state: 'running' | 'pass' | 'fail' | 'error'; unreview
 // rules: what you approved with "Always" on a card, kept for every task of this project.
 // queue: Run all's remaining tasks, so a reload continues it.
 // plannerCostUsd: planning chats' estimated cost, which counts toward the project budget.
-export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[]; plannerCostUsd?: number }
+export interface Board { sprints: Sprint[]; tasks: Task[]; rules?: string[]; queue?: string[]; plannerCostUsd?: number; plannerCostSeen?: Record<string, number> }
+
+// The Agent SDK's total_cost_usd is a running total: for the whole query() so far (each turn of a streaming session
+// reports the total, not its own share) and, on resume, including the session's earlier spend. Adding results up
+// counts the same spend again, so the new spend is how far the total rose since this session was last seen.
+export function spent(seen: Record<string, number> | undefined, sid: string | undefined, total: number) {
+  const prev = sid ? seen?.[sid] ?? 0 : 0;
+  return { delta: total >= prev ? total - prev : total, seen: sid ? { ...seen, [sid]: total } : seen };
+}
 
 // One board per project folder, kept in the project at .justcode/board.json.
 export class Store {
@@ -199,10 +208,13 @@ export class Store {
   }
 
   get queue() { return this.board.queue ?? []; }
-  addPlannerCost(usd: number) {
-    if (!(usd > 0)) return;
+  // total: the planner session's running total (see spent()).
+  addPlannerCost(total: number, sessionId?: string) {
+    if (!(total > 0)) return;
     this.fresh();
-    this.board.plannerCostUsd = (this.board.plannerCostUsd ?? 0) + usd;
+    const { delta, seen } = spent(this.board.plannerCostSeen, sessionId, total);
+    this.board.plannerCostSeen = seen;
+    this.board.plannerCostUsd = (this.board.plannerCostUsd ?? 0) + delta;
     this.save();
   }
 

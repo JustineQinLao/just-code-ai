@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { EventEmitter } from 'events';
-import { Store, Task } from './store';
+import { Store, Task, spent } from './store';
 import * as g from './git';
 import { sweepStacks } from './docker';
 import * as CodeMap from './codemap';
@@ -471,7 +471,9 @@ export class Runner {
   async turnEnded(id: string, turn: TurnEnd) {
     const t = this.store.task(id);
     if (!t) return;
-    const cost = (t.costUsd ?? 0) + (turn.costUsd ?? 0);
+    const { delta, seen } = spent(t.costSeen, turn.sessionId ?? t.sessionId, turn.costUsd ?? 0);
+    const cost = (t.costUsd ?? 0) + delta;
+    if (delta || seen !== t.costSeen) this.store.updateTask(id, { costSeen: seen, costUsd: cost });
     if (turn.usage) this.store.updateTask(id, { usage: { ...t.usage, build: addUsage(t.usage?.build as Usage | undefined, { input_tokens: turn.usage.input, output_tokens: turn.usage.output, cache_read_input_tokens: turn.usage.cacheRead, cache_creation_input_tokens: turn.usage.cacheWrite }) } });
     if (turn.limit || (this.d.limits.held() && !turn.ok)) {
       this.d.limits.setReached('usage');

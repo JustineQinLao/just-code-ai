@@ -36,7 +36,8 @@ export interface AgentNode {
   tokens: number; tools: number; ms: number; started: number; last?: string; summary?: string; toolUseId?: string;
 }
 
-export interface TurnEnd { ok: boolean; error?: string; text: string; limit?: boolean; costUsd?: number; usage?: Usage }
+// costUsd: the session's running total so far (as the SDK reports it), not this turn's share: see spent().
+export interface TurnEnd { ok: boolean; error?: string; text: string; limit?: boolean; costUsd?: number; sessionId?: string; usage?: Usage }
 
 export interface SessionOptions {
   bin: string;
@@ -287,7 +288,7 @@ export class Session {
         if (error) this.step({ kind: 'error', text: String(error).slice(0, 600) });
         this.state = 'idle';
         this.armIdle();
-        this.emit('turn', { ok, error, text, limit, costUsd: r.total_cost_usd, usage: addUsage(undefined, r.usage) } as TurnEnd);
+        this.emit('turn', { ok, error, text, limit, costUsd: r.total_cost_usd, sessionId: r.session_id, usage: addUsage(undefined, r.usage) } as TurnEnd);
         this.changed();
         return;
       }

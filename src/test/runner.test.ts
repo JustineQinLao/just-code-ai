@@ -17,7 +17,7 @@ useSdk({
   query: (({ prompt, options }: any) => {
     const review = !!options.outputFormat;
     async function* run() {
-      if (review) { reviews++; yield result({ structured_output: { pass: true, issues: [], risk: 'minor', tested: ['npm test'] } }); return; }
+      if (review) { reviews++; yield result({ session_id: 'review', structured_output: { pass: true, issues: [], risk: 'minor', tested: ['npm test'] } }); return; }
       for await (const msg of prompt as AsyncIterable<any>) {
         const text = typeof msg.message?.content === 'string' ? msg.message.content : JSON.stringify(msg.message?.content);
         const name = /File: (\S+)/.exec(text)?.[1] ?? 'out.txt';

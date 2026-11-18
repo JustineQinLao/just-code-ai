@@ -3,7 +3,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
 import { EventEmitter } from 'events';
-import { Store, Task } from './store';
+import { Store, Task, spent } from './store';
 import * as g from './git';
 import * as CodeMap from './codemap';
 import { setupSkillBody } from './skill';
@@ -204,7 +204,7 @@ export const reviewMethods = {
       const exec = async (p: string, resume?: string) => {
         const r = await runReview(p, { bin, cwd, env: this.folderEnv(id, cwd), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(), map: await CodeMap.forSession(cwd, this.root, this.d.settings().codeMap !== false),
           timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, web: UI_FILE.test(diff) && !device?.devices.length, adbBin: device?.bin, cli: this.d.cli, resume });
-        if (r.costUsd) { const cur = this.store.task(id); if (cur) this.store.updateTask(id, { costUsd: (cur.costUsd ?? 0) + r.costUsd }); }
+        if (r.costUsd) { const cur = this.store.task(id); if (cur) { const { delta, seen } = spent(cur.costSeen, r.sessionId, r.costUsd); this.store.updateTask(id, { costSeen: seen, costUsd: (cur.costUsd ?? 0) + delta }); } }
         if (r.usage) {
           usage = addUsage(usage, { input_tokens: r.usage.input, output_tokens: r.usage.output, cache_read_input_tokens: r.usage.cacheRead, cache_creation_input_tokens: r.usage.cacheWrite });
           const cur = this.store.task(id);

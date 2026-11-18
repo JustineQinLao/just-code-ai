@@ -86,7 +86,7 @@ export const plannerMethods = {
   },
 
   onPlannerTurn(this: Runner, turn: TurnEnd) {
-    this.store.addPlannerCost(turn.costUsd ?? 0);
+    this.store.addPlannerCost(turn.costUsd ?? 0, turn.sessionId ?? this.plannerSession);
     if (turn.limit) { this.d.limits.setReached('usage'); return; }
     if (!turn.ok) { this.d.notify('error', `Planner stopped: ${String(turn.error).slice(0, 200)}`); return; }
     const ids = new Set([...this.plannerTargets, ...this.plannerOthers]);
