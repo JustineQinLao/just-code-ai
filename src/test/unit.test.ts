@@ -1739,3 +1739,22 @@ test('efficiency: map lookup becomes a short file list; caveman rules are trimme
   assert.equal(h.PreToolUse, undefined, 'no guard: no PreToolUse hook');
   assert.deepEqual((new Session({ bin: 'claude', cwd: '/x', sessionId: 'id', resume: false, mode: 'auto', allowed: [], rules: () => [], env: {}, idleMs: 60_000, label: 'T' }) as any).hooks(), {});
 });
+
+test('code map for planner and reviewer: changed names from a diff; outline only for a big map, without tests', () => {
+  const CodeMap = require('../codemap');
+  const diff = 'diff --git a/a.py b/a.py\n+++ b/a.py\n@@ -1,3 +1,4 @@ def stock_levels(branch):\n+def build_report(x):\n-class OldThing:\n+    def test_it(self):\n+const loadAll = async (x) => x\n';
+  assert.deepEqual(CodeMap.changedNames(diff), ['stock_levels', 'build_report', 'OldThing', 'loadAll']);
+  const dir = tmp(); fs.mkdirSync(CodeMap.mapDir(dir), { recursive: true });
+  const write = (n: number) => fs.writeFileSync(CodeMap.graphFile(dir), JSON.stringify({
+    nodes: [{ id: 'hub', label: 'Order', source_file: '../backend/orders/models.py', source_location: 'L5' }, { id: 't', label: 'OrderTests', source_file: '../backend/orders/tests.py', source_location: 'L1' },
+      ...Array.from({ length: n }, (_, i) => ({ id: `n${i}`, label: `f${i}()`, source_file: `../frontend/src/f${i % 3}.ts`, source_location: 'L1' }))],
+    links: [...Array.from({ length: 40 }, (_, i) => ({ source: `n${i}`, target: 'hub' })), ...Array.from({ length: 60 }, (_, i) => ({ source: `n${i}`, target: 't' }))] }));
+  write(10);
+  assert.equal(CodeMap.overview(dir), undefined, 'small project: no outline');
+  assert.equal(CodeMap.big(dir), false);
+  write(600);
+  const o = CodeMap.overview(dir);
+  assert.match(o, /Main folders .*frontend\/src \(600\)/);
+  assert.match(o, /- Order \(backend\/orders\/models\.py:5\)/);
+  assert.doesNotMatch(o, /OrderTests/, 'test code is not an outline hub');
+});

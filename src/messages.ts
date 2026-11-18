@@ -273,7 +273,7 @@ export async function handle(m: any, remote = false) {
     }) }); return;
     case 'planner': r.defaultMode = setting('defaultMode', 'auto'); await r.startPlanner(withImages(m.instruction, r.root, 'plan', m.images), m.ids ?? [], m.sprint, typeof m.into === 'string' ? m.into : undefined).catch(e => vscode.window.showErrorMessage(e.message)); return;
     case 'plannerAnswer': r.plannerAnswer({ id: m.ask, choice: m.choice, message: m.message, answers: m.answers }); return;
-    case 'plannerSay': try { r.plannerSay(withImages(m.text, r.root, 'plan', m.images)); } catch (e: any) { vscode.window.showErrorMessage(e.message); } return;
+    case 'plannerSay': try { await r.plannerSay(withImages(m.text, r.root, 'plan', m.images)); } catch (e: any) { vscode.window.showErrorMessage(e.message); } return;
     case 'stopPlanner': r.stopPlanner(); return;
     case 'applyProposals': r.defaultMode = setting('defaultMode', 'auto'); r.applyProposals(m.changes, m.removes); return;
     case 'pickFiles': {

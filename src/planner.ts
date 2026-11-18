@@ -62,7 +62,11 @@ export const plannerMethods = {
     const set = this.d.settings();
     this.plannerSession = randomUUID();
     A.logPrompt(this.root, { kind: 'plan', text: instruction, sessionId: this.plannerSession, title: sprint ? `Edit ${sprint.name}` : 'Plan' });
-    const map = await CodeMap.forSession(this.root, this.root, set.codeMap !== false);   // the planner finds code through the map too
+    // The planner's map: the freshest one with the sprint's work (a task folder on the sprint branch), since the project
+    // folder may be on another branch (main without the sprint's code); else the project folder's.
+    const mapDir = this.plannerMapDir(sid);
+    const map = await CodeMap.forSession(mapDir, this.root, set.codeMap !== false);
+    const mapNotes = map.rule ? await this.mapNotes(mapDir, instruction, true) : '';
     const s = new Session({
       // Not Claude Code's plan mode: it tells Claude to write a plan file, which a read-only chat cannot, so each turn
       // spent tokens on a refused Write. Default mode with the write tools removed keeps it read-only.
@@ -81,7 +85,8 @@ export const plannerMethods = {
     const planSources = A.sprintSources(A.loadSources(this.root), sid ? this.store.data.sprints.find(x => x.id === sid) : undefined);
     const arts = A.artifactsSection(this.root, planSources, x => this.store.task(x)?.title);
     await s.start((A.projectSection(this.root) ? `${A.projectSection(this.root)}\n\n` : '') + A.sourceLines(this.root, planSources) + (arts ? `${arts}\n\n` : '') + plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint,
-      others.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status })), into && this.store.data.sprints.some(x => x.name === into && !x.closed) ? into : undefined));
+      others.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status })), into && this.store.data.sprints.some(x => x.name === into && !x.closed) ? into : undefined) + mapNotes);
+    this.plannerMap = map.rule ? mapDir : undefined;
     this.changed();
   },
 
@@ -97,9 +102,25 @@ export const plannerMethods = {
 
   plannerAnswer(this: Runner, a: Answer) { this.planner?.answer(a); },
 
-  plannerSay(this: Runner, text: string) {
+  // JustCode asks the code map itself (the planner rarely does): the project's outline (first message only) and the
+  // files and names most related to the request, so the planner writes exact "Files:" lines without searching.
+  async mapNotes(this: Runner, dir: string, text: string, outline: boolean) {
+    const o = outline ? CodeMap.overview(dir) : undefined, look = await CodeMap.lookFirst(dir, text);
+    return [o && `## Project outline (code map)\n${o}`, look && `## Code related to this request (code map)\n${look}\nThe map's best guess from the request's words: check before relying on it.`]
+      .filter(Boolean).map(x => `\n\n${x}`).join('');
+  },
+
+  plannerMapDir(this: Runner, sprintId?: string) {
+    const mtime = (d: string) => { try { return fs.statSync(CodeMap.graphFile(d)).mtimeMs; } catch { return 0; } };
+    const dirs = this.store.data.tasks.filter(t => t.worktree && !t.archived && t.status !== 'done' && (!sprintId || t.sprintId === sprintId) && fs.existsSync(t.worktree)).map(t => t.worktree!);
+    return dirs.filter(d => mtime(d)).sort((a, b) => mtime(b) - mtime(a))[0] ?? this.root;
+  },
+
+  async plannerSay(this: Runner, text: string) {
     if (!this.planner?.open) throw new Error('The planning chat has ended. Start it again.');
-    this.planner.send(text);
+    const notes = this.plannerMap ? await this.mapNotes(this.plannerMap, text, false) : '';
+    if (!this.planner?.open) throw new Error('The planning chat has ended. Start it again.');
+    this.planner.send(text + notes);
     A.logPrompt(this.root, { kind: 'plan', text, sessionId: this.plannerSession, title: 'Plan' });
     this.plannerTurnAt = Date.now();
   },

@@ -634,6 +634,7 @@ export class Runner {
   // maintains a proposed task list you apply when ready. One per project; lives only while open.
   planner?: Session;
   plannerSession?: string;
+  plannerMap?: string;        // the folder whose code map the planner uses (see plannerMapDir)
   plannerOthers: string[] = [];         // started and done tasks of the sprint: checked, changed only if needed
   plannerTargets: string[] = [];        // the To do task ids this chat is editing (empty = planning fresh)
   plannerProposals?: RefineResult[];

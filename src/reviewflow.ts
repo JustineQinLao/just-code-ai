@@ -187,7 +187,10 @@ export const reviewMethods = {
       const passed = this.store.task(id)?.checks?.state === 'pass' ? this.store.task(id)!.checks!.results!.filter(r => r.ok).map(r => r.cmd) : [];
       const prompt = reviewPrompt(t, t.base ?? t.startHead ?? 'HEAD', diff, { shots, adb: device, cli: this.d.cli, web: UI_FILE.test(diff) && !device?.devices.length, handoff: A.readHandoff(this.root, id), brief, checks: passed,
         accepted: acceptedIssues(t.review).map(i => i.text), fixNote }) + (retry
-        ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
+        ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '')
+        // JustCode asks the code map what else uses what the diff touched, so a break outside the diff gets checked.
+        + await (async () => { if (this.d.settings().codeMap === false) return ''; await CodeMap.refresh(cwd); const i = await CodeMap.impact(cwd, diff);
+          return i ? `\n\n## Code outside this change that uses what it touched (code map)\nCheck these still work with the change:\n${i}` : ''; })();
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
         const r = await runReview(p, { bin, cwd, env: this.folderEnv(id, cwd), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(), map: await CodeMap.forSession(cwd, this.root, this.d.settings().codeMap !== false),

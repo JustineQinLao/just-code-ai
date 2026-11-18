@@ -107,7 +107,7 @@ export function sessionOptions(dir: string, on: boolean): { allowed: string[]; r
   if (!b || !fs.existsSync(graphFile(dir))) return { allowed: [] };
   const cmd = /\s/.test(b) ? `"${b}"` : b, g = `--graph "${graphFile(dir)}"`;
   return {
-    allowed: ['query', 'explain', 'path', 'affected', 'god-nodes'].map(c => `Bash(${cmd} ${c}:*)`),
+    allowed: ['query', 'explain', 'path', 'affected'].map(c => `Bash(${cmd} ${c}:*)`),
     rule: 'A code map of this project is ready: its functions, classes, imports and calls. Ask it first where something lives and what depends on it, ' +
       'then Read only the files you need, instead of searching file by file:\n' +
       `- ${cmd} query "<question>" ${g} --budget 1500\n- ${cmd} explain "<name>" ${g}\n- ${cmd} path "<A>" "<B>" ${g}\n- ${cmd} affected "<name>" ${g}  (what a change to it can break)\n` +
@@ -119,7 +119,7 @@ export function sessionOptions(dir: string, on: boolean): { allowed: string[]; r
 // as a short list for the brief. Graph paths are relative to <folder>/.justcode, so "../src/a.ts" is "src/a.ts".
 export async function lookFirst(dir: string, question: string, max = 12): Promise<string | undefined> {
   const b = bins().graphify;
-  if (!b || !fs.existsSync(graphFile(dir)) || !question.trim()) return;
+  if (!b || !fs.existsSync(graphFile(dir)) || !question.trim() || !big(dir)) return;
   try {
     const out = await run(b, ['query', question.slice(0, 300), '--graph', graphFile(dir), '--budget', '800'], mapDir(dir), 20_000);
     return looksAt(out, max);
@@ -134,6 +134,64 @@ export function looksAt(out: string, max = 12): string | undefined {
   }
   if (!files.size) return;
   return [...files].slice(0, max).map(([f, names]) => `- ${f}${names.size ? `: ${[...names].slice(0, 4).join(', ')}` : ''}`).join('\n');
+}
+
+// Below this size a project is quick to read directly, and the map's lists would only add text: JustCode's own map
+// lookups (planner, tasks, reviews) start here.
+export const MIN_NODES = 500;
+export const big = (dir: string) => (stats(dir)?.nodes ?? 0) >= MIN_NODES;
+
+const rel = (p: string) => p.replace(/^\.\.\//, '');
+
+// The functions and classes a diff adds, removes or changes: names on changed definition lines and in hunk headers
+// (git puts the enclosing function there).
+export function changedNames(diff: string, max = 8): string[] {
+  const names = new Set<string>();
+  const def = /(?:\bdef|\bclass|\bfunction|\binterface|\benum)\s+([A-Za-z_$][\w$]*)|(?:\bconst|\blet)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\(|function)/;
+  for (const line of diff.split('\n')) {
+    const text = line.startsWith('@@') ? line.replace(/^@@[^@]*@@/, '') : /^[+-](?![+-])/.test(line) ? line.slice(1) : '';
+    const m = def.exec(text);
+    const n = m?.[1] ?? m?.[2];
+    if (n && n.length > 2 && !/^(test|setUp|tearDown|Meta|main)$/.test(n) && !/^test_/.test(n)) names.add(n);
+    if (names.size >= max) break;
+  }
+  return [...names];
+}
+
+// What else uses what a change touched, outside the changed files: for the reviewer, so a break in a caller is checked
+// without searching for callers.
+export async function impact(dir: string, diff: string, max = 15): Promise<string | undefined> {
+  const b = bins().graphify;
+  if (!b || !fs.existsSync(graphFile(dir)) || !big(dir)) return;
+  const changed = new Set([...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map(m => m[1]));
+  const lines: string[] = [];
+  for (const name of changedNames(diff)) {
+    let out = '';
+    try { out = await run(b, ['affected', name, '--graph', graphFile(dir), '--depth', '1'], mapDir(dir), 20_000); } catch { continue; }
+    const users = [...out.matchAll(/^- (.+?) \[(\w+)\] (\S+?):L(\d+)$/gm)].map(m => ({ label: m[1], file: rel(m[3]), line: m[4] }))
+      .filter(u => !changed.has(u.file));
+    if (users.length) lines.push(`- ${name}: ${users.slice(0, 5).map(u => `${u.file}:${u.line} ${u.label}`).join('; ')}${users.length > 5 ? ` (+${users.length - 5} more)` : ''}`);
+    if (lines.length >= max) break;
+  }
+  return lines.length ? lines.join('\n') : undefined;
+}
+
+// A short picture of the project for the planner: its main folders and its most connected code (what much else
+// depends on), from the map itself.
+export function overview(dir: string, top = 12): string | undefined {
+  let g: any;
+  try { g = JSON.parse(fs.readFileSync(graphFile(dir), 'utf8')); } catch { return; }
+  const nodes: any[] = g.nodes ?? [], edges: any[] = g.links ?? g.edges ?? [];
+  if (nodes.length < MIN_NODES) return;
+  const deg = new Map<string, number>();
+  for (const e of edges) for (const k of [e.source, e.target]) { const id = typeof k === 'object' ? k?.id : k; if (id) deg.set(id, (deg.get(id) ?? 0) + 1); }
+  const isFile = (n: any) => /\.\w+$/.test(n.label ?? '');
+  const folders = new Map<string, number>();
+  for (const n of nodes) { const f = rel(n.source_file ?? ''); if (!f) continue; const parts = f.split('/'); const k = parts.length > 2 ? parts.slice(0, 2).join('/') : parts[0]; folders.set(k, (folders.get(k) ?? 0) + 1); }
+  const isTest = (n: any) => /(^|\/)(tests?|__tests__|spec)(\/|\.)|[._-](test|spec)\.\w+$|test_\w+\.py$/.test(rel(n.source_file ?? ''));
+  const hubs = nodes.filter(n => !isFile(n) && n.source_file && !isTest(n) && !String(n.label).startsWith('.')).sort((a, b) => (deg.get(b.id) ?? 0) - (deg.get(a.id) ?? 0)).slice(0, top);
+  return `Main folders (items mapped): ${[...folders].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([f, n]) => `${f} (${n})`).join(', ')}\n` +
+    `Most connected code (much else depends on it):\n${hubs.map(n => `- ${n.label} (${rel(n.source_file)}:${String(n.source_location ?? '').replace(/^L/, '')})`).join('\n')}`;
 }
 
 export function stats(dir: string): { nodes: number; edges: number } | undefined {
