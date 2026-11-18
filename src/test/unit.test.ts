@@ -735,6 +735,14 @@ test('one task at a time keeps the queue order: a task waiting on a held one hol
   r.pump();
   assert.deepEqual(ran, [b.id]);
   assert.deepEqual(store.queue, [a.id]);
+  // A task waiting for To do tasks queued after it (12.2 needs 12.1) does not stop the queue: 12.1 runs first.
+  ran.length = 0;
+  const later = store.addTask({ title: '12.1', mode: 'auto' }), head = store.addTask({ title: '12.2', mode: 'auto' });
+  store.updateTask(head.id, { dependsOn: [later.id] });
+  store.setQueue([head.id, later.id]);
+  r.pump();
+  assert.deepEqual(ran, [later.id]);
+  assert.deepEqual(store.queue, [head.id]);
   r.dispose();
 });
 

@@ -146,10 +146,11 @@ export const queueMethods = {
       const waits = this.waitsFor(next);
       if (waits.length) {
         keep.push(id);
-        // One task at a time runs the queue in its order: a task waiting for an earlier one (held for your approval,
-        // stuck, still in review) holds back the tasks after it, so a later task never builds on code that misses
-        // the earlier work. It is passed over only when what it waits for can never start (a To-do not in the queue).
-        if (max <= 1 && waits.some(d => d.status !== 'todo' || this.store.queue.includes(d.id))) { keep.push(...q); q.length = 0; }
+        // One task at a time runs the queue in its order: a task waiting for one already started (working, in review,
+        // held for your approval, stuck) holds back the tasks after it, so a later task never builds on code that
+        // misses that work. A task waiting only for To-do tasks is passed over: those run first (from later in the
+        // queue), and it starts after them; holding the queue for them would wait forever.
+        if (max <= 1 && waits.some(d => d.status !== 'todo')) { keep.push(...q); q.length = 0; }
         continue;
       }
       slots--;
