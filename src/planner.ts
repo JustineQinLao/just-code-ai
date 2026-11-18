@@ -115,7 +115,7 @@ export const plannerMethods = {
   // A working or in-review task that must change: the new text is saved and the change goes to its Claude.
   async amend(this: Runner, t: Task, c: RefineResult) {
     this.store.updateTask(t.id, { title: c.title, description: c.description || undefined });
-    await this.say(t.id, `The plan for this task changed. Update your work to match, verify it, update your handoff, then finish your turn.\n\n# ${c.title}\n${c.description ?? ''}`)
+    await this.followUp(t.id, `The plan for this task changed. Update your work to match, verify it, update your handoff, then finish your turn.\n\n# ${c.title}\n${c.description ?? ''}`)
       .catch(e => this.d.notify('error', `"${t.title}": ${e.message}`, t.id));
   },
 

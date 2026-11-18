@@ -49,6 +49,7 @@ export interface SessionOptions {
   effort?: string;            // low | medium | high | xhigh | max (empty: the model's default)
   subagents?: boolean;        // let Claude start subagents (each carries its own large prompt); off by default
   showFirst?: boolean;        // the first prompt is the user's own words (💬 Chat): show it in the activity
+  remind?: string;            // added to every message Claude gets (a hook), e.g. the reply style
   append?: string;            // system-prompt append (defaults to the task guidance; the planner uses its own)
   readOnly?: boolean;         // block all edits (the planner never changes code)
   agent?: string;
@@ -163,17 +164,27 @@ export class Session {
       // Question options may carry a Markdown preview (a file list, a layout sketch); the card shows it.
       toolConfig: { askUserQuestion: { previewFormat: 'markdown' } },
       canUseTool: (tool, input, opt) => this.permission(tool, input, opt as any),
-      ...(o.guard ? { hooks: { PreToolUse: [{ hooks: [async (i: any) => {
-        const why = o.guard!(String(i.tool_name), (i.tool_input ?? {}) as Record<string, unknown>);
-        if (why) this.step({ kind: 'error', text: `Denied by policy: ${why}` });
-        return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: why } } : { continue: true };
-      }] }] } } : {}),
+      ...this.hooks(),
       stderr: (s: string) => { if (/error/i.test(s)) this.step({ kind: 'error', text: s.trim().slice(0, 400) }); },
     };
     this.q = query({ prompt: this.inbox, options });
     this.state = prompt ? 'running' : 'idle';
     this.changed();
     void this.read();
+  }
+
+  // Policy guard before each tool call; and a short reminder with every message to Claude (UserPromptSubmit
+  // additionalContext), because rules only in the system prompt fade over a long task. The reminder is not shown in
+  // the conversation and does not replace the message.
+  private hooks(): Partial<Sdk.Options> {
+    const o = this.o, hooks: Record<string, unknown[]> = {};
+    if (o.guard) hooks.PreToolUse = [{ hooks: [async (i: any) => {
+      const why = o.guard!(String(i.tool_name), (i.tool_input ?? {}) as Record<string, unknown>);
+      if (why) this.step({ kind: 'error', text: `Denied by policy: ${why}` });
+      return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse' as const, permissionDecision: 'deny' as const, permissionDecisionReason: why } } : { continue: true };
+    }] }];
+    if (o.remind) hooks.UserPromptSubmit = [{ hooks: [async () => ({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit' as const, additionalContext: o.remind } })] }];
+    return Object.keys(hooks).length ? { hooks: hooks as Sdk.Options['hooks'] } : {};
   }
 
   private async read() {

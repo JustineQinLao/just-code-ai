@@ -384,22 +384,27 @@ export class Runner {
     const personal = set.personalSetup ? [] : userAllowRules();
     const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
     const terse = set.terseReplies !== false ? Terse.rules() : undefined;
-    // System-prompt rules fade over a long task; a one-line reminder with the task (as the caveman plugin's own hook
-    // does each turn) keeps them in use. Code, files and commit messages are not affected.
+    // The code map, used by JustCode rather than left to Claude (which rarely calls it): a task whose plan names its
+    // files gets no map at all (its rule would only cost tokens on every step); any other task gets the map's best
+    // guess of where to look in its first message, plus the map commands.
+    const planned = /^Files:/m.test(t.description ?? '');
+    const useMap = map.rule && (t.chat || !planned) ? map : { allowed: [] as string[], rule: undefined };
+    const look = useMap.rule && !t.chat && !resume ? await CodeMap.lookFirst(cwd, [t.title, /^Goal:\s*(.*)$/m.exec(t.description ?? '')?.[1] ?? (t.description ?? '').split('\n')[0]].join(' ')) : undefined;
     const envNote = t.chat ? undefined : C.setupNote(this.root, cwd);
-    const remind = [envNote, map.rule && 'Find code with the code map (graphify commands in your instructions) before grep or reading files one by one.',
-      terse && 'Write your status lines and final summary in the caveman reply style from your instructions.'].filter(Boolean).join('\n\n');
+    const notes = [envNote, look && `## Where to look first (code map)\n${look}\nThe map's best guess from the task's words: check these before searching wider.`].filter(Boolean).join('\n\n');
     const s = new Session({
       ...(task.chat ? { append: CHAT_APPEND, showFirst: true } : {}),
       // Working together: the code map finds code with fewer reads, terse replies spend fewer output tokens.
-      ...((extra => extra.length ? { append: [task.chat ? CHAT_APPEND : TASK_APPEND, ...extra].join('\n\n') } : {})([map.rule, terse].filter((x): x is string => !!x))),
+      ...((extra => extra.length ? { append: [task.chat ? CHAT_APPEND : TASK_APPEND, ...extra].join('\n\n') } : {})([useMap.rule, terse].filter((x): x is string => !!x))),
+      // The reply style with every message Claude gets, since system-prompt rules fade over a long task.
+      ...(terse ? { remind: Terse.REMIND } : {}),
       bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
       mcpServers: web.mcpServers,
-      allowed: [...new Set([...web.allowed, ...map.allowed, ...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
+      allowed: [...new Set([...web.allowed, ...useMap.allowed, ...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
       env: this.folderEnv(id, cwd), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
       audit: (event, detail, actor) => this.audit(event, id, detail, actor),
@@ -423,7 +428,7 @@ export class Runner {
       this.changed();
       this.pump();
     });
-    try { await s.start(remind && !task.chat ? `${first}\n\n${remind}` : first); } catch (e) { this.sessions.delete(id); s.kill(); throw e; }
+    try { await s.start(notes && !task.chat ? `${first}\n\n${notes}` : first); } catch (e) { this.sessions.delete(id); s.kill(); throw e; }
   }
 
   fail(id: string, e: unknown) {
@@ -438,6 +443,24 @@ export class Runner {
     const s = this.sessions.get(id);
     if (s?.open && s.send(text)) { this.store.updateTask(id, { live: true, error: undefined }); return; }
     await this.run(id, text);
+  }
+
+  // An automatic follow-up (review issues, failing checks, conflicts, a changed plan). A long session re-sends its
+  // whole history on every step: past freshAfterTokens the follow-up starts a fresh session from the task's artifacts
+  // (brief, handoff, diff, review) instead, with the same knowledge in a fraction of the context. Your own messages
+  // always keep the session.
+  async followUp(id: string, text: string) {
+    const t = this.store.task(id);
+    if (!t) return;
+    const set = this.d.settings(), s = this.sessions.get(id);
+    const big = set.freshAfterTokens > 0 && !!t.sessionId && (s?.open ? s.context > set.freshAfterTokens
+      : sessionSize(t.worktree ?? this.root, t.sessionId) > set.freshAfterTokens * 6);
+    if (!big) return this.say(id, text);
+    this.stop(id);
+    this.store.updateTask(id, { sessionId: undefined, pastSessions: [...(t.pastSessions ?? []), t.sessionId!], status: 'doing' });
+    const diff = t.where === 'direct' ? `git diff ${t.startHead} -- ${(t.directFiles ?? []).join(' ')}` : `git diff ${t.base}...HEAD`;
+    await this.run(id, `This task was already built on this branch (see ${diff}) and ${A.handoffFile(this.root, id)} describes it.` +
+      `${t.review ? ` The review is in ${A.reviewFile(this.root, id)}.` : ''}\n\n${text}`);
   }
 
   answer(id: string, a: Answer) { return this.sessions.get(id)?.answer(a) ?? false; }

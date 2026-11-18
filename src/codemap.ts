@@ -115,6 +115,27 @@ export function sessionOptions(dir: string, on: boolean): { allowed: string[]; r
   };
 }
 
+// JustCode asks the map itself (sessions rarely call it on their own): the files and names most related to the task,
+// as a short list for the brief. Graph paths are relative to <folder>/.justcode, so "../src/a.ts" is "src/a.ts".
+export async function lookFirst(dir: string, question: string, max = 12): Promise<string | undefined> {
+  const b = bins().graphify;
+  if (!b || !fs.existsSync(graphFile(dir)) || !question.trim()) return;
+  try {
+    const out = await run(b, ['query', question.slice(0, 300), '--graph', graphFile(dir), '--budget', '800'], mapDir(dir), 20_000);
+    return looksAt(out, max);
+  } catch { return; }
+}
+export function looksAt(out: string, max = 12): string | undefined {
+  const files = new Map<string, Set<string>>();
+  for (const m of out.matchAll(/^NODE (.+?) \[src=([^ \]]+)/gm)) {
+    const f = m[2].replace(/^\.\.\//, '');
+    if (!files.has(f)) files.set(f, new Set());
+    if (m[1] !== path.basename(f)) files.get(f)!.add(m[1]);
+  }
+  if (!files.size) return;
+  return [...files].slice(0, max).map(([f, names]) => `- ${f}${names.size ? `: ${[...names].slice(0, 4).join(', ')}` : ''}`).join('\n');
+}
+
 export function stats(dir: string): { nodes: number; edges: number } | undefined {
   try { const g = JSON.parse(fs.readFileSync(graphFile(dir), 'utf8')); return { nodes: (g.nodes ?? []).length, edges: (g.links ?? g.edges ?? []).length }; } catch { return undefined; }
 }

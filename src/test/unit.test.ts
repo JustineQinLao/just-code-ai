@@ -1725,3 +1725,17 @@ test('cost: the SDK reports a running total per session, so each turn adds only 
   store.addPlannerCost(0.4, 'p'); store.addPlannerCost(0.6, 'p');
   assert.ok(Math.abs(store.data.plannerCostUsd! - 0.6) < 1e-9);
 });
+
+test('efficiency: map lookup becomes a short file list; caveman rules are trimmed; the reminder rides on every message', async () => {
+  const CodeMap = require('../codemap');
+  const out = 'Traversal: BFS\n\nNODE Stop [src=../backend/runs/models.py loc=L16 community=1]\nNODE models.py [src=../backend/runs/models.py loc=L1 community=1]\nNODE complete_stop() [src=../backend/runs/services.py loc=L40 community=2]\nEDGE Stop --contains--> models.py\n';
+  assert.equal(CodeMap.looksAt(out), '- backend/runs/models.py: Stop\n- backend/runs/services.py: complete_stop()');
+  assert.equal(CodeMap.looksAt('No matching nodes found.'), undefined);
+  const r = require('../terse').rules();
+  if (r) { assert.doesNotMatch(r, /## Why|## Pre-send check|^Bad:|^Good:/m); assert.match(r, /### 1\. Answer first/); }
+  const s = new Session({ bin: 'claude', cwd: '/x', sessionId: 'id', resume: false, mode: 'auto', allowed: [], rules: () => [], env: {}, idleMs: 60_000, label: 'T', remind: 'Be brief.' });
+  const h: any = (s as any).hooks().hooks;
+  assert.deepEqual(await h.UserPromptSubmit[0].hooks[0]({}), { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Be brief.' } });
+  assert.equal(h.PreToolUse, undefined, 'no guard: no PreToolUse hook');
+  assert.deepEqual((new Session({ bin: 'claude', cwd: '/x', sessionId: 'id', resume: false, mode: 'auto', allowed: [], rules: () => [], env: {}, idleMs: 60_000, label: 'T' }) as any).hooks(), {});
+});

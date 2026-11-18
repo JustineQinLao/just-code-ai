@@ -106,7 +106,7 @@ export const checkMethods = {
     const failing = t?.checks?.results?.filter(r => !r.ok && !r.preexisting) ?? [];
     if (!t || (!t.worktree && !(t.where === 'direct' && !t.init)) || t.status === 'done' || !failing.length) return;
     this.store.updateTask(id, { status: 'doing' });
-    await this.say(id, `JustCode ran the project's checks after your turn. These fail:\n\n` +
+    await this.followUp(id, `JustCode ran the project's checks after your turn. These fail:\n\n` +
       failing.map(r => `$ ${r.cmd}  (${r.timedOut ? 'timed out' : 'failed'})\n\`\`\`\n${r.tail ?? ''}\n\`\`\``).join('\n\n') +
       `\n\nFull log: ${A.checksLog(this.root, id)}. Fix the cause (change a test only if the test itself is wrong), re-run the failing check, update your handoff, then finish your turn.`);
   },

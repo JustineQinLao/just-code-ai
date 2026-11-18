@@ -108,19 +108,7 @@ export const reviewMethods = {
       `If you leave one unfixed on purpose, say why in your final message: the reviewer reads it.\n` +
       open.map((x, i) => `${i + 1}. ${x.text}`).join('\n') +
       (accepted.length ? `\n\nThe user accepted these as they are; leave them:\n${accepted.map(a => `- ${a.text}`).join('\n')}` : '');
-    // A long session re-sends its whole history on every step. Past the threshold, the fix round starts fresh from the
-    // task's artifacts (brief, handoff, review) instead: same knowledge, a fraction of the context.
-    const s = this.sessions.get(id);
-    const big = set.freshAfterTokens > 0 && (s?.open ? s.context > set.freshAfterTokens
-      : !!t.sessionId && sessionSize(t.worktree ?? this.root, t.sessionId) > set.freshAfterTokens * 6);
-    if (big && t.sessionId) {
-      this.stop(id);
-      this.store.updateTask(id, { sessionId: undefined, pastSessions: [...(t.pastSessions ?? []), t.sessionId], status: 'doing' });
-      await this.run(id, `This task was already built on this branch (see ${t.where === 'direct' ? `git diff ${t.startHead} -- ${(t.directFiles ?? []).join(' ')}` : `git diff ${t.base}...HEAD`}) and ${A.handoffFile(this.root, id)} ` +
-        `describes it. The review is in ${A.reviewFile(this.root, id)}.\n\n${issues}`);
-      return;
-    }
-    await this.say(id, issues);
+    await this.followUp(id, issues);
   },
 
   // "1 more round" on a card whose review rounds are used up: this task gets one more, and the open issues go back.

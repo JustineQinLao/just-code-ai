@@ -206,7 +206,7 @@ export const mergeMethods = {
   resolveWithClaude(this: Runner, id: string) {
     const t = this.store.task(id);
     if (!t?.conflicts?.length) return;
-    return this.say(id, `Merging ${t.base} into this branch left conflicts in: ${t.conflicts.join(', ')}. ` +
+    return this.followUp(id, `Merging ${t.base} into this branch left conflicts in: ${t.conflicts.join(', ')}. ` +
       'Resolve every conflict keeping the intent of both sides, remove all conflict markers, and make sure it builds. Do not commit; JustCode does.');
   },
 

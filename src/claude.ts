@@ -140,7 +140,7 @@ export function taskPrompt(t: Task, brief: string) {
 export const TASK_APPEND = `You are running as a JustCode task: one focused change, built, verified, then reviewed by another agent.
 Work efficiently: read only the files the task needs, prefer Grep/Glob over broad directory reads, and do not re-read files you already have.
 Keep command output small: run the tests that cover your change rather than the whole suite when it is large, use quiet or failure-only reporters
-(e.g. --silent, -q, --reporter=dot), and never start dev servers, watch modes or interactive commands to verify your work.
+(e.g. --silent, -q, --reporter=dot; Bash output over 10,000 characters is cut in the middle, so grep or tail for what you need), and never start dev servers, watch modes or interactive commands to verify your work.
 Never wait in long loops (sleep inside for/while, retries for minutes): one command should finish within about a minute.
 To wait for something, check once, then check again in a later command, so the user sees progress.
 Exception: when the task itself asks you to run, start or serve the app (so the user can open it), start it detached so your turn can end
@@ -183,7 +183,9 @@ export const systemPrompt = (append?: string) => ({ type: 'preset' as const, pre
 
 // Command output is capped (Claude Code's default is 30k characters per command); long test logs are the largest
 // avoidable input in a task.
-export const OUTPUT_CAPS = { BASH_MAX_OUTPUT_LENGTH: '20000' };
+// Claude Code cuts longer Bash output in the middle (the start and the end, where failures are, stay). Every character
+// kept is re-read on each later step of the task, so the cap is tight; Claude can grep or tail for the part it needs.
+export const OUTPUT_CAPS = { BASH_MAX_OUTPUT_LENGTH: '10000' };
 
 // Claude Code stores sessions in ~/.claude/projects/<cwd with non-alphanumerics → '-'>/<id>.jsonl
 export const transcript = (cwd: string, id: string) =>
