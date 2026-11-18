@@ -348,7 +348,7 @@ export function webOptions(on: boolean, shots: string, allowed: string[]) {
 export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status', 'ls', 'cat',
   'npm test', 'npm run', 'npx tsc', 'npx jest', 'npx vitest', 'npx eslint', 'npx ng test',
   'yarn test', 'yarn run', 'yarn build', 'yarn lint', 'pnpm test', 'pnpm run', 'pnpm build', 'pnpm lint', 'bun test', 'bun run',
-  'pytest', 'python -m pytest', 'python3 -m pytest', 'python manage.py test', 'python3 manage.py test', 'ruff', 'mypy',
+  'pytest', 'python -m pytest', 'python3 -m pytest', 'python manage.py test', 'python3 manage.py test', 'python */manage.py test *', 'python3 */manage.py test *', 'ruff', 'mypy',
   'go test', 'go build', 'go vet', 'cargo test', 'cargo build', 'cargo check', 'cargo clippy', 'make test', 'make check', 'make build',
   'mvn test', 'mvn -q test', './gradlew', 'gradle test', 'dotnet test', 'dotnet build', 'flutter test', 'dart test', 'swift test', 'xcodebuild test',
   'docker compose exec', 'docker compose run', 'docker compose -p * exec *', 'docker compose -p * run *', 'docker compose -p * ps', 'docker compose -p * logs *', 'adb', 'curl'];

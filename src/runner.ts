@@ -368,6 +368,8 @@ export class Runner {
     // The code map of the folder this session works in (its task folder on its branch, or the project folder), built
     // before anything else so the task is never marked working without a session behind it.
     const map = await CodeMap.forSession(cwd, this.root, this.d.settings().codeMap !== false);
+    // A task folder made before its dependencies were set up (or a resumed one): set up now; quick when already done.
+    if (cwd !== this.root && !t.chat) await this.setupFolder(id, cwd, true);
     const sources = A.sprintSources(A.loadSources(this.root), t.sprintId ? this.store.data.sprints.find(x => x.id === t.sprintId) : undefined);
     // An artifact task that names a page an earlier task published updates that page (same link) instead of a new one.
     const reuse = !resume && t.output === 'artifact' && !t.artifactUrl ? this.publishedNamedIn(t) : undefined;
@@ -384,8 +386,9 @@ export class Runner {
     const terse = set.terseReplies !== false ? Terse.rules() : undefined;
     // System-prompt rules fade over a long task; a one-line reminder with the task (as the caveman plugin's own hook
     // does each turn) keeps them in use. Code, files and commit messages are not affected.
-    const remind = [map.rule && 'Find code with the code map (graphify commands in your instructions) before grep or reading files one by one.',
-      terse && 'Write your status lines and final summary in the caveman reply style from your instructions.'].filter(Boolean).join(' ');
+    const envNote = t.chat ? undefined : C.setupNote(this.root, cwd);
+    const remind = [envNote, map.rule && 'Find code with the code map (graphify commands in your instructions) before grep or reading files one by one.',
+      terse && 'Write your status lines and final summary in the caveman reply style from your instructions.'].filter(Boolean).join('\n\n');
     const s = new Session({
       ...(task.chat ? { append: CHAT_APPEND, showFirst: true } : {}),
       // Working together: the code map finds code with fewer reads, terse replies spend fewer output tokens.
@@ -512,6 +515,7 @@ export class Runner {
       }
     }
     if (t.worktree && fs.existsSync(t.worktree) && !conflicted) {
+      await this.strayCommitMessage(t);
       try { committed = await g.commitAll(t.worktree, A.commitMessage(this.root, t), this.secretScan()); } catch (e: any) {
         if (e instanceof SecretsFound) return this.secretsBlocked(id, e, cost);
         this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });
@@ -536,6 +540,17 @@ export class Runner {
     if (cur?.status !== 'review' || !(cur.branch || (cur.where === 'direct' && !cur.init)) || this.emptyAt.has(id) || cur.quick) return;
     if (await this.check(id) === 'fail') return;
     if (this.d.settings().review.auto) await this.review(id);
+  }
+
+  // Claude sometimes writes the commit message to commit.md in the code instead of the task's folder, and it rode
+  // along in the commit. A commit.md the base does not have is moved to where JustCode reads it.
+  async strayCommitMessage(t: Task) {
+    const stray = path.join(t.worktree!, 'commit.md');
+    if (!t.base || !fs.existsSync(stray) || await g.git(t.worktree!, ['cat-file', '-e', `${t.base}:commit.md`]).then(() => true, () => false)) return;
+    try {
+      fs.mkdirSync(A.taskDir(this.root, t.id), { recursive: true });
+      fs.renameSync(stray, A.commitFile(this.root, t.id));
+    } catch { /* left as is */ }
   }
 
   /* ---------- task folder setup and checks (no tokens) ---------- */

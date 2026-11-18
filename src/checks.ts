@@ -112,8 +112,13 @@ export async function runChecks(checks: Check[], cwd: string, env: Record<string
 
 /* ---------- task folder setup ---------- */
 
-// Gets a task's folder ready to build and test. node_modules is linked from the project folder when the lockfile is
-// the same (instant; the project's own install is reused), installed otherwise. A custom command replaces this.
+// Gets a task's folder ready to build and test, so Claude spends no turns on it (it used to make its own virtualenv
+// and run npm ci in every task, and the reviewer, without them, could not run the tests at all):
+// - every package.json in the folder or one level down (frontend/, web/, …): node_modules linked from the same place
+//   in the project folder when the lockfile is the same (instant), installed otherwise;
+// - Python with a requirements.txt (in the folder or one level down) and no virtualenv in the project: one shared
+//   virtualenv in .justcode/env/venv, created once and topped up when the requirements change. folderEnv puts it on PATH.
+// A custom command replaces this.
 export async function setupFolder(root: string, wt: string, setting: string, env: Record<string, string>, log: (s: string) => void): Promise<boolean> {
   if (!setting.trim()) return true;
   if (setting.trim() !== 'auto') {
@@ -121,21 +126,108 @@ export async function setupFolder(root: string, wt: string, setting: string, env
     log(`$ ${setting}\n${tail(r.out, 200, 20000)}\n[exit ${r.code}]`);
     return r.code === 0;
   }
-  if (!has(wt, 'package.json') || has(wt, 'node_modules')) return true;
+  let ok = true;
+  for (const sub of packageDirs(wt)) ok = await nodeSetup(path.join(root, sub), path.join(wt, sub), env, log) && ok;
+  ok = await pythonSetup(root, wt, env, log) && ok;
+  return ok;
+}
+
+// The folder and its first-level subfolders that hold a package.json ('' is the folder itself).
+export function packageDirs(dir: string): string[] {
+  return ['', ...packageLike(dir)].filter(s => has(path.join(dir, s), 'package.json'));
+}
+
+async function nodeSetup(src: string, wt: string, env: Record<string, string>, log: (s: string) => void) {
+  if (has(wt, 'node_modules')) return true;
   const lock = LOCKS.find(l => has(wt, l));
-  const same = lock && read(path.join(root, lock)) === read(path.join(wt, lock)) && read(path.join(root, 'package.json')) === read(path.join(wt, 'package.json'));
-  if (same && fs.existsSync(path.join(root, 'node_modules'))) {
+  const same = lock && read(path.join(src, lock)) === read(path.join(wt, lock)) && read(path.join(src, 'package.json')) === read(path.join(wt, 'package.json'));
+  if (same && fs.existsSync(path.join(src, 'node_modules'))) {
     try {
-      fs.symlinkSync(path.join(root, 'node_modules'), path.join(wt, 'node_modules'), WIN ? 'junction' : 'dir');
-      log('Linked node_modules from the project folder (same lockfile).');
+      fs.symlinkSync(path.join(src, 'node_modules'), path.join(wt, 'node_modules'), WIN ? 'junction' : 'dir');
+      log(`Linked ${path.basename(wt)}/node_modules from the project folder (same lockfile).`);
       return true;
     } catch (e: any) { log(`Could not link node_modules: ${e.message}`); }
   }
   const pm = packageManager(wt);
   const cmd = { npm: lock ? 'npm ci --no-audit --no-fund' : 'npm install --no-audit --no-fund', pnpm: 'pnpm install --frozen-lockfile', yarn: 'yarn install --frozen-lockfile', bun: 'bun install' }[pm];
   const r = await runCommand(cmd, wt, env, 15 * 60_000);
-  log(`$ ${cmd}\n${tail(r.out, 200, 20000)}\n[exit ${r.code}]`);
+  log(`$ ${cmd} (in ${path.basename(wt)})\n${tail(r.out, 200, 20000)}\n[exit ${r.code}]`);
   return r.code === 0;
+}
+
+const BIN = WIN ? 'Scripts' : 'bin';
+export const sharedVenv = (root: string) => path.join(root, '.justcode', 'env', 'venv');
+// The project's virtualenv: its own (.venv or venv, in the project or one level down), else JustCode's shared one.
+export function findVenv(root: string): string | undefined {
+  const dirs = ['', ...packageLike(root)];
+  for (const d of dirs) for (const v of ['.venv', 'venv']) { const p = path.join(root, d, v); if (fs.existsSync(path.join(p, BIN))) return p; }
+  return fs.existsSync(path.join(sharedVenv(root), BIN)) ? sharedVenv(root) : undefined;
+}
+function packageLike(dir: string) {
+  try { return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('.') && d.name !== 'node_modules').map(d => d.name); } catch { return []; }
+}
+// requirements.txt files in the folder or one level down.
+function requirementFiles(dir: string) {
+  return ['', ...packageLike(dir)].map(d => path.join(dir, d, 'requirements.txt')).filter(f => fs.existsSync(f));
+}
+
+// The newest python3.N on PATH or where Homebrew, uv and python.org put it (VS Code started from the Dock lacks the
+// shell's PATH, and macOS's own /usr/bin/python3 is too old for many projects).
+export function newestPython(env: Record<string, string>): string {
+  if (WIN) return 'python';
+  const dirs = [...(env.PATH ?? process.env.PATH ?? '').split(path.delimiter), '/opt/homebrew/bin', '/usr/local/bin', path.join(require('os').homedir(), '.local', 'bin'), '/Library/Frameworks/Python.framework/Versions/Current/bin'];
+  let best: { v: number; p: string } | undefined;
+  for (const d of dirs) {
+    let names: string[] = [];
+    try { names = fs.readdirSync(d); } catch { continue; }
+    for (const n of names) {
+      const m = /^python3\.(\d+)$/.exec(n);
+      if (m && (!best || +m[1] > best.v)) best = { v: +m[1], p: path.join(d, n) };
+    }
+  }
+  return best?.p ?? 'python3';
+}
+
+const venvBuilds = new Map<string, Promise<boolean>>();
+async function pythonSetup(root: string, wt: string, env: Record<string, string>, log: (s: string) => void): Promise<boolean> {
+  const reqs = requirementFiles(wt);
+  if (!reqs.length) return true;
+  const own = findVenv(root);
+  if (own && own !== sharedVenv(root)) return true;     // the project has its own: used as is
+  const venv = sharedVenv(root), stamp = path.join(venv, '.jc-requirements');
+  const want = reqs.map(f => read(f)).join('\n');
+  if (read(stamp) === want) return true;
+  // One build at a time per project (tasks set up in parallel share it).
+  const running = venvBuilds.get(venv);
+  if (running) return running;
+  const p = (async () => {
+    // Never installed successfully (or made by an older JustCode): start over with the newest Python on the machine.
+    if (!fs.existsSync(stamp)) fs.rmSync(venv, { recursive: true, force: true });
+    const py = newestPython(env);
+    if (!fs.existsSync(path.join(venv, BIN))) {
+      const r = await runCommand(`"${py}" -m venv "${venv}"`, root, env, 5 * 60_000);
+      log(`$ ${py} -m venv .justcode/env/venv\n${tail(r.out)}\n[exit ${r.code}]`);
+      if (r.code !== 0) return false;
+    }
+    const pip = `"${path.join(venv, BIN, 'pip')}" install -q --disable-pip-version-check ${reqs.map(f => `-r "${f}"`).join(' ')}`;
+    const r = await runCommand(pip, wt, env, 15 * 60_000);
+    log(`$ pip install ${reqs.map(f => path.relative(wt, f)).join(' ')}\n${tail(r.out, 200, 20000)}\n[exit ${r.code}]`);
+    if (r.code === 0) fs.writeFileSync(stamp, want);
+    return r.code === 0;
+  })().finally(() => venvBuilds.delete(venv));
+  venvBuilds.set(venv, p);
+  return p;
+}
+
+// What a task is told about its folder, so it does not set anything up itself.
+export function setupNote(root: string, wt: string): string | undefined {
+  const notes: string[] = [];
+  const venv = findVenv(root);
+  // The shared virtualenv counts only once its install worked; the project's own is taken as is.
+  if (venv && (venv !== sharedVenv(root) || fs.existsSync(path.join(venv, '.jc-requirements')))) notes.push(`Python: the virtualenv ${venv} is already on PATH (python, pip and the project's packages). Do not create another one.`);
+  const linked = packageDirs(wt).filter(d => has(path.join(wt, d), 'node_modules')).map(d => d || '.');
+  if (linked.length) notes.push(`Node: dependencies are installed (node_modules in ${linked.join(', ')}). Do not run npm ci or npm install unless you change package.json.`);
+  return notes.length ? `## Environment (ready)\n${notes.join('\n')}` : undefined;
 }
 
 // A task folder's environment: the project's Python virtualenv (if any) and its own ports, so parallel tasks'
@@ -143,7 +235,7 @@ export async function setupFolder(root: string, wt: string, setting: string, env
 export function folderEnv(root: string, taskId: string, base: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = { ...base };
   const slot = parseInt(taskId.replace(/[^0-9a-f]/gi, '').slice(0, 6) || '0', 16);
-  const venv = ['.venv', 'venv'].map(v => path.join(root, v)).find(v => fs.existsSync(path.join(v, WIN ? 'Scripts' : 'bin')));
+  const venv = findVenv(root);
   if (venv) {
     env.VIRTUAL_ENV = venv;
     env.PATH = `${path.join(venv, WIN ? 'Scripts' : 'bin')}${path.delimiter}${base.PATH ?? process.env.PATH ?? ''}`;

@@ -265,6 +265,27 @@ test('folder setup: node_modules linked when the lockfile matches; ports per tas
   assert.equal(a.PATH, '/bin');
 });
 
+test('folder setup: a frontend/ subfolder is linked too; Python gets one shared virtualenv on PATH; the task is told', async () => {
+  const root = tmp(), wt = path.join(root, '.justcode', 'worktrees', 't');
+  for (const dir of [root, wt]) {
+    fs.mkdirSync(path.join(dir, 'frontend'), { recursive: true }); fs.mkdirSync(path.join(dir, 'backend'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'frontend', 'package.json'), '{}'); fs.writeFileSync(path.join(dir, 'frontend', 'package-lock.json'), '{"v":1}');
+    fs.writeFileSync(path.join(dir, 'backend', 'requirements.txt'), '# nothing to install\n');
+  }
+  fs.mkdirSync(path.join(root, 'frontend', 'node_modules', 'x'), { recursive: true });
+  const log: string[] = [];
+  assert.equal(await C.setupFolder(root, wt, 'auto', { PATH: process.env.PATH! }, s => log.push(s)), true, log.join('\n'));
+  assert.equal(fs.realpathSync(path.join(wt, 'frontend', 'node_modules')), fs.realpathSync(path.join(root, 'frontend', 'node_modules')));
+  assert.equal(C.findVenv(root), C.sharedVenv(root));
+  assert.ok(C.folderEnv(root, 'aaaa1111', { PATH: '/bin' }).PATH.startsWith(path.join(C.sharedVenv(root), 'bin')));
+  const note = C.setupNote(root, wt)!;
+  assert.match(note, /virtualenv .*on PATH/); assert.match(note, /node_modules in frontend/);
+  // Second time: nothing to redo (requirements unchanged).
+  log.length = 0;
+  assert.equal(await C.setupFolder(root, wt, 'auto', { PATH: process.env.PATH! }, s => log.push(s)), true);
+  assert.deepEqual(log, []);
+});
+
 import { Runner, effectiveMode } from '../runner';
 import { bypassGate, canEnableBypassAll } from '../bridge';
 
