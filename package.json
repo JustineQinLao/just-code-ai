@@ -364,6 +364,11 @@
           "default": true,
           "description": "When Graphify is installed (see the setup checklist), JustCode keeps a map of the project's code in .justcode/graphify-out/ (local, code only, no API key) and tasks and chats ask it where things are instead of searching file by file. Rebuilt when the project's commit changes."
         },
+        "justCode.terseReplies": {
+          "type": "boolean",
+          "default": true,
+          "description": "When the caveman plugin is installed (see the setup checklist), tasks and chats reply in its terse style: fewer output tokens, with code, commands, paths and errors kept exact. Files Claude writes stay in normal prose."
+        },
         "justCode.cleanupAfterDays": {
           "type": "integer",
           "default": 14,

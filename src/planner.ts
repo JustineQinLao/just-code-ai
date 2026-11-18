@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as CodeMap from './codemap';
 import * as os from 'os';
 import * as path from 'path';
 import { randomUUID, createHash } from 'crypto';
@@ -61,12 +62,13 @@ export const plannerMethods = {
     const set = this.d.settings();
     this.plannerSession = randomUUID();
     A.logPrompt(this.root, { kind: 'plan', text: instruction, sessionId: this.plannerSession, title: sprint ? `Edit ${sprint.name}` : 'Plan' });
+    const map = CodeMap.sessionOptions(this.root, set.codeMap !== false);   // the planner finds code through the map too
     const s = new Session({
       // Not Claude Code's plan mode: it tells Claude to write a plan file, which a read-only chat cannot, so each turn
       // spent tokens on a refused Write. Default mode with the write tools removed keeps it read-only.
       bin, cwd: this.root, sessionId: this.plannerSession, resume: false, mode: 'default', model: set.plannerModel || undefined,
-      append: PLANNER_APPEND, readOnly: true, effort: set.plannerEffort || undefined,
-      allowed: userAllowRules(), rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup, plugins: this.plugins(), guard: this.guard(undefined, this.root),
+      append: [PLANNER_APPEND, map.rule].filter(Boolean).join('\n\n'),   // no terse replies: its drafts become task text readOnly: true, effort: set.plannerEffort || undefined,
+      allowed: [...userAllowRules(), ...map.allowed], rules: () => userAllowRules(), env: this.d.env(), idleMs: 30 * 60_000, label: 'Planner', personal: set.personalSetup, plugins: this.plugins(), guard: this.guard(undefined, this.root),
     });
     this.planner = s;
     s.on('change', () => this.changed());

@@ -7,6 +7,7 @@ import { Store, Task } from './store';
 import * as g from './git';
 import { sweepStacks } from './docker';
 import * as CodeMap from './codemap';
+import * as Terse from './terse';
 import * as App from './app';
 import { setupSkillBody, designFromCodeBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
@@ -42,7 +43,8 @@ export interface RunnerSettings {
   idleMinutes: number;
   bypassAll?: boolean;   // justCode.bypassAll: every task runs with bypassPermissions
   superpowers: boolean;     // load the installed superpowers plugin into task, planner and review sessions
-  codeMap?: boolean;        // tasks and chats get the project's code map (Graphify), when it is installed
+  codeMap?: boolean;
+  terseReplies?: boolean;   // the caveman plugin's reply rules in tasks and chats, when it is installed        // tasks and chats get the project's code map (Graphify), when it is installed
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
   taskEffort: string; plannerModel: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
@@ -379,7 +381,8 @@ export class Runner {
     if (set.codeMap !== false) void CodeMap.refresh(this.root);
     const s = new Session({
       ...(task.chat ? { append: CHAT_APPEND, showFirst: true } : {}),
-      ...(map.rule ? { append: `${task.chat ? CHAT_APPEND : TASK_APPEND}\n\n${map.rule}` } : {}),
+      // Working together: the code map finds code with fewer reads, terse replies spend fewer output tokens.
+      ...((extra => extra.length ? { append: [task.chat ? CHAT_APPEND : TASK_APPEND, ...extra].join('\n\n') } : {})([map.rule, set.terseReplies !== false ? Terse.rules() : undefined].filter((x): x is string => !!x))),
       bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),

@@ -460,14 +460,15 @@ async function headless(prompt: string, o: HeadlessOpts, extra: Record<string, u
 export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage; costUsd?: number }
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
-export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string }): Promise<ReviewRun> {
+export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string; map?: { allowed: string[]; rule?: string } }): Promise<ReviewRun> {
   const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`] : [])].map(c => c.includes('*') ? `Bash(${c})` : `Bash(${c}:*)`)]);
-  const allow = w.allowed;
+  // The code map (when there is one): the reviewer finds callers and dependents without reading file after file.
+  const allow = [...w.allowed, ...(o.map?.allowed ?? [])];
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.
   o = { ...o, env: { ...o.env, CI: 'true', BASH_DEFAULT_TIMEOUT_MS: '180000', BASH_MAX_TIMEOUT_MS: '300000' } };
   const base = {
     permissionMode: 'dontAsk' as const, allowedTools: allow, disallowedTools: ['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Agent', 'Task'], additionalDirectories: [o.shots],
-    systemPrompt: systemPrompt(REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
+    systemPrompt: systemPrompt(o.map?.rule ? `${REVIEW_APPEND}\n\n${o.map.rule}` : REVIEW_APPEND), outputFormat: { type: 'json_schema', schema: VERDICT_SCHEMA }, maxTurns: 60,
   };
   o = { ...o, mcpServers: w.mcpServers };
   let r = await headless(prompt, o, { ...base, ...(o.resume ? { resume: o.resume } : {}) });

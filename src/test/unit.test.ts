@@ -1620,3 +1620,12 @@ test('code map: built into .justcode only, refreshed when the commit changes, ha
   const out = execFileSync(CodeMap.bins().graphify, ['explain', 'checkout()', '--graph', CodeMap.graphFile(root)]).toString();
   assert.match(out, /total/);
 });
+
+test('terse replies: the installed caveman rules, without their on/off section, with files kept in normal prose', { skip: !require('../claude').installedPlugin('caveman', undefined, 'skills') && 'caveman not installed' }, () => {
+  const r = require('../terse').rules();
+  assert.match(r, /^## Reply style \(caveman\)/);
+  assert.match(r, /Files you write .* normal clear prose/);
+  assert.match(r, /Answer first/);
+  assert.doesNotMatch(r, /## Persistence|stop caveman/);
+  assert.ok(r.length < 6000, `small enough to add to every task: ${r.length} chars`);
+});
