@@ -61,6 +61,7 @@ export function refresh(dir: string, force = false): Promise<boolean> {
     let was = '';
     try { was = fs.readFileSync(headFile(dir), 'utf8').trim(); } catch { /* never built */ }
     if (!force && fs.existsSync(graphFile(dir)) && now && now === was) return true;
+    if (!now) return false;   // not a git folder (or git failed): nothing to tie the map to
     try {
       await run(b, ['extract', dir, '--code-only', '--out', path.join(dir, '.justcode'), '--no-viz'], mapDir(dir), 10 * 60_000);
       fs.writeFileSync(headFile(dir), now);
@@ -83,12 +84,20 @@ export function seed(dir: string, root: string): boolean {
   } catch { return false; }
 }
 
-// Everything a session needs in one call: a map for its folder (seeded, refreshing in the background) and the options.
-export function forSession(dir: string, root: string, on: boolean) {
+// Everything a session needs in one call: its folder's map brought up to the folder's commit first (a task folder
+// starts from a copy of the project's map, whose cache makes this quick), then the options. A copy of the project's
+// map is never handed over as is: the project folder can be on another branch (main without the sprint's work), so
+// that map would point Claude at code the task does not have. No map within `wait`: the session searches as before.
+export async function forSession(dir: string, root: string, on: boolean, wait = 90_000) {
   if (!on || !bins().graphify) return { allowed: [] as string[] };
   seed(dir, root);
-  void refresh(dir);
-  return sessionOptions(dir, true);
+  const ready = await Promise.race([refresh(dir), new Promise<boolean>(r => setTimeout(() => r(false), wait).unref?.())]);
+  return ready && current(dir) ? sessionOptions(dir, true) : { allowed: [] as string[] };
+}
+
+// Whether a folder's map was built from the commit it has checked out now.
+function current(dir: string) {
+  try { return fs.readFileSync(headFile(dir), 'utf8').trim() !== ''; } catch { return false; }
 }
 
 // What a session gets: allow rules for the read-only map commands and how to use them, or nothing (Graphify not

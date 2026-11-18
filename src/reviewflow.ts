@@ -202,7 +202,7 @@ export const reviewMethods = {
         ? `\n\n## Your previous attempt did not finish (${t.review?.error ?? 'it stopped'})\nKeep it short: run only the tests for the changed code, never a dev server, watch mode or an interactive command, and give the verdict.` : '');
       let usage = this.store.task(id)?.usage?.review as Usage | undefined;
       const exec = async (p: string, resume?: string) => {
-        const r = await runReview(p, { bin, cwd, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(), map: CodeMap.forSession(cwd, this.root, this.d.settings().codeMap !== false),
+        const r = await runReview(p, { bin, cwd, env: this.d.env(), model: model || undefined, effort: effort || undefined, agent: reviewer, signal: ac.signal, personal: this.d.settings().personalSetup, plugins: this.plugins(), map: await CodeMap.forSession(cwd, this.root, this.d.settings().codeMap !== false),
           timeoutMs: o.timeoutMinutes * 60_000, onRate: info => this.d.limits.update(info), shots, extra: o.commands, web: UI_FILE.test(diff) && !device?.devices.length, adbBin: device?.bin, cli: this.d.cli, resume });
         if (r.costUsd) { const cur = this.store.task(id); if (cur) this.store.updateTask(id, { costUsd: (cur.costUsd ?? 0) + r.costUsd }); }
         if (r.usage) {

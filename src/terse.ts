@@ -17,5 +17,5 @@ export function rules(): string | undefined {
     .replace(/\n## Persistence[\s\S]*?(?=\n## )/, '\n')            // on/off commands: not a chat with a person who toggles it
     .trim();
   if (md.length < 200) return;
-  return `## Reply style (caveman)\nYour chat replies and status text follow these rules. Files you write (code, comments, the handoff, plans, commit messages) and questions you ask the user are normal clear prose.\n\n${md}`;
+  return `## Reply style (caveman)\nEvery message you write in this session follows these rules: status lines between tool calls and your final summary of the turn (what changed, what you verified, what you could not). Files you write (code, comments, the handoff, plans, commit messages) and questions you ask the user are normal clear prose.\n\n${md}`;
 }

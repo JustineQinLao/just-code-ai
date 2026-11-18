@@ -209,7 +209,9 @@ export class Runner {
     for (const t of this.store.data.tasks) if (t.review?.state === 'running' && !this.reviews.has(t.id)) this.store.updateTask(t.id, { review: undefined });
     for (const t of [...this.store.data.tasks]) await this.settleMerged(t);
     // Task copies whose task no longer exists.
-    const keep = new Set([...this.store.data.tasks.filter(t => t.worktree).map(t => path.basename(t.worktree!)), BASELINE]);
+    // A folder is named after its task, and one being created right now has no `worktree` saved yet: every existing
+    // task's folder is kept, not only those already recorded.
+    const keep = new Set([...this.store.data.tasks.flatMap(t => [t.id, ...(t.worktree ? [path.basename(t.worktree)] : [])]), BASELINE]);
     if (await g.isRepo(this.root)) {
       const { removed, kept } = await this.serial(() => g.pruneOrphans(this.root, keep)).catch(() => ({ removed: [], kept: [] as string[] }));
       if (removed.length) this.d.notify('info', `Cleaned up ${removed.length} leftover task folder(s) in .justcode/worktrees.`);
@@ -363,6 +365,9 @@ export class Runner {
     const resume = !!t.sessionId && sessionExists(cwd, sessionId);
     // A fresh session gets the task itself (plus anything the board adds); a resumed one only the new message.
     if (!fs.existsSync(cwd)) throw new Error(`This task's folder is gone (${cwd}). Use Discard to start it over.`);
+    // The code map of the folder this session works in (its task folder on its branch, or the project folder), built
+    // before anything else so the task is never marked working without a session behind it.
+    const map = await CodeMap.forSession(cwd, this.root, this.d.settings().codeMap !== false);
     const sources = A.sprintSources(A.loadSources(this.root), t.sprintId ? this.store.data.sprints.find(x => x.id === t.sprintId) : undefined);
     // An artifact task that names a page an earlier task published updates that page (same link) instead of a new one.
     const reuse = !resume && t.output === 'artifact' && !t.artifactUrl ? this.publishedNamedIn(t) : undefined;
@@ -376,12 +381,15 @@ export class Runner {
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
     const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
-    // The code map of the folder this session works in (its task folder on its branch, or the project folder).
-    const map = CodeMap.forSession(cwd, this.root, set.codeMap !== false);
+    const terse = set.terseReplies !== false ? Terse.rules() : undefined;
+    // System-prompt rules fade over a long task; a one-line reminder with the task (as the caveman plugin's own hook
+    // does each turn) keeps them in use. Code, files and commit messages are not affected.
+    const remind = [map.rule && 'Find code with the code map (graphify commands in your instructions) before grep or reading files one by one.',
+      terse && 'Write your status lines and final summary in the caveman reply style from your instructions.'].filter(Boolean).join(' ');
     const s = new Session({
       ...(task.chat ? { append: CHAT_APPEND, showFirst: true } : {}),
       // Working together: the code map finds code with fewer reads, terse replies spend fewer output tokens.
-      ...((extra => extra.length ? { append: [task.chat ? CHAT_APPEND : TASK_APPEND, ...extra].join('\n\n') } : {})([map.rule, set.terseReplies !== false ? Terse.rules() : undefined].filter((x): x is string => !!x))),
+      ...((extra => extra.length ? { append: [task.chat ? CHAT_APPEND : TASK_APPEND, ...extra].join('\n\n') } : {})([map.rule, terse].filter((x): x is string => !!x))),
       bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
@@ -412,7 +420,7 @@ export class Runner {
       this.changed();
       this.pump();
     });
-    try { await s.start(first); } catch (e) { this.sessions.delete(id); s.kill(); throw e; }
+    try { await s.start(remind && !task.chat ? `${first}\n\n${remind}` : first); } catch (e) { this.sessions.delete(id); s.kill(); throw e; }
   }
 
   fail(id: string, e: unknown) {

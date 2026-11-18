@@ -134,7 +134,8 @@ export const queueMethods = {
   pump(this: Runner) {
     if (this.disposed || this.d.limits.held() || !this.holdsLease()) return;
     const q = [...this.store.queue];
-    let slots = this.d.settings().maxParallel - this.inFlight().length, changed = false;
+    const max = this.d.settings().maxParallel;
+    let slots = max - this.inFlight().length, changed = false;
     const keep: string[] = [];
     while (slots > 0 && q.length) {
       const id = q.shift()!;
@@ -142,7 +143,15 @@ export const queueMethods = {
       if (this.store.task(id)?.status !== 'todo') continue; // started by hand, moved or deleted meanwhile
       const next = this.store.task(id)!;
       if (next.where === 'direct' && !next.init && this.openDirect(id)) { keep.push(id); continue; } // one direct task at a time
-      if (this.waitsFor(next).length) { keep.push(id); continue; } // its dependencies are not done yet
+      const waits = this.waitsFor(next);
+      if (waits.length) {
+        keep.push(id);
+        // One task at a time runs the queue in its order: a task waiting for an earlier one (held for your approval,
+        // stuck, still in review) holds back the tasks after it, so a later task never builds on code that misses
+        // the earlier work. It is passed over only when what it waits for can never start (a To-do not in the queue).
+        if (max <= 1 && waits.some(d => d.status !== 'todo' || this.store.queue.includes(d.id))) { keep.push(...q); q.length = 0; }
+        continue;
+      }
       slots--;
       this.run(id).catch(e => { this.d.notify('error', `${this.store.task(id)?.title ?? 'Task'}: ${e.message}`, id); });
     }

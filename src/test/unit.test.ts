@@ -692,6 +692,31 @@ test('a task stopped on an error does not hold the slot; Run now starts a queued
   r.dispose();
 });
 
+test('one task at a time keeps the queue order: a task waiting on a held one holds back later tasks', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const ran: string[] = [];
+  r.run = async (id: string) => { ran.push(id); };
+  // 7.2 passed review but is held for your approval: it frees the slot, yet 7.3 needs it merged first.
+  const held = store.addTask({ title: '7.2', mode: 'auto' });
+  store.updateTask(held.id, { status: 'review', worktree: root, branch: 'b', base: 'main', review: { state: 'pass', attempts: 1, hold: 'migrations' } as any });
+  assert.equal(r.inFlight().length, 0);
+  const a = store.addTask({ title: '7.3', mode: 'auto' }), b = store.addTask({ title: '8.3', mode: 'auto' });
+  store.updateTask(a.id, { dependsOn: [held.id] });
+  store.setQueue([a.id, b.id]);
+  r.pump();
+  assert.deepEqual(ran, [], '8.3 does not jump ahead of 7.3');
+  assert.deepEqual(store.queue, [a.id, b.id]);
+  // What 7.3 waits for can never start (a To do outside the queue): it is passed over.
+  const never = store.addTask({ title: 'never', mode: 'auto' });
+  store.updateTask(a.id, { dependsOn: [never.id] });
+  r.pump();
+  assert.deepEqual(ran, [b.id]);
+  assert.deepEqual(store.queue, [a.id]);
+  r.dispose();
+});
+
 test('applying a plan keeps the planner\'s build order, before other To do tasks and on an empty board', () => {
   const { root } = leaseRepo();
   const store = new Store(root);
@@ -1625,7 +1650,7 @@ test('code map: built into .justcode only, refreshed when the commit changes, ha
   sh('worktree', 'add', '-q', '-b', 'jc/t1', wt, 'jc/sprint');
   fs.writeFileSync(path.join(wt, 'src', 'refund.ts'), 'import { total } from "./pay";\nexport function refund(xs: number[]) { return -total(xs); }\n');
   sh('-C', wt, 'add', '-A'); sh('-C', wt, 'commit', '-qm', 'refund');
-  const o2 = CodeMap.forSession(wt, root, true);
+  const o2 = await CodeMap.forSession(wt, root, true);
   assert.ok(o2.rule.includes(CodeMap.graphFile(wt)), 'the session queries its own folder\'s map');
   assert.equal(await CodeMap.refresh(wt), true);
   const has = (dir: string) => /refund/.test(fs.readFileSync(CodeMap.graphFile(dir), 'utf8'));
