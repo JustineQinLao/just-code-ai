@@ -37,7 +37,7 @@ export const currentBranch = (dir: string) => git(dir, ['rev-parse', '--abbrev-r
 // Keeps .justcode/ (board, worktrees) out of git without touching the tracked .gitignore.
 // fresh: a repo JustCode just created, which also gets the usual secrets/deps excluded before its first commit.
 // Never committed by JustCode, unless the project's .gitignore already decides about them.
-const PROTECT = ['node_modules/', 'node_modules', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json',
+const PROTECT = ['node_modules/', 'node_modules', 'graphify-out/', '.env', '.env.*', '!.env.example', '.DS_Store', '*.vsix', '.claude/settings.local.json',
   '*.pem', '*.key', '*.p12', '*.pfx', '*.keystore', '*.jks', 'id_rsa*', 'id_ed25519*', '.npmrc', '.pypirc', '.netrc',
   'credentials*.json', 'service-account*.json', '*.tfstate', '*.tfstate.*', '.venv/', 'venv/', '__pycache__/', '.terraform/'];
 
@@ -205,7 +205,8 @@ export async function commitAll(dir: string, message: string, secretScan = false
   // JustCode's own files (some projects track .justcode/) never ride along on a task's branch.
   // (Staged, then taken back out: naming .justcode in the add itself fails when .gitignore lists it.)
   await git(dir, ['add', '-A']);
-  if ((await git(dir, ['diff', '--cached', '--name-only', '--', '.justcode']).catch(() => '')).trim()) await git(dir, ['reset', '-q', '--', '.justcode']);
+  // Graphify's output (graphify-out/, a cache that changes on every scan) is a tool's scratch, never the task's work.
+  for (const own of ['.justcode', 'graphify-out']) if ((await git(dir, ['diff', '--cached', '--name-only', '--', own]).catch(() => '')).trim()) await git(dir, ['reset', '-q', '--', own]);
   if (await ok(dir, ['diff', '--cached', '--quiet'])) return false;
   await scanStaged(dir, secretScan);
   await git(dir, ['commit', '-q', '-m', message]);

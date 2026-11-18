@@ -891,8 +891,9 @@ test('commitAll works when .gitignore lists .justcode (the usual case)', async (
   fs.writeFileSync(path.join(root, '.gitignore'), '/.justcode/\n'); sh('add', '-A'); sh('commit', '-qm', 'ignore');
   fs.mkdirSync(path.join(root, '.justcode'), { recursive: true }); fs.writeFileSync(path.join(root, '.justcode', 'board.json'), '{}');
   fs.writeFileSync(path.join(root, 'a.txt'), 'work');
+  fs.mkdirSync(path.join(root, 'graphify-out', 'cache'), { recursive: true }); fs.writeFileSync(path.join(root, 'graphify-out', 'cache', 'stat-index.json'), '{}');
   assert.equal(await g.commitAll(root, 'work'), true);
-  assert.deepEqual(sh('show', '--name-only', '--format=', 'HEAD').toString().trim().split('\n'), ['a.txt']);
+  assert.deepEqual(sh('show', '--name-only', '--format=', 'HEAD').toString().trim().split('\n'), ['a.txt'], 'no .justcode, no graphify-out cache');
 });
 
 test('a sprint whose merge is held up by your uncommitted files: the task is still merged, the sprint says why, and it merges once clear', async () => {

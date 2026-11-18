@@ -33,12 +33,17 @@ function find(name: string): string | undefined {
 }
 export const bins = () => ({ graphify: find('graphify') });
 
-const run = (bin: string, args: string[], cwd: string, timeout: number) => new Promise<string>((res, rej) =>
-  execFile(bin, args, { cwd, timeout, maxBuffer: 16 << 20, env: { ...process.env, GRAPHIFY_BACKEND: 'none' } }, (e, out, err) => e ? rej(new Error(String(err || e.message).trim().split('\n').pop())) : res(String(out))));
+// Run from inside the map's own folder with GRAPHIFY_OUT pointing there: anything Graphify writes by default (cache,
+// reports) lands in .justcode/graphify-out, never in a graphify-out/ in the code, where a task commit would pick it up.
+const run = (bin: string, args: string[], out: string, timeout: number) => {
+  fs.mkdirSync(out, { recursive: true });
+  return new Promise<string>((res, rej) =>
+    execFile(bin, args, { cwd: out, timeout, maxBuffer: 16 << 20, env: { ...process.env, GRAPHIFY_BACKEND: 'none', GRAPHIFY_OUT: out } }, (e, o, err) => e ? rej(new Error(String(err || e.message).trim().split('\n').pop())) : res(String(o))));
+};
 
 export function version(): Promise<string | undefined> {
   const b = bins().graphify;
-  return b ? run(b, ['--version'], os.homedir(), 10_000).then(o => o.trim().replace(/^graphify\s*/, ''), () => undefined) : Promise.resolve(undefined);
+  return b ? run(b, ['--version'], path.join(os.tmpdir(), 'justcode-graphify'), 10_000).then(o => o.trim().replace(/^graphify\s*/, ''), () => undefined) : Promise.resolve(undefined);
 }
 
 const head = (root: string) => new Promise<string>(res => execFile('git', ['rev-parse', 'HEAD'], { cwd: root }, (e, out) => res(e ? '' : String(out).trim())));
@@ -57,7 +62,7 @@ export function refresh(dir: string, force = false): Promise<boolean> {
     try { was = fs.readFileSync(headFile(dir), 'utf8').trim(); } catch { /* never built */ }
     if (!force && fs.existsSync(graphFile(dir)) && now && now === was) return true;
     try {
-      await run(b, ['extract', dir, '--code-only', '--out', path.join(dir, '.justcode'), '--no-viz'], dir, 10 * 60_000);
+      await run(b, ['extract', dir, '--code-only', '--out', path.join(dir, '.justcode'), '--no-viz'], mapDir(dir), 10 * 60_000);
       fs.writeFileSync(headFile(dir), now);
       return true;
     } catch { return false; }
