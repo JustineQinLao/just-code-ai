@@ -13,6 +13,7 @@ import { transcript, agentLog, archivedLog, artifactUrlIn, claudeBin, claudeEnv,
 import { Limits } from './limits';
 import { checkHealth, checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
+import * as CodeMap from './codemap';
 import * as R from './registry';
 import * as Audit from './audit';
 import { writeSprintReport } from './report';
@@ -74,6 +75,14 @@ export async function fix(action: string) {
       if (await vscode.window.showWarningMessage(`Create a local git repository in ${path.basename(r.root)} and commit its files? Secrets (.env, keys) and node_modules are left out.`, { modal: true }, 'Create') !== 'Create') return;
       await g.ensureRepo(r.root).catch(e => vscode.window.showErrorMessage(e.message));
       return recheck();
+    }
+    // Graphify: uv (or pipx) installs it with its own Python 3.11+; the map is built once it is there.
+    case 'installGraphify': {
+      const has = (b: string) => [...(process.env.PATH ?? '').split(path.delimiter), path.join(os.homedir(), '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin'].some(d => d && fs.existsSync(path.join(d, b)));
+      if (has('uv')) return term('Install Graphify', CodeMap.INSTALL);
+      if (has('pipx')) return term('Install Graphify', CodeMap.INSTALL_PIPX);
+      if (await vscode.window.showInformationMessage('Graphify installs with uv (or pipx), which brings its own Python. Install uv first, then press Install again.', 'Get uv') === 'Get uv') void vscode.env.openExternal(vscode.Uri.parse('https://docs.astral.sh/uv/getting-started/installation/'));
+      return;
     }
     case 'installPlaywright': return term('Install Playwright', playwrightCommand(q(bin() ?? 'claude')));
     case 'designFromProject': {

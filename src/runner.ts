@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
 import { sweepStacks } from './docker';
+import * as CodeMap from './codemap';
 import * as App from './app';
 import { setupSkillBody, designFromCodeBody } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
@@ -14,7 +15,7 @@ import * as Audit from './audit';
 import { SecretsFound, describeSecrets } from './secrets';
 import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
-import { transcript, CHAT_APPEND } from './claude';
+import { transcript, CHAT_APPEND, TASK_APPEND } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -41,6 +42,7 @@ export interface RunnerSettings {
   idleMinutes: number;
   bypassAll?: boolean;   // justCode.bypassAll: every task runs with bypassPermissions
   superpowers: boolean;     // load the installed superpowers plugin into task, planner and review sessions
+  codeMap?: boolean;        // tasks and chats get the project's code map (Graphify), when it is installed
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
   taskEffort: string; plannerModel: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
@@ -124,6 +126,8 @@ export class Runner {
     // Docker stacks left by task folders that are gone (merged or discarded before this cleanup existed, or while closed).
     setTimeout(() => void sweepStacks(this.root, this.store.data.tasks.filter(t => t.worktree && t.status !== 'done').map(t => t.worktree!))
       .then(n => n.length && this.d.notify('info', `Stopped ${n.length} Docker stack(s) left by finished tasks.`, undefined, true)), 5000).unref?.();
+    // The code map (Graphify, when installed): built or refreshed in the background, so the first task already has it.
+    if (this.d.settings().codeMap !== false) setTimeout(() => void CodeMap.refresh(this.root), 8000).unref?.();
     this.leaseTimer = setInterval(() => { this.renewLease(); if (this.store.data.sprints.some(s => s.blocked) || this.store.data.tasks.some(t => /^Budget reached/.test(t.error ?? ''))) this.sweepSoon(); }, LEASE_MS / 4);
     this.leaseTimer.unref?.();
   }
@@ -370,15 +374,19 @@ export class Runner {
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
     const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
+    // The code map as last built (a stale one still helps); a newer commit refreshes it for the next session.
+    const map = CodeMap.sessionOptions(this.root, set.codeMap !== false);
+    if (set.codeMap !== false) void CodeMap.refresh(this.root);
     const s = new Session({
       ...(task.chat ? { append: CHAT_APPEND, showFirst: true } : {}),
+      ...(map.rule ? { append: `${task.chat ? CHAT_APPEND : TASK_APPEND}\n\n${map.rule}` } : {}),
       bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
       agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
       mcpServers: web.mcpServers,
-      allowed: [...new Set([...web.allowed, ...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
+      allowed: [...new Set([...web.allowed, ...map.allowed, ...set.allowedTools, ...personal, ...this.store.rules, ...(task.allow ?? []), `Edit(${A.handoffFile(this.root, id)})`, `Write(${A.handoffFile(this.root, id)})`])],
       rules: () => [...set.allowedTools, ...this.store.rules, ...(this.store.task(id)?.allow ?? [])],
       env: this.folderEnv(id, cwd), idleMs: Math.max(1, set.idleMinutes) * 60_000, label: task.title,
       audit: (event, detail, actor) => this.audit(event, id, detail, actor),

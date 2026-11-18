@@ -1600,3 +1600,23 @@ test('checks: watch-mode test runners run once', () => {
   fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { test: 'ng test' } }));
   assert.equal(C.detectChecks(d).find((c: any) => c.name === 'tests').cmd, 'npm test --silent -- --watch=false --browsers=ChromeHeadless');
 });
+
+test('code map: built into .justcode only, refreshed when the commit changes, handed to sessions as read-only commands', { skip: !require('../codemap').bins().graphify && 'graphify not installed' }, async () => {
+  const CodeMap = require('../codemap');
+  const { root, sh } = leaseRepo();
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'pay.ts'), 'export function total(xs: number[]) { return xs.reduce((a, b) => a + b, 0); }\nexport function checkout(xs: number[]) { return total(xs) * 1.12; }\n');
+  sh('add', '-A'); sh('commit', '-qm', 'code');
+  assert.deepEqual(CodeMap.sessionOptions(root, true).allowed, [], 'no map yet: nothing handed over');
+  assert.equal(await CodeMap.refresh(root), true);
+  assert.ok(fs.existsSync(CodeMap.graphFile(root)));
+  assert.deepEqual(fs.readdirSync(root).sort(), ['.git', '.justcode', 'a.txt', 'src'], 'nothing outside .justcode');
+  const t0 = fs.statSync(CodeMap.graphFile(root)).mtimeMs;
+  await CodeMap.refresh(root);
+  assert.equal(fs.statSync(CodeMap.graphFile(root)).mtimeMs, t0, 'same commit: not rebuilt');
+  const o = CodeMap.sessionOptions(root, true);
+  assert.ok(o.allowed.some((r: string) => / query:\*\)$/.test(r)) && /query "<question>" --graph/.test(o.rule));
+  assert.deepEqual(CodeMap.sessionOptions(root, false).allowed, [], 'setting off: nothing');
+  const out = execFileSync(CodeMap.bins().graphify, ['explain', 'checkout()', '--graph', CodeMap.graphFile(root)]).toString();
+  assert.match(out, /total/);
+});

@@ -359,6 +359,11 @@
           "default": 7979,
           "description": "Port for the mobile board server."
         },
+        "justCode.codeMap": {
+          "type": "boolean",
+          "default": true,
+          "description": "When Graphify is installed (see the setup checklist), JustCode keeps a map of the project's code in .justcode/graphify-out/ (local, code only, no API key) and tasks and chats ask it where things are instead of searching file by file. Rebuilt when the project's commit changes."
+        },
         "justCode.cleanupAfterDays": {
           "type": "integer",
           "default": 14,

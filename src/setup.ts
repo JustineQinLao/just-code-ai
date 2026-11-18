@@ -2,12 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { claudeAuth, claudeVersion, gitIdentity, gitVersion, installedPlugin } from './claude';
 import { isRepo } from './git';
+import * as CodeMap from './codemap';
 
 // The setup checklist the board shows until everything a task needs is in place. Each failed check has one fix
 // the board can do (or start) for you.
 
 export interface Check {
-  id: 'claude' | 'login' | 'git' | 'identity' | 'repo' | 'frontendDesign' | 'superpowers' | 'playwright' | 'designMd'
+  id: 'claude' | 'login' | 'git' | 'identity' | 'repo' | 'frontendDesign' | 'superpowers' | 'playwright' | 'codemap' | 'designMd'
     | 'board' | 'policy' | 'registry' | 'worktrees' | 'sources' | 'transcripts';
   ok: boolean;
   label: string;
@@ -63,6 +64,7 @@ export async function checkSetup(bin: string | undefined, env: Record<string, st
   rec('frontendDesign', 'frontend-design plugin', !!lookup.plugin('frontend-design'), 'Gives page and artifact tasks a deliberate visual design.', { action: 'installPlugin:frontend-design', label: 'Install' });
   rec('superpowers', 'superpowers plugin', !!lookup.plugin('superpowers'), 'Planning, debugging and review skills.', { action: 'installPlugin:superpowers', label: 'Install' });
   rec('playwright', 'Playwright', !!lookup.plugin('playwright'), 'Lets Claude open pages in a browser to check UI work.', { action: 'installPlaywright', label: 'Install' });
+  rec('codemap', 'Code map (Graphify)', !!CodeMap.bins().graphify, 'Free and local: maps the code once (functions, imports, calls), so tasks ask the map where things are instead of reading file after file. Fewer tokens and turns per task.', { action: 'installGraphify', label: 'Install' });
   // Claude already read the code and found no UI to copy (a new project): offer the catalog or your own file instead.
   if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), lookup.designTried?.(root)
     ? 'Claude found no styles in the code yet (no UI to read), so it wrote nothing. Choose a design from the catalog or use your own file.'
