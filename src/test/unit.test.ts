@@ -1642,3 +1642,27 @@ test('terse replies: the installed caveman rules, without their on/off section, 
   assert.doesNotMatch(r, /## Persistence|stop caveman/);
   assert.ok(r.length < 6000, `small enough to add to every task: ${r.length} chars`);
 });
+
+test('commit messages: the project\'s own rules are found and named in the brief; the task\'s commit.md is used; per-turn commits squash into one', async () => {
+  const { root, sh } = leaseRepo();
+  assert.match(A.commitInstructions(root, 'x1'), /Conventional Commits/, 'no rules: Conventional Commits');
+  fs.mkdirSync(path.join(root, '.claude', 'commands'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.claude', 'commands', 'git-commit.md'), 'type(scope): description');
+  assert.deepEqual(A.commitRules(root), [path.join(root, '.claude', 'commands', 'git-commit.md')]);
+  assert.match(A.commitInstructions(root, 'x1'), /git-commit\.md: only its message format applies/);
+  const t = { id: 'x1', title: 'Add bundle dialog' };
+  assert.equal(A.commitMessage(root, t), 'Add bundle dialog', 'no commit.md: the title');
+  fs.mkdirSync(A.taskDir(root, 'x1'), { recursive: true });
+  fs.writeFileSync(A.commitFile(root, 'x1'), '```\nfeat(bundles): add bundle details dialog\n\n- Show members and price\n```\n');
+  assert.equal(A.commitMessage(root, t), 'feat(bundles): add bundle details dialog\n\n- Show members and price');
+  assert.equal(A.commitSubject(root, t), 'feat(bundles): add bundle details dialog');
+  fs.writeFileSync(A.commitFile(root, 'x1'), '# Commit\nlots of prose');
+  assert.equal(A.commitMessage(root, t), 'Add bundle dialog', 'a heading is not a commit message');
+  sh('checkout', '-q', '-b', 'jc/x1');
+  for (const n of [1, 2, 3]) { fs.writeFileSync(path.join(root, `f${n}.txt`), String(n)); sh('add', '-A'); sh('commit', '-qm', `turn ${n}`); }
+  assert.equal(await g.squash(root, 'main', 'feat(x): one commit\n\n- three files'), true);
+  assert.equal(sh('rev-list', '--count', 'main..HEAD').toString().trim(), '1');
+  assert.equal(sh('log', '-1', '--format=%B').toString().trim(), 'feat(x): one commit\n\n- three files');
+  const files = sh('diff', '--name-only', 'main', 'HEAD').toString();
+  assert.ok(['f1.txt', 'f2.txt', 'f3.txt'].every(f => files.includes(f)), 'every turn\'s change is in the one commit');
+});

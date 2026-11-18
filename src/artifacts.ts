@@ -172,11 +172,41 @@ export function writeBrief(root: string, t: Task, sources: Source[], taskTitle?:
     fs.existsSync(planFile(root, t.id)) ? `## Approved plan\nFollow ${planFile(root, t.id)}.` : '',
     fs.existsSync(progressFile(root)) ? `## Project history\nWhat earlier tasks changed: ${progressFile(root)} (read it if you need context on recent work).` : '',
     `## When you finish\nUpdate ${handoffFile(root, t.id)} (create it if missing), at most 30 lines:\n` +
-    '- What you changed and why (files, key decisions)\n- How you verified it: the exact commands you ran and their result\n- Anything left open, or risks for the reviewer to check',
+    '- What you changed and why (files, key decisions)\n- How you verified it: the exact commands you ran and their result\n- Anything left open, or risks for the reviewer to check\n' +
+    commitInstructions(root, t.id),
   ].filter(Boolean).join('\n\n');
   write(briefFile(root, t.id), text + '\n');
   return text;
 }
+
+// 📝 Commit messages: Claude writes one per task (commit.md beside the handoff), in the project's own convention when
+// it has one (a commit command or skill for Claude, CONTRIBUTING, commitlint, a .gitmessage template), else
+// Conventional Commits. JustCode commits with it; the task title is only the fallback.
+export const commitFile = (root: string, id: string) => path.join(taskDir(root, id), 'commit.md');
+export function commitRules(root: string): string[] {
+  const out: string[] = [];
+  const ls = (d: string) => { try { return fs.readdirSync(path.join(root, d)); } catch { return []; } };
+  for (const f of ls('.claude/commands')) if (/commit/i.test(f) && f.endsWith('.md')) out.push(path.join(root, '.claude/commands', f));
+  for (const d of ls('.claude/skills')) if (/commit/i.test(d) && fs.existsSync(path.join(root, '.claude/skills', d, 'SKILL.md'))) out.push(path.join(root, '.claude/skills', d, 'SKILL.md'));
+  for (const f of ls('.github')) if (/commit/i.test(f) && f.endsWith('.md')) out.push(path.join(root, '.github', f));
+  for (const f of ls('.')) if (/^(commitlint\.config\.(c|m)?(js|ts)|\.commitlintrc.*|\.gitmessage)$/.test(f)) out.push(path.join(root, f));
+  for (const f of ['CONTRIBUTING.md', 'docs/CONTRIBUTING.md']) if (/commit message|conventional commit/i.test(read(path.join(root, f)))) out.push(path.join(root, f));
+  return out;
+}
+export const commitInstructions = (root: string, id: string) => {
+  const rules = commitRules(root);
+  return `Then write the commit message for all of this task's changes to ${commitFile(root, id)}, replacing it each time (JustCode commits with it; never run git commit yourself). ` +
+    (rules.length ? `Use this project's commit message format from ${rules.join(', ')}: only its message format applies (write the message to the file above, not where those files say, and do not run the git commands they list).`
+      : 'Use Conventional Commits: `type(scope): description` (types feat, fix, refactor, style, perf, chore, docs, test; scope = the module touched; imperative, lowercase, under 72 characters, no period), then a blank line and `- ` bullets of what changed and why, each under 100 characters. Match the scopes in `git log --oneline -15`.') +
+    ' Plain text only: no headings, no code fences, nothing about JustCode or tasks.';
+};
+// The message to commit with: the task's commit.md when it looks like one (a subject line of sensible length), else the title.
+export function commitMessage(root: string, t: { id: string; title: string }): string {
+  const m = read(commitFile(root, t.id)).replace(/^```\w*\n?|\n?```\s*$/g, '').trim();
+  const subject = m.split('\n')[0]?.trim() ?? '';
+  return subject && subject.length <= 100 && !/^#/.test(subject) ? m.slice(0, 4000) : t.title;
+}
+export const commitSubject = (root: string, t: { id: string; title: string }) => commitMessage(root, t).split('\n')[0];
 
 export const readHandoff = (root: string, id: string) => read(handoffFile(root, id)).trim().slice(0, 6000);
 

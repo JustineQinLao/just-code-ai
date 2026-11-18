@@ -291,9 +291,10 @@ export async function workingDiff(dir: string, startHead: string, files: string[
   return diff;
 }
 
-// A merged task's branch and folder are gone; its merge commit ("Merge <branch>: <title>") still says what it changed.
+// A merged task's branch and folder are gone; its merge commit still says what it changed. Its message names the
+// branch: "Merge branch <branch> into <base>" in the body (older ones: "Merge <branch>: <title>").
 export async function mergeCommit(repo: string, branch: string) {
-  return (await git(repo, ['log', '--all', '--merges', '--fixed-strings', `--grep=Merge ${branch}: `, '-1', '--format=%H']).catch(() => '')).trim() || undefined;
+  return (await git(repo, ['log', '--all', '--merges', '--fixed-strings', `--grep=Merge branch ${branch} into `, `--grep=Merge ${branch}: `, '-1', '--format=%H']).catch(() => '')).trim() || undefined;
 }
 export async function mergedChanges(repo: string, branch: string): Promise<Change[]> {
   const sha = await mergeCommit(repo, branch);
@@ -336,6 +337,20 @@ export async function finishResolve(dir: string) {
 // Step 2: the branch now contains base, so merging it into base cannot conflict.
 // Base checked out in the main folder: a normal --no-ff merge there (git refuses if local edits would be overwritten).
 // Otherwise the merge commit is built without a checkout and base is moved only if it hasn't moved meanwhile.
+// The task's commits since it last met its base become one commit with the task's message, so the base gets one
+// clean commit per task (plus the merge) instead of one per turn. Merges of the base into the branch are kept out:
+// the merge-base is the base as last brought in, so only the task's own changes are in the squashed commit.
+export async function squash(dir: string, base: string, message: string) {
+  const mb = await git(dir, ['merge-base', 'HEAD', base]).catch(() => '');
+  if (!mb) return false;
+  const n = Number(await git(dir, ['rev-list', '--count', `${mb}..HEAD`]).catch(() => '0'));
+  if (!n || (n === 1 && (await git(dir, ['log', '-1', '--format=%B']).catch(() => '')).trim() === message.trim())) return false;
+  await git(dir, ['reset', '-q', '--soft', mb]);
+  if (await ok(dir, ['diff', '--cached', '--quiet'])) return false;
+  await git(dir, ['commit', '-q', '-m', message]);
+  return true;
+}
+
 const isJustcode = (f: string) => /^\.justcode(\/|$)/.test(f);
 
 // Uncommitted files in the project folder that a merge into its checked-out branch would overwrite: those

@@ -504,7 +504,7 @@ export class Runner {
       }
     }
     if (t.worktree && fs.existsSync(t.worktree) && !conflicted) {
-      try { committed = await g.commitAll(t.worktree, t.title, this.secretScan()); } catch (e: any) {
+      try { committed = await g.commitAll(t.worktree, A.commitMessage(this.root, t), this.secretScan()); } catch (e: any) {
         if (e instanceof SecretsFound) return this.secretsBlocked(id, e, cost);
         this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });
         return this.d.notify('error', `"${t.title}": ${e.message}`, id);

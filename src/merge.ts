@@ -77,7 +77,7 @@ export const mergeMethods = {
         if (!auto && (this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle') || t.status === 'doing')) return this.mergeLater(t);
         if (t.status !== 'review' || this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle')) throw new Error('Claude is still working on this task. Wait for it to finish, then Finish.');
         const files = t.directFiles ?? [];
-        if (files.length) await g.commitFiles(this.root, t.title, files, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
+        if (files.length) await g.commitFiles(this.root, A.commitMessage(this.root, t), files, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
         this.stop(id);
         this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
@@ -100,7 +100,9 @@ export const mergeMethods = {
       // An earlier Merge got as far as the merge commit and then failed while removing the folder (git no longer knows it): only finish up.
       const already = await g.isMerged(this.root, t.branch, t.base) && !await g.isWorktree(t.worktree);
       if (!already) {
-        await g.commitAll(t.worktree, t.title, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
+        const msg = A.commitMessage(this.root, t);
+        await g.commitAll(t.worktree, msg, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
+        await g.squash(t.worktree, t.base, msg).catch(() => false);   // one commit per task, in the project's message format
         const conflicts = await g.syncWithBase(t.worktree, t.base);
         if (conflicts.length) {
           // Its base moved on while it waited (other tasks merged). Claude resolves them by itself (twice at most); the
@@ -114,7 +116,7 @@ export const mergeMethods = {
           return;
         }
         const before = await g.git(this.root, ['rev-parse', `refs/heads/${t.base}`]).catch(() => '');
-        await g.mergeIntoBase(this.root, t.base, t.branch, `Merge ${t.branch}: ${t.title}`);
+        await g.mergeIntoBase(this.root, t.base, t.branch, `${A.commitSubject(this.root, t)}\n\nMerge branch ${t.branch} into ${t.base}`);
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
         // A running app follows the project folder: rebuild it when this merge landed on the checked-out branch.
         if (before && await g.currentBranch(this.root).catch(() => '') === t.base) {
@@ -157,7 +159,9 @@ export const mergeMethods = {
     };
     if (await g.branchExists(this.root, sp.branch)) {
       let conflicts: string[];
-      try { conflicts = await g.mergeBranch(this.root, sp.target, sp.branch, `Merge sprint ${sp.name} (${sp.branch})`); } catch (e: any) {
+      // The sprint's merge says what it brings: each of its tasks' commit subjects.
+      const subjects = tasks.filter(x => x.sprintId === id && x.status === 'done' && !x.archived && !x.init).map(x => `- ${A.commitSubject(this.root, x)}`);
+      try { conflicts = await g.mergeBranch(this.root, sp.target, sp.branch, `chore(sprint): merge ${sp.name} into ${sp.target}${subjects.length ? `\n\n${subjects.join('\n')}` : ''}`); } catch (e: any) {
         if (!(e instanceof g.LocalChanges)) throw e;
         const by = tasks.filter(x => !x.archived && x.directFiles?.some(f => e.files.includes(f))).map(x => `${x.chat ? 'chat' : 'task'} "${x.title.slice(0, 40)}"`);
         return block(`${e.message}${by.length ? ` They come from ${by.join(', ')}.` : ''}`, e.files);
@@ -189,7 +193,7 @@ export const mergeMethods = {
     const now = this.store.sprint(id);
     if (!now?.branch || now.blockedBy?.join() !== files.join() || (c !== COMMIT && c !== DISCARD)) return;
     await this.serial(async () => {
-      if (c === COMMIT) await g.commitFiles(this.root, `Your changes before merging ${sp.name}`, files, this.secretScan());
+      if (c === COMMIT) await g.commitFiles(this.root, `chore: commit local changes before merging ${sp.name}`, files, this.secretScan());
       else await g.revertFiles(this.root, files);
       this.audit(c === COMMIT ? 'finish' : 'discard', undefined, `${files.join(', ')} (in the way of ${sp.name})`, 'user');
       // Chats and direct tasks that listed these files no longer have them uncommitted.
@@ -242,7 +246,7 @@ export const mergeMethods = {
   remotePr(this: Runner, id: string) {
     return this.guarded(id, async t => {
       if (!t.worktree || !t.branch || !t.base) throw new Error('Run the task first');
-      await g.commitAll(t.worktree, t.title, this.secretScan());
+      await g.commitAll(t.worktree, A.commitMessage(this.root, t), this.secretScan());
       const url = await g.openRemotePr(t.worktree, t.base, t.branch, t.title, t.description ?? '');
       this.store.updateTask(id, { pr: url });
     });

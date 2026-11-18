@@ -72,7 +72,7 @@ test('runner with a fake SDK: a branch task goes todo → doing → review → d
   assert.equal(done.review?.state, 'pass');
   assert.ok((done.costUsd ?? 0) >= 0.02, 'build and review cost both counted');
   assert.equal(fs.readFileSync(path.join(root, 'b.txt'), 'utf8'), 'made by the fake\n');
-  assert.match(sh('log', '--oneline', '-n', '1'), /Merge jc\/.*: Add b/);
+  assert.match(sh('log', '-n', '1', '--format=%B'), /^Add b\n\nMerge branch jc\/\S+ into main/);
   assert.equal(done.worktree, undefined);
   assert.ok(fs.existsSync(path.join(root, '.justcode', 'tasks', t.id, 'brief.md')));
   r.dispose();
