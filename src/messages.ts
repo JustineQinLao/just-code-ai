@@ -184,10 +184,13 @@ export async function handle(m: any, remote = false) {
     case 'completions': {
       const b = bin(), personal = setting('personalSetup', false), key = `${r.root}|${personal}`;
       const known = commandCache.get(key);
+      // Files first: listing skills starts Claude Code (seconds, or stuck), and @ must not wait for that.
+      const files = await g.projectFiles(r.root);
+      emit({ type: 'completions', files, commands: known?.list ?? [] });
       const commands = known && Date.now() - known.at < 60_000 ? known.list
         : await (b ? slashCommands({ bin: b, cwd: r.root, env: env(), personal, plugins: [pluginDir(r.root)] }) : Promise.reject()).catch(() => discoverSkills(r.root, personal));
       if (commands !== known?.list) commandCache.set(key, { at: Date.now(), list: commands });
-      emit({ type: 'completions', files: await g.projectFiles(r.root), commands }); return;
+      emit({ type: 'completions', files, commands }); return;
     }
     case 'history': emit({ type: 'history', items: r.history() }); return;
     case 'sessionLog': {

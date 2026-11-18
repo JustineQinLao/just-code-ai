@@ -49,11 +49,14 @@
     acItems = acMatches(t);
     acSel = Math.min(acSel, Math.max(acItems.length - 1, 0));
     const waiting = !acLoaded && t.kind === '@';
-    if (!acItems.length && !waiting) { acMenu.hidden = true; return; }
+    // @ that matches nothing says so (a silent no-menu looked like files were missing); / just closes, so prose stays prose.
+    const none = !acItems.length && !waiting && t.kind === '@' && t.query;
+    if (!acItems.length && !waiting && !none) { acMenu.hidden = true; return; }
     const rows = acItems.map((it, i) => h('div', { class: `acitem${i === acSel ? ' on' : ''}`, role: 'option', 'aria-selected': i === acSel ? 'true' : 'false', title: it.hint || it.label,
       onmousedown: e => { e.preventDefault(); acPick(i); } }, h('b', {}, it.label), it.hint ? h('span', { class: 'muted small' }, it.hint) : ''));
     acMenu.replaceChildren(...rows,
       waiting ? h('div', { class: 'acnote muted small' }, 'Loading files…') : '',
+      none ? h('div', { class: 'acnote muted small' }, `No file or folder matches "${t.query}" (${acData.files.length} in the project).`) : '',
       t.kind === '/' && !JC.S?.settings?.personalSetup ? h('div', { class: 'acnote muted small' }, 'Your personal skills and plugins are off for tasks. Turn on "Your personal Claude setup in tasks" in ⚙ to list them.') : '');
     (acField.closest('dialog') || document.body).append(acMenu); // a modal dialog covers anything outside it
     acMenu.hidden = false;

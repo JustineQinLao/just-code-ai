@@ -63,6 +63,18 @@ const EXERCISE = `async () => {
   for (const d of ['settings', 'sourcesDialog', 'artifactsDialog', 'report', 'guide', 'designDialog', 'moreMenu', 'agentMap', 'newSprint']) await run(d, () => { document.querySelector('#dlg').open && document.querySelector('#dlg').close(); return JC[d](); });
   await run('history', () => { document.querySelector('#dlg').close(); JC.historyDialog(); window.postMessage({ type: 'history', items: [] }, '*'); });
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });
+  // @ files in the Plan box: the menu shows inside the dialog, on screen.
+  try {
+    const ta = document.querySelector('#dlg textarea');
+    ta.focus(); ta.value = 'Pls implement @sp'; ta.selectionStart = ta.selectionEnd = ta.value.length; ta.dispatchEvent(new Event('input'));
+    window.postMessage({ type: 'completions', files: ['docs/', 'docs/sprint-plan.md', 'src/a.ts'], commands: [] }, '*'); await wait(150);
+    const menu = document.querySelector('.acmenu, [role=listbox]') || [...document.querySelectorAll('div')].find(d => d.querySelector('.acitem'));
+    const r = menu?.getBoundingClientRect();
+    out.planAt = menu ? { hidden: menu.hidden, inDialog: !!menu.closest('dialog'), top: Math.round(r.top), left: Math.round(r.left), h: Math.round(r.height), vh: innerHeight, text: menu.innerText.slice(0, 60) } : 'no menu';
+    if (!menu || menu.hidden || r.height < 10 || r.top < 0 || r.bottom > innerHeight + 1) errs.push('plan @ menu not visible: ' + JSON.stringify(out.planAt));
+    ta.value = 'Pls implement @zzqx'; ta.selectionStart = ta.selectionEnd = ta.value.length; ta.dispatchEvent(new Event('input')); await wait(50);
+    if (!/No file or folder matches "zzqx"/.test(menu.innerText) || menu.hidden) errs.push('plan @ no-match note missing: ' + menu.innerText.slice(0, 80));
+  } catch (e) { errs.push('plan @ menu: ' + e.message); }
   // Setup checklist: auto-opens when setup is not ready, counts required rows, splits Required / Recommended, redraws on state, keeps scroll.
   try {
     const dlg = document.querySelector('#dlg'); dlg.open && dlg.close();
