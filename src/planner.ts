@@ -62,7 +62,7 @@ export const plannerMethods = {
     const set = this.d.settings();
     this.plannerSession = randomUUID();
     A.logPrompt(this.root, { kind: 'plan', text: instruction, sessionId: this.plannerSession, title: sprint ? `Edit ${sprint.name}` : 'Plan' });
-    const map = CodeMap.sessionOptions(this.root, set.codeMap !== false);   // the planner finds code through the map too
+    const map = CodeMap.forSession(this.root, this.root, set.codeMap !== false);   // the planner finds code through the map too
     const s = new Session({
       // Not Claude Code's plan mode: it tells Claude to write a plan file, which a read-only chat cannot, so each turn
       // spent tokens on a refused Write. Default mode with the write tools removed keeps it read-only.

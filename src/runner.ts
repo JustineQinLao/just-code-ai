@@ -376,9 +376,8 @@ export class Runner {
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
     const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
-    // The code map as last built (a stale one still helps); a newer commit refreshes it for the next session.
-    const map = CodeMap.sessionOptions(this.root, set.codeMap !== false);
-    if (set.codeMap !== false) void CodeMap.refresh(this.root);
+    // The code map of the folder this session works in (its task folder on its branch, or the project folder).
+    const map = CodeMap.forSession(cwd, this.root, set.codeMap !== false);
     const s = new Session({
       ...(task.chat ? { append: CHAT_APPEND, showFirst: true } : {}),
       // Working together: the code map finds code with fewer reads, terse replies spend fewer output tokens.
@@ -510,6 +509,8 @@ export class Runner {
         this.store.updateTask(id, { error: `Could not commit the task's changes: ${e.message}`, live: undefined, costUsd: cost });
         return this.d.notify('error', `"${t.title}": ${e.message}`, id);
       }
+      // This turn's work is committed: the task folder's code map catches up (in the background) for the next turn and the review.
+      if (committed && this.d.settings().codeMap !== false) void CodeMap.refresh(t.worktree);
     }
     if (t.sessionId) try { A.archiveTranscript(this.root, id, transcript(t.worktree ?? this.root, t.sessionId), t.sessionId); } catch { /* the archive is a convenience */ }
     const reply = turn.text.trim().slice(-4000) || undefined;

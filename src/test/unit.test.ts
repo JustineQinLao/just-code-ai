@@ -1619,6 +1619,18 @@ test('code map: built into .justcode only, refreshed when the commit changes, ha
   assert.deepEqual(CodeMap.sessionOptions(root, false).allowed, [], 'setting off: nothing');
   const out = execFileSync(CodeMap.bins().graphify, ['explain', 'checkout()', '--graph', CodeMap.graphFile(root)]).toString();
   assert.match(out, /total/);
+  // A sprint task's folder: its own map, started from the project's and brought up to its branch (which has code main lacks).
+  sh('branch', 'jc/sprint'); const wt = path.join(root, '.justcode', 'worktrees', 't1');
+  sh('worktree', 'add', '-q', '-b', 'jc/t1', wt, 'jc/sprint');
+  fs.writeFileSync(path.join(wt, 'src', 'refund.ts'), 'import { total } from "./pay";\nexport function refund(xs: number[]) { return -total(xs); }\n');
+  sh('-C', wt, 'add', '-A'); sh('-C', wt, 'commit', '-qm', 'refund');
+  const o2 = CodeMap.forSession(wt, root, true);
+  assert.ok(o2.rule.includes(CodeMap.graphFile(wt)), 'the session queries its own folder\'s map');
+  assert.equal(await CodeMap.refresh(wt), true);
+  const has = (dir: string) => /refund/.test(fs.readFileSync(CodeMap.graphFile(dir), 'utf8'));
+  assert.ok(has(wt), 'task map has the branch\'s code');
+  await CodeMap.refresh(root, true);
+  assert.ok(!has(root), 'project map holds no copy of task folders');
 });
 
 test('terse replies: the installed caveman rules, without their on/off section, with files kept in normal prose', { skip: !require('../claude').installedPlugin('caveman', undefined, 'skills') && 'caveman not installed' }, () => {
