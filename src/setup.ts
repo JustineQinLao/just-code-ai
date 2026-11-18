@@ -59,13 +59,21 @@ export async function checkSetup(bin: string | undefined, env: Record<string, st
           fix: { action: 'gitInit', label: 'Create it now' } });
   }
 
-  const rec = (id: Check['id'], label: string, ok: boolean, detail: string, fix: Check['fix']) =>
-    checks.push({ id, ok, optional: true, label: `Recommended: ${label}`, detail: ok ? 'Installed' : detail, ...(ok ? {} : { fix }) });
+  const rec = (id: Check['id'], label: string, ok: boolean, detail: string, fix: Check['fix'], okDetail = 'Installed') =>
+    checks.push({ id, ok, optional: true, label: `Recommended: ${label}`, detail: ok ? okDetail : detail, ...(ok ? {} : { fix }) });
   rec('frontendDesign', 'frontend-design plugin', !!lookup.plugin('frontend-design'), 'Gives page and artifact tasks a deliberate visual design.', { action: 'installPlugin:frontend-design', label: 'Install' });
   rec('superpowers', 'superpowers plugin', !!lookup.plugin('superpowers'), 'Planning, debugging and review skills.', { action: 'installPlugin:superpowers', label: 'Install' });
   rec('playwright', 'Playwright', !!lookup.plugin('playwright'), 'Lets Claude open pages in a browser to check UI work.', { action: 'installPlaywright', label: 'Install' });
   rec('caveman', 'caveman plugin', !!lookup.plugin('caveman'), 'Terse replies in tasks and chats: fewer output tokens, code and errors kept exact.', { action: 'installPlugin:caveman', label: 'Install' });
-  rec('codemap', 'Code map (Graphify)', !!CodeMap.bins().graphify, 'Free and local: maps the code once (functions, imports, calls), so tasks ask the map where things are instead of reading file after file. Fewer tokens and turns per task.', { action: 'installGraphify', label: 'Install' });
+  rec('codemap', 'Code map (Graphify)', !!CodeMap.bins().graphify, 'Free and local: maps the code once (functions, imports, calls), so tasks ask the map where things are instead of reading file after file. Fewer tokens and turns per task.', { action: 'installGraphify', label: 'Install' },
+    // Installed on this computer is not the same as this project having its map: say which.
+    (() => {
+      const st = root ? CodeMap.stats(root) : undefined;
+      if (!root || !st) return 'Installed · this project\'s map is being built (a few seconds; tasks use it once it is ready)';
+      let at = '';
+      try { at = new Date(fs.statSync(CodeMap.graphFile(root)).mtimeMs).toLocaleString(); } catch { /* unknown */ }
+      return `Installed · this project's map is ready: ${st.nodes} code items, ${st.edges} links${at ? `, built ${at}` : ''} (.justcode/graphify-out)`;
+    })());
   // Claude already read the code and found no UI to copy (a new project): offer the catalog or your own file instead.
   if (root) rec('designMd', 'DESIGN.md', lookup.designMd(root), lookup.designTried?.(root)
     ? 'Claude found no styles in the code yet (no UI to read), so it wrote nothing. Choose a design from the catalog or use your own file.'
