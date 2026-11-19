@@ -177,7 +177,7 @@ export const MEASURE_FN = `() => {
     const ctl = /^(INPUT|BUTTON|SELECT|TEXTAREA|IMG|svg)$/.test(e.tagName);
     if (!own && !ctl) continue;
     const b = boxOf(e), bs = b && getComputedStyle(b), br = b && b.getBoundingClientRect();
-    items.push({ text: (own || e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.tagName.toLowerCase()).slice(0, 60),
+    items.push({ text: (own || e.getAttribute('aria-label') || e.getAttribute('placeholder') || e.tagName.toLowerCase()).slice(0, 60), cls: typeof e.className === 'string' ? e.className.trim() : '',
       x: Math.round(r.left), w: Math.round(r.width), h: Math.round(r.height),
       font: s.fontFamily.split(',')[0].replace(/["']/g, '').trim(), size: px(s.fontSize), weight: s.fontWeight, color: s.color,
       align: s.textAlign, bg: s.backgroundColor, radius: s.borderRadius,
@@ -259,24 +259,22 @@ stylesheet URLs], "tokens": {"--name": "value"}, "screens": [{"id", "title", "gr
 - Compare EVERY screen before writing the tasks. If some cannot be captured (no route yet, a crash), list them in
   audit.md with the reason; never stop at one screen.
 
-## 3. The fix tasks
+## 3. Sample data, then only the shared fixes
 
-End your reply with the fix tasks as ONE JSON block; JustCode adds them to the board as a sprint and runs them:
+- Before the diff, write \`${root}/.justcode/design/sample.json\`: a JSON array of the design's sample texts, the names,
+  amounts, dates, order numbers and addresses the app fills from its own data (e.g. ["Maria Santos", "₱75", "#AR-10488"]).
+  design-diff then never reports them as missing or extra. Keep \`app-jobs.json\` where it is: JustCode reuses it to
+  measure the app again after each round of fixes, with no Claude.
+- Plan ONLY the shared differences now (shared.txt, plus fonts and shell): at most 3 tasks, each one CSS or shared
+  component change that fixes many screens. JustCode measures again once they merge and plans the per-screen tasks
+  itself from what is still different, so never plan per-screen tasks here.
+End your reply with them as ONE JSON block (no block when shared.txt is empty and fonts and shell match):
 \`\`\`tasks
-[{"title": "short imperative", "goal": "one sentence", "files": ["<design png>", "<design html>", "<app file>"], "done": ["<check>"], "sprint": "Design fix: <name>", "after": ["<title of a task it needs>"]}]
+[{"title": "short imperative", "goal": "one sentence", "files": ["<design .css of an example screen>", "<shared app style or component file>"], "done": ["<exact check>"]}]
 \`\`\`
-- First one task for the shared differences (load the fonts, tokens, shell, shared components) when there are any;
-  every other task lists it in "after".
-- Then one task per screen with differences, at most 2 screens per task, in the design's order.
-- "files": for each width, the screen's design .css, .html and .json first, then its PNG, by absolute path (from
-  screens.json), then the app files to change.
-- "goal" names the state and its URL (e.g. "login opened from a branch QR: /login?branch=<slug>").
-- "done": each measured difference as an exact check (e.g. "login card is 380px wide at 1440, as .wrap in c-login-1440.css";
-  "subtitle reads 'Then apply to <branch>…' at /login?branch=<slug>"), "design-diff of <id> at each width
-  against the design .json reports nothing but sample data, saved as <id>-<width>.diff.txt in the Screenshots folder",
-  and the tests for the changed code.
-- Nothing differs: no block; say the app matches the design.
-Keep it cheap: shoot each screen once per width, read each image once, and never re-shoot a screen you already compared.`;
+- "done": each shared rule as an exact check (e.g. ".muted font-size is 14px, as in the design .css; was 13px on 41
+  screens"), "design-diff of 2 example screens shows none of these rules", and the tests for the changed code.
+Keep it cheap: read the diff text, open an image only for what numbers cannot show, and never re-capture a screen you already compared.`;
 
 export const FIX_DESIGN_SKILL_PATH = path.join('skills', 'fix-design', 'SKILL.md');
 export const fixDesignSkill = () => `---

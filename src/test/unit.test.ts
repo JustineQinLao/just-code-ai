@@ -1815,6 +1815,34 @@ test('design capture: one jobs file for every screen, run_code results read back
   fs.writeFileSync(path.join(a, 'x-390.json'), JSON.stringify({ items: [it('Hi', 15)] }));
   fs.writeFileSync(path.join(d, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
   fs.writeFileSync(path.join(a, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
-  assert.deepEqual(diffAll(d, a, a), [{ name: 'x-390', n: 1 }, { name: 'y-390', n: 0 }]);
+  assert.deepEqual(diffAll(d, a, a).rows, [{ name: 'x-390', n: 1 }, { name: 'y-390', n: 0 }]);
   assert.match(fs.readFileSync(path.join(a, 'x-390.diff.txt'), 'utf8'), /"Hi" size: design 16, app 15/);
+});
+
+import { planRound, screenOf } from '../designcapture';
+test('fix to match rounds: sample data is not a difference, a rule on many screens is one shared task, then screens in groups of 5', () => {
+  const root = tmp(), copy = path.join(root, 'copy'), shots = path.join(copy, 'screens'), audit = path.join(root, 'audit');
+  fs.mkdirSync(shots, { recursive: true }); fs.mkdirSync(audit);
+  const it = (text: string, size: number, cls = 'muted') => ({ text, cls, x: 0, w: 10, h: 10, font: 'F', size, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
+  const ids = ['c-a', 'c-b', 'c-c', 'c-d', 'c-e', 'c-f', 's-a'];
+  for (const id of ids) {
+    fs.writeFileSync(path.join(shots, `${id}-390.json`), JSON.stringify({ items: [it('Title', 14), it('Maria Santos', 14), it(`only ${id}`, 16, 'x')] }));
+    fs.writeFileSync(path.join(shots, `${id}-390.css`), '.muted{font-size:14px}');
+    fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it('Title', 13), it('Juan Cruz', 13), it(`only ${id}`, 15, 'x')] }));
+  }
+  const r1 = diffAll(shots, audit, audit, ['Maria Santos', 'Juan Cruz']);
+  assert.equal(r1.shared[0].rule, '.muted size: design 14, app 13');
+  assert.equal(r1.shared[0].screens.length, 7);
+  assert.doesNotMatch(fs.readFileSync(path.join(audit, 'c-a-390.diff.txt'), 'utf8'), /Maria|Juan/, 'sample data is not missing or extra');
+  const p1 = planRound(copy, audit, r1.rows, r1.shared);
+  assert.equal(p1.length, 1, 'shared rules first, as one task');
+  assert.match(p1[0].done.join('\n'), /\.muted size: design 14, app 13 is fixed \(was on 7 screens\)/);
+  // After the shared fix merged and the app was measured again: only per-screen differences are left.
+  for (const id of ids) fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it('Title', 14), it(`only ${id}`, id === 's-a' ? 16 : 15, 'x')] }));
+  const r2 = diffAll(shots, audit, audit, ['Maria Santos']);
+  const p2 = planRound(copy, audit, r2.rows, r2.shared.filter(x => !x.rule.startsWith('.x')), [{ id: 'c-a', title: 'Home', url: '/' }]);
+  assert.deepEqual(p2.map(x => x.title), ['Design fix: Home, c-b, c-c, c-d, c-e', 'Design fix: c-f'], 'c- screens in groups of 5; s-a matches');
+  assert.ok(p2[0].files.includes(path.join(shots, 'c-a-390.css')));
+  assert.match(p2[0].goal, /c-a \(\/\)/);
+  assert.equal(screenOf('c-root-guest-1440'), 'c-root-guest');
 });

@@ -174,8 +174,10 @@ export const reviewMethods = {
         this.d.notify('info', `"${t.title}" needs no AI review (${tri.why}). Ready to merge.`, id, true);
         return;
       }
-      const model = tri.level === 'light' && o.lightModel ? o.lightModel : o.model;
-      const effort = tri.level === 'light' ? 'low' : o.effort;
+      // A design fix is checked by measuring (the builder's diff files, then the next round's re-measure): the light reviewer is enough.
+      const light = tri.level === 'light' || !!t.designFix;
+      const model = light ? (o.lightModel || (t.designFix ? 'sonnet' : o.model)) : o.model;
+      const effort = light ? 'low' : o.effort;
       this.store.updateTask(id, { review: { ...keep, state: 'running', attempts, head, level: tri.level === 'none' ? 'full' : tri.level, why: tri.why } });
       const reviewer = discoverAgents(this.root).find(a => a.scope === 'project' && /review/i.test(a.name))?.name;
       fs.rmSync(shots, { recursive: true, force: true });

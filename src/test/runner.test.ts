@@ -143,7 +143,8 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   r.cancelQueue();
   assert.equal(r.addDesignFixes(audit.id, text), 2);
   const [shared, login] = ['Load the design fonts and shell', 'Match the login screen'].map(x => store.data.tasks.find(t => t.title === x)!);
-  assert.ok(shared.sprintId && shared.sprintId === login.sprintId);
+  assert.ok(!shared.sprintId && shared.where === 'branch' && shared.designFix === 1 && login.designFix === 1, 'round 1 merges into the checked-out branch, so the running app shows it');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.justcode', 'design', 'fix.json'), 'utf8')).round, 1);
   assert.deepEqual(login.dependsOn, [shared.id]);
   assert.ok(A.isUiTask(login), 'a task naming a design screen is a UI task');
   await until('old fix removed', () => !store.task(old.id));

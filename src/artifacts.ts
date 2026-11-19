@@ -85,8 +85,8 @@ export const projectSection = (root: string) => fs.existsSync(projectFile(root))
 // UI-ish work (or an artifact page) follows the project's DESIGN.md when one exists.
 const UI_WORDS = /\b(ui|ux|frontend|front-end|css|html|page|screen|layout|landing|dashboard|button|modal|dialog|form|component|style|styling|theme|navbar|sidebar|webview|responsive|visual)s?\b/i;
 // A design screen file a task must match: a saved design's screens/ (🎨 Fix to match) or a canvas's project/ files.
-export const DESIGN_FILE = /\.justcode[\\/]sources[\\/][^\s,]+[\\/](?:screens[\\/][^\s,]+\.(?:png|html)|project[\\/][^\s,]+\.dc\.html)/;
-export const isUiTask = (t: Task) => t.output === 'artifact' || t.init === 'fixdesign' || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`) || DESIGN_FILE.test(t.description ?? '');
+export const DESIGN_FILE = /\.justcode[\\/]sources[\\/][^\s,]+[\\/](?:screens[\\/][^\s,]+\.(?:png|html|css|json)|project[\\/][^\s,]+\.dc\.html)/;
+export const isUiTask = (t: Task) => t.output === 'artifact' || t.init === 'fixdesign' || !!t.designFix || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`) || DESIGN_FILE.test(t.description ?? '');
 const designSection = (root: string, t: Task) => isUiTask(t) && fs.existsSync(designMdFile(root))
   ? `## Design system\nFollow ${designMdFile(root)} as the style spec (colors, type, spacing, components) for any UI you build or change.` : '';
 
@@ -130,10 +130,12 @@ function where(root: string, s: Source, cli?: string) {
       return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `screens/screens.json lists every screen per width: its .css (the design's own CSS rules for that screen: copy these values, never estimate them from the image), ` +
         `its .html (the markup: same structure, order and copy), its .json (measured fonts, sizes, colors and boxes), its PNG (only for a look), and the app URL that gives the same state. ` +
-        `Build the screens your task covers from that code; only the data comes from the app. Then check them in ONE command: write a jobs file in the Screenshots folder ` +
+        `Build the screens your task covers from that code; only the data comes from the app. ` +
+        `The app running at the project's link serves the project folder, not your task folder: to measure your change, start your folder's frontend detached on a free port (pointing at the running backend), and stop it after. ` +
+        `Then check them in ONE command: write a jobs file in the Screenshots folder ` +
         `({"groups": [{"setup": "<async (page) => {...} signing in as the screen's role>", "shots": [{"url": "<app url of the state>", "width": 390, "png": "<Screenshots folder>/<name>.png", "json": "<Screenshots folder>/<name>.json"}]}]}, ` +
         `one shot per screen and width, <name> = the design file's name, e.g. c-login-390), run node ${arg(cli ?? '<cli.js>')} design-capture <jobs file> (Bash, timeout 600000), ` +
-        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${dir}/screens <Screenshots folder> <Screenshots folder>. Fix what the <name>.diff.txt files report until only sample data differs.`;
+        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${dir}/screens <Screenshots folder> <Screenshots folder> --sample ${arg(jc(root, 'design', 'sample.json'))}. Fix what the <name>.diff.txt files report until only sample data differs.`;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +

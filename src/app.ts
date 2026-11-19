@@ -449,6 +449,9 @@ export async function check(root: string, why?: string) {
 // is missing); 'restart' restarts what runs, nothing built or installed.
 export type Mode = 'build' | 'start' | 'restart';
 
+// Resolves when no build or start of this project's app is running (e.g. the rebuild after a merge).
+export const whenIdle = (root: string) => (busy.get(root) ?? Promise.resolve()).catch(() => undefined);
+
 // One run per project at a time; a second call waits for the first.
 export function start(root: string, why = 'you', mode: Mode = 'build'): Promise<void> {
   const prev = busy.get(root);

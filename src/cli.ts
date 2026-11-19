@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { adb } from './claude';
 import { parseMeasure, diffMeasures } from './designdiff';
-import { capture, parseJobs, diffAll } from './designcapture';
+import { capture, parseJobs, diffAll, loadSample } from './designcapture';
 import { execFileSync } from 'child_process';
 
 // JustCode CLI:
@@ -12,7 +12,8 @@ import { execFileSync } from 'child_process';
 //   node cli.js design-diff <design.json> <app.json> [<out.txt>]   differences between two design measures (see designdiff.ts)
 //   node cli.js design-css <measure.json>   writes the measure's CSS rules to <measure>.css, beside it
 //   node cli.js design-capture <jobs.json>  every screenshot + measure (+ .css) of a design or app in one run (designcapture.ts)
-//   node cli.js design-diff --all <designDir> <appDir> <outDir>   every pair compared, a .diff.txt each, and a summary
+//   node cli.js design-diff --all <designDir> <appDir> <outDir> [--sample file]   every pair compared, a .diff.txt each,
+//                                     a summary and shared.txt (sample.json beside outDir is used by default)
 
 function screenshot(out: string | undefined, serial?: string) {
   if (!out) { console.error('Usage: cli.js screenshot <out.png> [--serial id]'); return 1; }
@@ -51,8 +52,10 @@ function main(argv: string[]): number | undefined {
   try {
     if (cmd === 'design-diff' && rest[0] === '--all') {
       if (rest.length < 4) { console.error('Usage: cli.js design-diff --all <designDir> <appDir> <outDir>'); return 1; }
-      const rows = diffAll(rest[1], rest[2], rest[3]);
+      const si = rest.indexOf('--sample'), sample = loadSample(si > 0 ? rest[si + 1] : path.join(rest[3], '..', 'sample.json'));
+      const { rows, shared } = diffAll(rest[1], rest[2], rest[3], sample);
       console.log(rows.length ? rows.map(r => `${r.name}: ${r.n ? `${r.n} difference${r.n === 1 ? '' : 's'}` : 'matches'}`).join('\n') : 'No screen measured on both sides (same <id>-<width>.json names).');
+      if (shared.length) console.log(`\nShared (same rule on ${shared[0].screens.length >= 3 ? '3+' : 'several'} screens, see shared.txt):\n${shared.slice(0, 15).map(x => `${x.rule}  (${x.screens.length} screens)`).join('\n')}`);
       return 0;
     }
     if (cmd === 'design-diff') return designDiff(rest[0], rest[1], rest[2]);

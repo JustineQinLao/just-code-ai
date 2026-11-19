@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { SHOT_CODE, MEASURE_FN } from './skill';
-import { parseMeasure, diffMeasures } from './designdiff';
+import { parseMeasure, diffItems, Diff } from './designdiff';
 
 // `cli.js design-capture <jobs.json>`: every screenshot and measure of a design or an app in ONE command, so an audit
 // of many screens is not hundreds of tool calls (which sessions give up on, or auto mode blocks as a script). It drives
@@ -124,20 +124,64 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
 }
 
 // `design-diff --all <designDir> <appDir> <outDir>`: every <name>.json in both folders compared, one <name>.diff.txt each
-// in outDir, and a one-line-per-screen summary (screens with no differences last).
-export function diffAll(designDir: string, appDir: string, outDir: string) {
+// in outDir, a one-line-per-screen summary (most differences first), and the shared differences: the same rule (class,
+// property and values) differing on SHARED_MIN or more screens, which one CSS change fixes everywhere (shared.txt).
+export const SHARED_MIN = 3;
+export interface DiffRow { name: string; n: number }
+export interface Shared { rule: string; screens: string[] }
+export function diffAll(designDir: string, appDir: string, outDir: string, sample: string[] = []) {
   fs.mkdirSync(outDir, { recursive: true });
-  const rows: { name: string; n: number }[] = [];
-  for (const f of fs.readdirSync(designDir).filter(f => f.endsWith('.json') && f !== 'screens.json' && f !== 'jobs.json').sort()) {
+  const rows: DiffRow[] = [], rules = new Map<string, Set<string>>();
+  for (const f of fs.readdirSync(designDir).filter(f => f.endsWith('.json') && !/^(screens|jobs|app-jobs|sample)\.json$/.test(f)).sort()) {
     const app = path.join(appDir, f);
     if (!fs.existsSync(app)) continue;
-    let lines: string[];
-    try { lines = diffMeasures(parseMeasure(fs.readFileSync(path.join(designDir, f), 'utf8')), parseMeasure(fs.readFileSync(app, 'utf8'))); }
-    catch (e: any) { lines = [`could not compare: ${e.message}`]; }
-    const name = f.replace(/\.json$/, '');
-    fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (lines.length ? lines.join('\n') : 'No differences.') + '\n');
-    rows.push({ name, n: lines.length });
+    let d: Diff[];
+    try { d = diffItems(parseMeasure(fs.readFileSync(path.join(designDir, f), 'utf8')), parseMeasure(fs.readFileSync(app, 'utf8')), sample); }
+    catch (e: any) { d = [{ line: `could not compare: ${e.message}` }]; }
+    const name = f.replace(/\.json$/, ''), screen = screenOf(name);
+    for (const x of d) if (x.rule) { if (!rules.has(x.rule)) rules.set(x.rule, new Set()); rules.get(x.rule)!.add(screen); }
+    fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (d.length ? d.map(x => x.line).join('\n') : 'No differences.') + '\n');
+    rows.push({ name, n: d.length });
   }
   rows.sort((a, b) => b.n - a.n);
-  return rows;
+  const shared: Shared[] = [...rules].filter(([, v]) => v.size >= SHARED_MIN).map(([rule, v]) => ({ rule, screens: [...v].sort() })).sort((a, b) => b.screens.length - a.screens.length);
+  fs.writeFileSync(path.join(outDir, 'shared.txt'), shared.length ? shared.map(x => `${x.rule}  (${x.screens.length} screens: ${x.screens.slice(0, 8).join(', ')}${x.screens.length > 8 ? ', …' : ''})`).join('\n') + '\n' : 'No shared differences.\n');
+  return { rows, shared };
+}
+
+// "c-login-390" → "c-login"; "c-root-guest-1440" → "c-root-guest".
+export const screenOf = (name: string) => name.replace(/-\d{3,4}$/, '');
+
+// The sample texts the audit listed (.justcode/design/sample.json: an array of strings), or none.
+export function loadSample(file: string): string[] {
+  try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
+}
+
+// The next round of fix tasks, planned from the measures alone (no Claude): when a rule differs on several screens,
+// one task for those rules first (one CSS change each, and the next round re-measures); otherwise screens that still
+// differ, grouped by area (the id's first part: role or section), at most PER_TASK screens a task.
+export const PER_TASK = 5;
+export interface Planned { title: string; goal: string; files: string[]; done: string[] }
+export function planRound(copy: string, auditDir: string, rows: DiffRow[], shared: Shared[], screens: { id: string; title?: string; url?: string }[] = []): Planned[] {
+  const shotsDir = path.join(copy, 'screens');
+  const refs = (screen: string) => fs.existsSync(shotsDir) ? fs.readdirSync(shotsDir).filter(f => screenOf(f.replace(/\.(css|html|json)$/, '')) === screen && /\.(css|html|json)$/.test(f)).sort().map(f => path.join(shotsDir, f)) : [];
+  if (shared.length) {
+    const top = shared.slice(0, 15), examples = [...new Set(top.flatMap(x => x.screens))].slice(0, 3);
+    return [{ title: 'Design fix: shared styles', goal: `Fix the ${top.length} style rule${top.length === 1 ? '' : 's'} that differ from the design on several screens at once, in the shared styles (one change each, not per page).`,
+      files: [...examples.flatMap(refs).filter(f => f.endsWith('.css')), path.join(auditDir, 'shared.txt')],
+      done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens)`), 'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] }];
+  }
+  const left = [...new Set(rows.filter(r => r.n > 0).map(r => screenOf(r.name)))];
+  const byArea = new Map<string, string[]>();
+  for (const id of left) { const area = id.split('-')[0]; if (!byArea.has(area)) byArea.set(area, []); byArea.get(area)!.push(id); }
+  const out: Planned[] = [];
+  for (const ids of byArea.values()) for (let i = 0; i < ids.length; i += PER_TASK) {
+    const part = ids.slice(i, i + PER_TASK), info = (id: string) => screens.find(s => s.id === id || id.startsWith(`${s.id}-`));
+    const names = part.map(id => info(id)?.title ?? id);
+    out.push({ title: `Design fix: ${names.join(', ')}`.slice(0, 90),
+      goal: `Make ${part.map(id => `${id}${info(id)?.url ? ` (${info(id)!.url})` : ''}`).join(', ')} match the design at every width.`,
+      files: part.flatMap(refs),
+      done: [...part.map(id => `every line in ${path.join(auditDir, `${id}-<width>.diff.txt`)} is fixed, except sample data`), 'the design-diff of these screens shows only sample data', 'tests for the changed code pass'] });
+  }
+  return out;
 }

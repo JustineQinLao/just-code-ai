@@ -131,6 +131,7 @@ export const mergeMethods = {
       this.d.notify('info', `${auto ? 'Review passed, merged' : 'Merged'} "${t.title}" into ${t.base}.`, undefined, auto);
       // The task is merged: a sprint merge that cannot go yet is the sprint's problem (shown on the board), not this task's.
       if (t.sprintId) await this.mergeSprint(t.sprintId).catch(e => this.d.notify('error', e.message));
+      if (t.designFix) void this.designRemeasure().catch((e: Error) => this.d.notify('error', `Fix to match: ${e.message}`));   // the round's last merge measures again
       this.pump();  // its slot is free: the next queued task starts on top of this merge
     });
   },
