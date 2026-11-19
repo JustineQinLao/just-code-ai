@@ -344,7 +344,7 @@ export const PLAYWRIGHT_TOOLS = 'mcp__playwright';
 // are written outside the session's folder (a task's shots folder).
 export const playwrightMcp = (shots: string) => ({ playwright: { type: 'stdio' as const, command: 'npx', args: ['-y', '@playwright/mcp@0.0.85', '--headless', '--isolated', '--allow-unrestricted-file-access', '--output-dir', shots] } });
 // JustCode's own design commands (cli.js), allowed in UI sessions and reviews: they only read and write measure files.
-export const designCommands = (cli: string) => [`Bash(node ${q(cli)} design-diff:*)`, `Bash(node ${q(cli)} design-css:*)`];
+export const designCommands = (cli: string) => [`Bash(node ${q(cli)} design-diff:*)`, `Bash(node ${q(cli)} design-css:*)`, `Bash(node ${q(cli)} design-capture:*)`];
 export const SHOT_RULE = (shots: string) => `Take screenshots only with the Playwright MCP tool browser_take_screenshot (headless); always pass filename as the absolute path "${shots}/<name>.png" (a bare name lands in the project folder). If the browser is missing, call browser_install once and retry. Never use npx playwright, a screenshot script or a visible browser.`;
 
 // Tool options for a UI session or review: the MCP server and its allow rule are added together, or not at all.
@@ -472,7 +472,7 @@ export interface ReviewRun { verdict: Verdict; sessionId?: string; usage?: Usage
 
 // resume: continue the same reviewer session (its context is cached) instead of reviewing from scratch.
 export async function runReview(prompt: string, o: HeadlessOpts & { shots: string; extra?: string[]; web?: boolean; adbBin?: string; cli?: string; resume?: string; map?: { allowed: string[]; rule?: string } }): Promise<ReviewRun> {
-  const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`, `node ${q(o.cli)} design-diff`] : [])].map(c => c.includes('*') ? `Bash(${c})` : `Bash(${c}:*)`)]);
+  const w = webOptions(!!o.web, o.shots, ['Read', 'Grep', 'Glob', ...[...REVIEW_COMMANDS, ...(o.extra ?? []), ...(o.adbBin ? [o.adbBin] : []), ...(o.cli ? [`node ${q(o.cli)} screenshot`, `node ${q(o.cli)} design-diff`, `node ${q(o.cli)} design-capture`] : [])].map(c => c.includes('*') ? `Bash(${c})` : `Bash(${c}:*)`)]);
   // The code map (when there is one): the reviewer finds callers and dependents without reading file after file.
   const allow = [...w.allowed, ...(o.map?.allowed ?? [])];
   // Test runners run once instead of watching (CI), and no single command can hold the review for long.

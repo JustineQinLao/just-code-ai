@@ -205,35 +205,33 @@ detached and add dev sample data through the app's own commands.
 
 If \`${copy}/screens/screens.json\` exists and has \`"capture": ${SHOT_VERSION}\`, use it and go to step 2. Else (re)make it.
 
+Every screenshot and measure runs through ONE command, \`node ${arg(cli)} design-capture <jobs.json>\` (Bash, with
+timeout 600000), never one tool call per screen. It drives a headless Playwright browser, and for each shot saves the PNG
+(exact width, full height, inner scroll areas and scaling undone), the .json measure (every visible text and control
+with its computed font, size, weight, color and box) and the .css (the CSS rules the page uses at that width). jobs.json:
+\`{"groups": [{"setup": "<optional: async (page) => {...} run first, e.g. sign in>", "extract": {"code": "<optional: async (page) => [{name, html}]>", "dir": "<abs folder>"}, "shots": [{"url", "width", "png", "json"}]}]}\`
+Each group starts signed out. Write jobs.json with the Write tool (under \`${root}/.justcode/design/\`).
+
 **a. One standalone page per screen.** Never screenshot the gallery itself: it scales its device frame to fit the window
 and scrolls inside it, so its images come out at random sizes and cut off below the fold.
 - A Design canvas (\`project/canvas.json\`): each \`project/<name>.dc.html\` is already one screen.
 - One page holding every screen (a gallery: a screen list, a Desktop/Mobile switch, state tabs): open
-  \`file://${copy}/index.html\` with the Playwright MCP and find its screen list (the side list or the script's screen
-  table) with browser_evaluate. For each screen, each state and each device the gallery has (mobile; desktop when it
-  has a desktop view): switch the gallery to it, take the outerHTML of the screen's own root (inside the device or
-  browser frame, without the frame, notes or assumption tags), and write \`${copy}/screens/<id>[-<state>]-<width>.html\`:
-  \`<!doctype html><html><head>\` + every \`<style>\` and font \`<link>\` of the gallery + \`</head><body style="margin:0">\`
-  + that markup + \`</body></html>\`. Width 390 for mobile, 1440 for desktop: the desktop view is its own markup, never
-  the mobile one at a wider window. Keep the sample values in the markup (filled fields, focus states).
+  \`file://${copy}/index.html\` with the Playwright MCP and learn its screen list and how it switches screen, state and
+  device (browser_evaluate, a few calls). Then write ONE extract function, \`async (page) => [...]\`, that opens the
+  gallery and, for each screen, each state and each device it has (mobile 390; desktop 1440 when it has a desktop view,
+  whose markup is its own, never the mobile one wider), switches to it and returns
+  \`{ name: "<id>[-<state>]-<width>", html: "<!doctype html><html><head>" + every <style> and font <link> of the gallery + "</head><body style=\\"margin:0\\">" + the screen root's outerHTML (inside the device or browser frame, without the frame, notes or assumption tags) + "</body></html>" }\`.
+  Keep the sample values (filled fields, focus states). Try it on one screen with browser_run_code_unsafe, then put it
+  in jobs.json as the extract with dir \`${copy}/screens\`.
 - Note each state's context: how the user got there (e.g. login opened from a branch QR) and the app URL that gives the
   same state (e.g. \`/login?branch=<slug>\`), so the app is compared in the same state.
 
-**b. Shoot and measure each file with exactly this code**, the same for the design and later the app, so both sides
-have the same width, scale and full height, and are compared by numbers from their code:
-1. browser_run_code_unsafe with URL = \`file://<html>\`, WIDTH = its width, PNG = \`${copy}/screens/<id>[-<state>]-<width>.png\`:
-\`\`\`js
-${SHOT_CODE}
-\`\`\`
-2. browser_evaluate on that page with filename \`${copy}/screens/<id>[-<state>]-<width>.json\` and this function:
-\`\`\`js
-${MEASURE_FN}
-\`\`\`
-3. \`node ${arg(cli)} design-css ${copy}/screens/<id>[-<state>]-<width>.json\` writes the screen's CSS rules beside it (.css).
+**b. Shoot and measure the design:** in the same jobs.json, one shot per page: url \`file://${copy}/screens/<name>.html\`,
+its width, png \`${copy}/screens/<name>.png\`, json \`${copy}/screens/<name>.json\`. Run design-capture once.
 The .css, .html and .json are the design's code and numbers: the reference. The PNG is only for a look.
 
-**c. Check before going on:** every PNG is exactly its width wide (390 or 1440) and at least 600 px high, and shows the
-whole screen down to its last section and its tab bar. Redo any that fail.
+**c. Check before going on:** design-capture reports no failures; every PNG is exactly its width wide and at least
+600 px high. Fix the extract or the jobs and run again for the ones that failed.
 
 Write \`${copy}/screens/screens.json\`: \`{"capture": ${SHOT_VERSION}, "source": "<link>", "fonts": [font families and the font
 stylesheet URLs], "tokens": {"--name": "value"}, "screens": [{"id", "title", "group", "role", "state", "context", "url",
@@ -244,18 +242,22 @@ stylesheet URLs], "tokens": {"--name": "value"}, "screens": [{"id", "title", "gr
 
 - The app: use the frontend link in \`${root}/.justcode/app.json\` when it answers; else start the app detached (e.g.
   \`docker compose up -d\`, or a background process logging to \`${root}/.justcode/design/app.log\`) and wait until it answers.
-- Sign in as each role with the seed or demo accounts (\`.justcode/project.md\`, the README, the seed code). When the design
-  shows data the app lacks (an order, a customer), add dev sample data with the app's own commands.
-- Each screen and state, at each width the design has, signed in as its role, at its "url":
-  the same steps 1-2 on \`<app>/<url>\` with PNG \`${root}/.justcode/design/audit/<id>[-<state>]-<width>.png\` and filename
-  \`audit/<id>[-<state>]-<width>.json\`, then \`node ${arg(cli)} design-diff <design .json> <app .json> ${root}/.justcode/design/audit/<id>[-<state>]-<width>.diff.txt\`. These measured
-  lines are the differences (exact fonts, sizes, colors, widths, padding, missing or extra text); the images only add
-  what numbers cannot show (an icon, a layout order). Sample names and amounts in the design are not differences.
+- Sign-in per role: the seed or demo accounts (\`.justcode/project.md\`, the README, the seed code). When the design shows
+  data the app lacks (an order, a customer), add dev sample data with the app's own commands.
+- One more jobs file, \`${root}/.justcode/design/app-jobs.json\`: one group per role, its "setup" signing in as that role
+  (fill the login form or call the login API with page.request), its shots every screen of that role at the design's
+  widths: url \`<app>/<url>\`, png \`${root}/.justcode/design/audit/<name>.png\`, json \`${root}/.justcode/design/audit/<name>.json\`
+  (the same <name> as the design). Run design-capture once.
+- Then \`node ${arg(cli)} design-diff --all ${copy}/screens ${root}/.justcode/design/audit ${root}/.justcode/design/audit\`:
+  one \`<name>.diff.txt\` per screen and a summary. These measured lines are the differences (exact fonts, sizes, colors,
+  widths, padding, missing or extra text). Read the diff files, and the image pairs only for what numbers cannot show
+  (an icon, a layout order). Sample names and amounts in the design are not differences.
 - Shared first: the design's fonts load in the app (a font named in the CSS but never loaded is a difference), the
   tokens match, and the shell (header, nav, tab bar, role and branch chips) matches for each role.
-- With many screens, give groups of screens to subagents when you can, each returning only its differences.
 - Write \`${root}/.justcode/design/audit.md\`: shared differences first, then one section per screen with differences
-  (id, title, route, the image paths, each difference, most visible first), then one line per screen that matches.
+  (id, title, url, the diff file, each difference, most visible first), then one line per screen that matches.
+- Compare EVERY screen before writing the tasks. If some cannot be captured (no route yet, a crash), list them in
+  audit.md with the reason; never stop at one screen.
 
 ## 3. The fix tasks
 

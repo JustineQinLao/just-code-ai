@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { adb } from './claude';
 import { parseMeasure, diffMeasures } from './designdiff';
+import { capture, parseJobs, diffAll } from './designcapture';
 import { execFileSync } from 'child_process';
 
 // JustCode CLI:
@@ -10,6 +11,8 @@ import { execFileSync } from 'child_process';
 //                                     shell redirect, which unattended Claude sessions are not allowed to use
 //   node cli.js design-diff <design.json> <app.json> [<out.txt>]   differences between two design measures (see designdiff.ts)
 //   node cli.js design-css <measure.json>   writes the measure's CSS rules to <measure>.css, beside it
+//   node cli.js design-capture <jobs.json>  every screenshot + measure (+ .css) of a design or app in one run (designcapture.ts)
+//   node cli.js design-diff --all <designDir> <appDir> <outDir>   every pair compared, a .diff.txt each, and a summary
 
 function screenshot(out: string | undefined, serial?: string) {
   if (!out) { console.error('Usage: cli.js screenshot <out.png> [--serial id]'); return 1; }
@@ -43,12 +46,27 @@ function designCss(file?: string) {
   return 0;
 }
 
-function main(argv: string[]) {
+function main(argv: string[]): number | undefined {
   const [cmd, ...rest] = argv;
   try {
+    if (cmd === 'design-diff' && rest[0] === '--all') {
+      if (rest.length < 4) { console.error('Usage: cli.js design-diff --all <designDir> <appDir> <outDir>'); return 1; }
+      const rows = diffAll(rest[1], rest[2], rest[3]);
+      console.log(rows.length ? rows.map(r => `${r.name}: ${r.n ? `${r.n} difference${r.n === 1 ? '' : 's'}` : 'matches'}`).join('\n') : 'No screen measured on both sides (same <id>-<width>.json names).');
+      return 0;
+    }
     if (cmd === 'design-diff') return designDiff(rest[0], rest[1], rest[2]);
     if (cmd === 'design-css') return designCss(rest[0]);
   } catch (e: any) { console.error(e.message); return 2; }
+  if (cmd === 'design-capture') {
+    if (!rest[0]) { console.error('Usage: cli.js design-capture <jobs.json>'); return 1; }
+    let jobs; try { jobs = parseJobs(fs.readFileSync(rest[0], 'utf8')); } catch (e: any) { console.error(e.message); return 1; }
+    capture(jobs).then(r => {
+      console.log(`Done: ${r.done} captured, ${r.failed.length} failed.${r.failed.length ? '\n' + r.failed.join('\n') : ''}`);
+      process.exitCode = r.failed.length ? 3 : 0;
+    }, e => { console.error(e.message); process.exitCode = 2; });
+    return undefined;
+  }
   if (cmd === 'screenshot') {
     const si = rest.indexOf('--serial');
     return screenshot(rest.find((a, i) => !a.startsWith('--') && (si < 0 || i !== si + 1)), si >= 0 ? rest[si + 1] : undefined);
@@ -57,4 +75,5 @@ function main(argv: string[]) {
   return cmd ? 1 : 0;
 }
 
-process.exitCode = main(process.argv.slice(2));
+const code = main(process.argv.slice(2));
+if (code !== undefined) process.exitCode = code;

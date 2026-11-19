@@ -1799,3 +1799,22 @@ test('design diff: measured from code, matched by text, within a few pixels', ()
   assert.doesNotThrow(() => new Function(`return (${SHOT_CODE.replace("'URL'", "'u'").replace('WIDTH', '390').replace("'PNG'", "'p'")})`));
   assert.doesNotThrow(() => new Function(`return (${MEASURE_FN})`));
 });
+
+import { parseJobs, resultOf, shotCode, diffAll } from '../designcapture';
+test('design capture: one jobs file for every screen, run_code results read back, every pair diffed', () => {
+  const jobs = parseJobs(JSON.stringify({ groups: [{ setup: 'async (page) => 1', shots: [{ url: 'file:///a.html', width: 390, png: '/s/a-390.png', json: '/s/a-390.json' }] }] }));
+  assert.equal(jobs.groups[0].shots.length, 1);
+  assert.equal(parseJobs(JSON.stringify([{ url: 'u', width: 1440, png: 'p', json: 'j' }])).groups.length, 1, 'a bare list of shots');
+  assert.throws(() => parseJobs('{"groups":[{"shots":[{"url":"u"}]}]}'), /url, width/);
+  assert.match(shotCode(jobs.groups[0].shots[0]), /const url = "file:\/\/\/a\.html", width = 390, png = "\/s\/a-390\.png"/);
+  assert.deepEqual(resultOf('### Result\n[{"name":"a","html":"<p>"}]\n### Ran Playwright code\n```js'), [{ name: 'a', html: '<p>' }]);
+  const root = tmp(), d = path.join(root, 'd'), a = path.join(root, 'a');
+  fs.mkdirSync(d); fs.mkdirSync(a);
+  const it = (text: string, size: number) => ({ text, x: 0, w: 10, h: 10, font: 'F', size, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
+  fs.writeFileSync(path.join(d, 'x-390.json'), JSON.stringify({ items: [it('Hi', 16)] }));
+  fs.writeFileSync(path.join(a, 'x-390.json'), JSON.stringify({ items: [it('Hi', 15)] }));
+  fs.writeFileSync(path.join(d, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
+  fs.writeFileSync(path.join(a, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
+  assert.deepEqual(diffAll(d, a, a), [{ name: 'x-390', n: 1 }, { name: 'y-390', n: 0 }]);
+  assert.match(fs.readFileSync(path.join(a, 'x-390.diff.txt'), 'utf8'), /"Hi" size: design 16, app 15/);
+});

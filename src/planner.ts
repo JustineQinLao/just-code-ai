@@ -208,6 +208,14 @@ export const plannerMethods = {
       this.d.notify('error', `Fix to match: the design screenshots are not usable, so no fix tasks were added (${bad.length} problem${bad.length === 1 ? '' : 's'}: ${bad.slice(0, 3).join('; ')}). Delete ${copy}/screens and run it again.`, id);
       return 0;
     }
+    // An audit that compared only a few screens would plan fixes for those alone: say so instead.
+    if (copy) {
+      const shots = A.screenShotCount(copy), diffs = A.auditDiffCount(this.root);
+      if (shots && diffs * 2 < shots) {
+        this.d.notify('error', `Fix to match: the audit compared ${diffs} of ${shots} design screens, so no fix tasks were added. Use Follow-up task on it ("compare every screen with design-capture"), or run Fix to match again.`, id);
+        return 0;
+      }
+    }
     // A new audit replaces the last one's fixes that have not started yet.
     for (const t of this.store.data.tasks.filter(t => t.status === 'todo' && !t.branch && !t.archived && A.DESIGN_FILE.test(t.description ?? '') && (!copy || (t.description ?? '').includes(copy))))
       void this.remove(t.id);

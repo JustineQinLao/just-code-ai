@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Task } from './store';
 import * as R from './registry';
-import { SHOT_CODE, MEASURE_FN, SHOT_VERSION, arg } from './skill';
+import { SHOT_VERSION, arg } from './skill';
 
 // Artifacts are the basis of every task: small written files each step reads instead of re-exploring the code or
 // carrying a long history. All live under the project's .justcode/ (outside git):
@@ -130,11 +130,10 @@ function where(root: string, s: Source, cli?: string) {
       return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `screens/screens.json lists every screen per width: its .css (the design's own CSS rules for that screen: copy these values, never estimate them from the image), ` +
         `its .html (the markup: same structure, order and copy), its .json (measured fonts, sizes, colors and boxes), its PNG (only for a look), and the app URL that gives the same state. ` +
-        `Build the screens your task covers from that code; only the data comes from the app. Then check each screen at each width with the Playwright MCP: ` +
-        `1. browser_run_code_unsafe with this code, URL = the app URL, WIDTH = the width, PNG = <Screenshots folder>/<id>-app-<width>.png:\n\`\`\`js\n${SHOT_CODE}\n\`\`\`\n` +
-        `2. browser_evaluate with filename <Screenshots folder>/<id>-app-<width>.json and this function:\n\`\`\`js\n${MEASURE_FN}\n\`\`\`\n` +
-        `3. node ${arg(cli ?? '<cli.js>')} design-diff <design .json> <Screenshots folder>/<id>-app-<width>.json <Screenshots folder>/<id>-<width>.diff.txt\n` +
-        `Fix what it reports until only sample data differs.`;
+        `Build the screens your task covers from that code; only the data comes from the app. Then check them in ONE command: write a jobs file in the Screenshots folder ` +
+        `({"groups": [{"setup": "<async (page) => {...} signing in as the screen's role>", "shots": [{"url": "<app url of the state>", "width": 390, "png": "<Screenshots folder>/<name>.png", "json": "<Screenshots folder>/<name>.json"}]}]}, ` +
+        `one shot per screen and width, <name> = the design file's name, e.g. c-login-390), run node ${arg(cli ?? '<cli.js>')} design-capture <jobs file> (Bash, timeout 600000), ` +
+        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${dir}/screens <Screenshots folder> <Screenshots folder>. Fix what the <name>.diff.txt files report until only sample data differs.`;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +
@@ -278,3 +277,9 @@ export function screenShotProblems(copy: string) {
   }
   return out;
 }
+
+// How many design screenshots screens.json lists (screens × widths), and how many screens the audit compared (.diff.txt).
+export function screenShotCount(copy: string) {
+  try { return (JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')).screens ?? []).reduce((n: number, s: any) => n + Object.keys(s?.png ?? {}).length, 0); } catch { return 0; }
+}
+export const auditDiffCount = (root: string) => { try { return fs.readdirSync(jc(root, 'design', 'audit')).filter(f => f.endsWith('.diff.txt')).length; } catch { return 0; } };

@@ -133,6 +133,9 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'bad design images add no tasks');
   assert.match(A.screenShotProblems(copy)[0], /500×575, expected 390 wide/);
   screens(390, 1800);
+  assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'an audit that compared no screen adds no tasks');
+  fs.mkdirSync(path.join(root, '.justcode', 'design', 'audit'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.justcode', 'design', 'audit', 'c-login-390.diff.txt'), 'No differences.\n');
   const text = 'Audit done.\n```tasks\n' + JSON.stringify([
     { title: 'Load the design fonts and shell', goal: 'Shared', files: ['frontend/src/styles.css'], done: ['fonts load'], sprint: 'Design fix: gallery' },
     { title: 'Match the login screen', goal: 'Login', files: [shot, 'frontend/src/app/auth/login.ts'], done: ['shows the branch intro'], sprint: 'Design fix: gallery', after: ['Load the design fonts and shell'] },
