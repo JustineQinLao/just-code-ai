@@ -1836,7 +1836,7 @@ test('fix to match rounds: sample data is not a difference, a rule on many scree
   assert.doesNotMatch(fs.readFileSync(path.join(audit, 'c-a-390.diff.txt'), 'utf8'), /Maria|Juan/, 'sample data is not missing or extra');
   const p1 = planRound(copy, audit, r1.rows, r1.shared);
   assert.equal(p1.length, 1, 'shared rules first, as one task');
-  assert.match(p1[0].done.join('\n'), /\.muted size: design 14, app 13 is fixed \(was on 7 screens\)/);
+  assert.match(p1[0].done.join('\n'), /\.muted size: design 14, app 13 is fixed \(was on 7 screens, e\.g\. "Title" on c-a/);
   // After the shared fix merged and the app was measured again: only per-screen differences are left.
   for (const id of ids) fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it('Title', 14), it(`only ${id}`, id === 's-a' ? 16 : 15, 'x')] }));
   const r2 = diffAll(shots, audit, audit, ['Maria Santos']);

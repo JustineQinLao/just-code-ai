@@ -315,6 +315,7 @@ export async function handle(m: any, remote = false) {
     }
     case 'designFromProject': return designFromProject(r);
     case 'fixDesign': return fixDesign(r, m.source);
+    case 'designMeasure': { void r.designRemeasure(true).catch((e: Error) => vscode.window.showErrorMessage(`Fix to match: ${e.message}`)); return; }
     case 'openJustcodeFile': {
       const f = path.join(r.root, '.justcode', ...String(m.file).split('/').filter(x => x && x !== '..'));
       if (fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f)); else say('Not written yet.');

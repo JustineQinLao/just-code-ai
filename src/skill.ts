@@ -191,7 +191,7 @@ export const MEASURE_FN = `() => {
     else if (kind === 'CSSFontFaceRule' || (r.selectorText && (r.selectorText.startsWith(':root') || uses(r.selectorText)))) css.push(r.cssText);
   } };
   for (const ss of document.styleSheets) { try { walk(ss.cssRules); } catch (e) { css.push('/* ' + (ss.href || 'a stylesheet') + ': not readable (cross-origin) */'); } }
-  return { width: innerWidth, items, css: css.join('\\n') };
+  return { v: 2, width: innerWidth, items, css: css.join('\\n') };
 }`;
 
 // 🎨 Design → Fix to match, and the /justcode:fix-design skill: split the design into screen images once, compare every

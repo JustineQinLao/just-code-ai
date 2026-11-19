@@ -497,7 +497,8 @@
         JC.h('p', { class: 'muted' }, designs.length
           ? 'Claude compares every screen of the design with the running app, writes .justcode/design/audit.md, then adds the fix tasks as a sprint and runs them.'
           : 'Add the design under 📎 Sources and press Save copy, then fix the app to match it here.'),
-        designs.length ? JC.h('div', { class: 'acts row' }, designs.map(s => JC.btn(`Fix to match ${JC.srcLabel(s)}`, () => { d.close(); JC.post('fixDesign', { source: s.id }); }, 'ghost', s.ref))) : '');
+        designs.length ? JC.h('div', { class: 'acts row' }, designs.map(s => JC.btn(`Fix to match ${JC.srcLabel(s)}`, () => { d.close(); JC.post('fixDesign', { source: s.id }); }, 'ghost', s.ref)),
+          JC.btn('Measure again', () => { d.close(); JC.post('designMeasure'); }, 'ghost', 'Measure every screen of the app again (no Claude) and plan fix tasks for what still differs')) : '');
     }
   }
 

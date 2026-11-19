@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { SHOT_CODE, MEASURE_FN } from './skill';
-import { parseMeasure, diffItems, Diff, usableSample } from './designdiff';
+import { parseMeasure, diffItems, Diff, usableSample, MEASURE_V } from './designdiff';
 
 // `cli.js design-capture <jobs.json>`: every screenshot and measure of a design or an app in ONE command, so an audit
 // of many screens is not hundreds of tool calls (which sessions give up on, or auto mode blocks as a script). It drives
@@ -128,10 +128,10 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
 // property and values) differing on SHARED_MIN or more screens, which one CSS change fixes everywhere (shared.txt).
 export const SHARED_MIN = 3;
 export interface DiffRow { name: string; n: number }
-export interface Shared { rule: string; screens: string[] }
+export interface Shared { rule: string; screens: string[]; examples: string[] }
 export function diffAll(designDir: string, appDir: string, outDir: string, sample: string[] = []) {
   fs.mkdirSync(outDir, { recursive: true });
-  const rows: DiffRow[] = [], rules = new Map<string, Set<string>>();
+  const rows: DiffRow[] = [], rules = new Map<string, Set<string>>(), texts = new Map<string, Set<string>>();
   for (const f of fs.readdirSync(designDir).filter(f => f.endsWith('.json') && !/^(screens|jobs|app-jobs|sample)\.json$/.test(f)).sort()) {
     const app = path.join(appDir, f);
     if (!fs.existsSync(app)) continue;
@@ -139,13 +139,17 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
     try { d = diffItems(parseMeasure(fs.readFileSync(path.join(designDir, f), 'utf8')), parseMeasure(fs.readFileSync(app, 'utf8')), sample); }
     catch (e: any) { d = [{ line: `could not compare: ${e.message}` }]; }
     const name = f.replace(/\.json$/, ''), screen = screenOf(name);
-    for (const x of d) if (x.rule) { if (!rules.has(x.rule)) rules.set(x.rule, new Set()); rules.get(x.rule)!.add(screen); }
+    for (const x of d) if (x.rule) {
+      if (!rules.has(x.rule)) { rules.set(x.rule, new Set()); texts.set(x.rule, new Set()); }
+      rules.get(x.rule)!.add(screen);
+      if (x.text && texts.get(x.rule)!.size < 3) texts.get(x.rule)!.add(`"${x.text.slice(0, 40)}" on ${screen}`);
+    }
     fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (d.length ? d.map(x => x.line).join('\n') : 'No differences.') + '\n');
     rows.push({ name, n: d.length });
   }
   rows.sort((a, b) => b.n - a.n);
-  const shared: Shared[] = [...rules].filter(([, v]) => v.size >= SHARED_MIN).map(([rule, v]) => ({ rule, screens: [...v].sort() })).sort((a, b) => b.screens.length - a.screens.length);
-  fs.writeFileSync(path.join(outDir, 'shared.txt'), shared.length ? shared.map(x => `${x.rule}  (${x.screens.length} screens: ${x.screens.slice(0, 8).join(', ')}${x.screens.length > 8 ? ', …' : ''})`).join('\n') + '\n' : 'No shared differences.\n');
+  const shared: Shared[] = [...rules].filter(([, v]) => v.size >= SHARED_MIN).map(([rule, v]) => ({ rule, screens: [...v].sort(), examples: [...texts.get(rule)!] })).sort((a, b) => b.screens.length - a.screens.length);
+  fs.writeFileSync(path.join(outDir, 'shared.txt'), shared.length ? shared.map(x => `${x.rule}  (${x.screens.length} screens, e.g. ${x.examples.join('; ')})`).join('\n') + '\n' : 'No shared differences.\n');
   return { rows, shared };
 }
 
@@ -169,7 +173,7 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
     const top = shared.slice(0, 15), examples = [...new Set(top.flatMap(x => x.screens))].slice(0, 3);
     return [{ title: 'Design fix: shared styles', goal: `Fix the ${top.length} style rule${top.length === 1 ? '' : 's'} that differ from the design on several screens at once, in the shared styles (one change each, not per page).`,
       files: [...examples.flatMap(refs).filter(f => f.endsWith('.css')), path.join(auditDir, 'shared.txt')],
-      done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens)`), 'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] }];
+      done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens, e.g. ${x.examples.join('; ')})`), 'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] }];
   }
   const left = [...new Set(rows.filter(r => r.n > 0).map(r => screenOf(r.name)))];
   const byArea = new Map<string, string[]>();
@@ -184,4 +188,13 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
       done: [...part.map(id => `every line in ${path.join(auditDir, `${id}-<width>.diff.txt`)} is fixed, except sample data`), 'the design-diff of these screens shows only sample data', 'tests for the changed code pass'] });
   }
   return out;
+}
+
+// Is the design measured by an older recipe (a measure without v >= MEASURE_V)? Checks one measure in screens/.
+export function designMeasureOld(copy: string) {
+  const dir = path.join(copy, 'screens');
+  try {
+    const f = fs.readdirSync(dir).find(x => /-\d{3,4}\.json$/.test(x));
+    return !!f && !((parseMeasure(fs.readFileSync(path.join(dir, f), 'utf8')).v ?? 0) >= MEASURE_V);
+  } catch { return false; }
 }

@@ -4,10 +4,12 @@
 
 export interface Box { x: number; w: number; pad: string; radius: string; bg: string; border: string }
 export interface Item { text: string; cls?: string; x: number; w: number; h: number; font: string; size: number; weight: string; color: string; align: string; bg: string; radius: string; box: Box | null }
-export interface Measure { width?: number; items: Item[]; css?: string }
+export interface Measure { v?: number; width?: number; items: Item[]; css?: string }
+// Measures without v (or an older one) lack element classes: a design measured that way is measured again.
+export const MEASURE_V = 2;
 // line: what to show; rule: the same difference without the text it was found on (with the element's classes), so the
 // one CSS rule behind it can be found across screens.
-export interface Diff { line: string; rule?: string }
+export interface Diff { line: string; rule?: string; text?: string }
 
 // Accepts what browser_evaluate saved: the object, or the same as a JSON string.
 export function parseMeasure(text: string): Measure {
@@ -39,9 +41,9 @@ export function diffItems(design: Measure, app: Measure, sample: string[] = []):
   for (const x of design.items) {
     const y = pool.get(k(x))?.shift();
     if (!y) { if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"` }); continue; }
-    const on = x.cls ? `.${x.cls.split(/\s+/).slice(0, 2).join('.')}` : '';
+    const cls = (x.cls || y.cls || '').trim(), on = cls ? `.${cls.split(/\s+/).slice(0, 2).join('.')}` : `<${x.text.slice(0, 20)}>`;
     for (const p of ['font', 'size', 'weight', 'color', 'align', 'bg', 'radius'] as const)
-      if (String(x[p]) !== String(y[p])) out.push({ line: `"${x.text}" ${p}: design ${x[p]}, app ${y[p]}`, rule: `${on} ${p}: design ${x[p]}, app ${y[p]}`.trim() });
+      if (String(x[p]) !== String(y[p])) out.push({ line: `"${x.text}" ${p}: design ${x[p]}, app ${y[p]}`, rule: `${on} ${p}: design ${x[p]}, app ${y[p]}`, text: x.text });
     for (const p of ['x', 'w', 'h'] as const)
       if (Math.abs(x[p] - y[p]) > TOL) out.push({ line: `"${x.text}" ${p}: design ${x[p]}px, app ${y[p]}px` });
     if (x.box && y.box) {
@@ -49,7 +51,7 @@ export function diffItems(design: Measure, app: Measure, sample: string[] = []):
       for (const p of ['x', 'w'] as const)
         if (Math.abs(x.box[p] - y.box[p]) > TOL) once(`${card}:${p}`, { line: `${at} ${p}: design ${x.box[p]}px, app ${y.box[p]}px` });
       for (const p of ['pad', 'radius', 'bg', 'border'] as const)
-        if (x.box[p] !== y.box[p]) once(`${card}:${p}`, { line: `${at} ${p}: design ${x.box[p]}, app ${y.box[p]}`, rule: `container ${p}: design ${x.box[p]}, app ${y.box[p]}` });
+        if (x.box[p] !== y.box[p]) once(`${card}:${p}`, { line: `${at} ${p}: design ${x.box[p]}, app ${y.box[p]}`, rule: `${on} container ${p}: design ${x.box[p]}, app ${y.box[p]}`, text: x.text });
     } else if (x.box && !y.box) out.push({ line: `"${x.text}" container: design has a card or panel (${x.box.w}px, ${x.box.bg}), app has none` });
   }
   for (const rest of pool.values()) for (const y of rest) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"` });
