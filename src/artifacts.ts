@@ -132,6 +132,7 @@ function where(root: string, s: Source, cli?: string) {
         `its .html (the markup: same structure, order and copy), its .json (measured fonts, sizes, colors and boxes), its PNG (only for a look), and the app URL that gives the same state. ` +
         `Build the screens your task covers from that code; only the data comes from the app. ` +
         `The app running at the project's link serves the project folder, not your task folder: to measure your change, start your folder's frontend detached on a free port (pointing at the running backend), and stop it after. ` +
+        `Sign-in per role is already written: copy the "setup" of the matching group in ${jc(root, 'design', 'app-jobs.json')} (change only the app address to yours). ` +
         `Then check them in ONE command: write a jobs file in the Screenshots folder ` +
         `({"groups": [{"setup": "<async (page) => {...} signing in as the screen's role>", "shots": [{"url": "<app url of the state>", "width": 390, "png": "<Screenshots folder>/<name>.png", "json": "<Screenshots folder>/<name>.json"}]}]}, ` +
         `one shot per screen and width, <name> = the design file's name, e.g. c-login-390), run node ${arg(cli ?? '<cli.js>')} design-capture <jobs file> (Bash, timeout 600000), ` +

@@ -138,8 +138,10 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
     let d: Diff[];
     try { d = diffItems(parseMeasure(fs.readFileSync(path.join(designDir, f), 'utf8')), parseMeasure(fs.readFileSync(app, 'utf8')), sample); }
     catch (e: any) { d = [{ line: `could not compare: ${e.message}` }]; }
-    const name = f.replace(/\.json$/, ''), screen = screenOf(name);
-    for (const x of d) if (x.rule) {
+    const name = f.replace(/\.json$/, ''), screen = screenOf(name), width = /-(\d{3,4})$/.exec(name)?.[1];
+    // A rule holds at one width: CSS differs per breakpoint (13px on desktop, 14px on mobile is not one difference).
+    for (const x0 of d) if (x0.rule) {
+      const x = { ...x0, rule: width ? `${x0.rule} @${width}` : x0.rule };
       if (!rules.has(x.rule)) { rules.set(x.rule, new Set()); texts.set(x.rule, new Set()); }
       rules.get(x.rule)!.add(screen);
       if (x.text && texts.get(x.rule)!.size < 3) texts.get(x.rule)!.add(`"${x.text.slice(0, 40)}" on ${screen}`);

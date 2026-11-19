@@ -34,7 +34,12 @@ export const isSample = (text: string, sample: string[]) => {
 // design copy, never sample, even when an audit lists them.
 export const usableSample = (list: string[]) => list.filter(x => { const t = x.trim(); return t.length > 0 && t.length <= 40 && t.split(/\s+/).length <= 5; });
 
+// An unlabelled icon, image or control is measured under its tag name ("svg"): with nothing to match it by, pairing it
+// with "the next svg" compares unrelated elements, so such items are left out of the diff.
+export const unlabelled = (x: Item) => /^(svg|img|input|button|select|textarea)$/i.test(x.text.trim());
+
 export function diffItems(design: Measure, app: Measure, sample: string[] = []): Diff[] {
+  design = { ...design, items: design.items.filter(x => !unlabelled(x)) }; app = { ...app, items: app.items.filter(x => !unlabelled(x)) };
   const out: Diff[] = [], pool = new Map<string, Item[]>(), k = (x: Item) => x.text.trim().toLowerCase();
   const seen = new Set<string>(), once = (key: string, d: Diff) => { if (!seen.has(key)) { seen.add(key); out.push(d); } };   // a card's difference once, not per text in it
   for (const y of app.items) { const key = k(y); if (!pool.has(key)) pool.set(key, []); pool.get(key)!.push(y); }
