@@ -254,11 +254,12 @@ export const plannerMethods = {
     const { rows, shared } = DC.diffAll(path.join(copy, 'screens'), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
     let screens: { id: string; title?: string; url?: string }[] = [];
     try { screens = JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
+    this.designLines = rows.reduce((n, r) => n + r.n, 0);   // the measured total, for "is the fix still making progress"
     return DC.planRound(copy, auditDir, rows, shared, screens);
   },
 
   // After the last fix task of a round merges: rebuild-aware wait for the app, measure every screen again with the
-  // audit's own jobs (no Claude), and add the next round, or say the app matches. At most MAX_ROUNDS rounds.
+  // audit's own jobs (no Claude), and add the next round, or say the app matches. Rounds go on while the differences fall.
   // manual: from 🎨 Design → Measure again: the same round is planned again (no new round), and a finished run restarts.
   // Wraps the measuring so the board shows it (designStatus, refreshed at most once a second) and clears it at the end.
   async designRemeasure(this: Runner, manual = false, progress: (line: string) => void = () => undefined) {
@@ -276,7 +277,7 @@ export const plannerMethods = {
     if (open.length) { if (manual) this.d.notify('info', `Fix to match: ${open.length} fix task${open.length === 1 ? ' is' : 's are'} not done. Let ${open.length === 1 ? 'it' : 'them'} merge, or archive ${open.length === 1 ? 'it' : 'them'}, then Measure again.`); return; }   // the round is not over
     const jobsFile = path.join(this.root, '.justcode', 'design', 'app-jobs.json');
     if (!fs.existsSync(jobsFile)) { this.d.notify('warn', 'Fix to match: no .justcode/design/app-jobs.json to measure the app again. Run Fix to match again.'); return; }
-    if (!manual && st.round >= DF.MAX_ROUNDS) { DF.save(this.root, { ...st, done: true }); this.d.notify('warn', `Fix to match: ${DF.MAX_ROUNDS} rounds done. What still differs is in .justcode/design/audit (*.diff.txt).`); return; }
+    if (!manual && st.round >= DF.MAX_ROUNDS) { DF.save(this.root, { ...st, done: true }); this.d.notify('warn', `Fix to match: stopped after ${DF.MAX_ROUNDS} rounds. What still differs is in .justcode/design/audit (*.diff.txt); Measure again to go on.`); return; }
     this.d.notify('info', 'Fix to match: the round merged. Measuring every screen again (no Claude)…');
     if (!await App.current(this.root, 'Fix to match: measure again')) { this.d.notify('error', 'Fix to match: the app is not running, so it could not be measured again. Start it with ▶ App, then run Fix to match.'); return; }
     // A design measured by an older recipe (no element classes) is measured again too, from the audit's own design jobs.
@@ -288,8 +289,16 @@ export const plannerMethods = {
     const planned = this.designPlan(st.copy, true);
     progress('Comparing…');
     if (!planned.length) { DF.save(this.root, { ...st, done: true }); this.d.notify('info', `Fix to match: every measured screen now matches the design (round ${st.round}).`); return; }
+    // Go on while the measured differences keep falling; stop after STALE_ROUNDS rounds without progress (fixes that do
+    // not land would otherwise repeat). Measure again always plans.
+    const lines = this.designLines ?? 0, stale = st.lines !== undefined && lines >= st.lines ? (st.stale ?? 0) + 1 : 0;
+    if (!manual && stale >= DF.STALE_ROUNDS) {
+      DF.save(this.root, { ...st, lines, stale, done: true });
+      this.d.notify('warn', `Fix to match: ${DF.STALE_ROUNDS} rounds without fewer differences (${lines} left), so it stopped. See .justcode/design/audit (*.diff.txt); Measure again to go on.`);
+      return;
+    }
     const round = manual ? st.round : st.round + 1;
-    DF.save(this.root, { ...st, round, done: false });
+    DF.save(this.root, { ...st, round, lines, stale, done: false });
     this.addRound(planned.map(x => ({ title: x.title, description: taskText(x) })), round);
   },
 

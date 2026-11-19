@@ -658,7 +658,8 @@ export class Runner {
 
 
   defaultMode: Task['mode'] = 'auto';
-  designStatus?: string;   // Fix to match measuring: what it is on now (shown on the board), undefined when idle  // set by the extension from justCode.defaultMode
+  designStatus?: string;   // Fix to match measuring: what it is on now (shown on the board), undefined when idle
+  designLines?: number;    // Fix to match: the total of measured differences at the last plan  // set by the extension from justCode.defaultMode
 
 
   dispose() {
