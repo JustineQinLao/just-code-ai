@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Task } from './store';
 import * as R from './registry';
-import { SHOT_CODE, SHOT_VERSION } from './skill';
+import { SHOT_CODE, MEASURE_FN, SHOT_VERSION, arg } from './skill';
 
 // Artifacts are the basis of every task: small written files each step reads instead of re-exploring the code or
 // carrying a long history. All live under the project's .justcode/ (outside git):
@@ -123,15 +123,18 @@ export const linkedSources = (all: Source[], text: string) => {
 };
 
 // The source's location as Claude can open it: project files by their path in the task's copy, outside files absolute.
-function where(root: string, s: Source) {
+function where(root: string, s: Source, cli?: string) {
   if (hasCopy(root, s)) {
     const dir = sourceCopy(root, s.id), canvas = path.join(dir, 'project', 'canvas.json');
     if (fs.existsSync(path.join(dir, 'screens', 'screens.json')))
       return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
-        `screens/screens.json lists every screen with its PNG per width (the design screenshot to match), its rendered HTML, its app route, and the design's fonts and tokens. ` +
-        `Build the screens your task covers to match: same sections, copy, order, colors, fonts and spacing; only the data comes from the app. ` +
-        `Screenshot the built screen at each width with this code (browser_run_code_unsafe), the same code that made the design images, so they compare 1:1, ` +
-        `saving to the Screenshots folder as <id>-app-<width>.png:\n\`\`\`js\n${SHOT_CODE}\n\`\`\``;
+        `screens/screens.json lists every screen per width: its .css (the design's own CSS rules for that screen: copy these values, never estimate them from the image), ` +
+        `its .html (the markup: same structure, order and copy), its .json (measured fonts, sizes, colors and boxes), its PNG (only for a look), and the app URL that gives the same state. ` +
+        `Build the screens your task covers from that code; only the data comes from the app. Then check each screen at each width with the Playwright MCP: ` +
+        `1. browser_run_code_unsafe with this code, URL = the app URL, WIDTH = the width, PNG = <Screenshots folder>/<id>-app-<width>.png:\n\`\`\`js\n${SHOT_CODE}\n\`\`\`\n` +
+        `2. browser_evaluate with filename <Screenshots folder>/<id>-app-<width>.json and this function:\n\`\`\`js\n${MEASURE_FN}\n\`\`\`\n` +
+        `3. node ${arg(cli ?? '<cli.js>')} design-diff <design .json> <Screenshots folder>/<id>-app-<width>.json <Screenshots folder>/<id>-<width>.diff.txt\n` +
+        `Fix what it reports until only sample data differs.`;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +
@@ -164,14 +167,14 @@ export function artifactsSection(root: string, sources: Source[], taskTitle: (id
   return lines.length ? `## Project artifacts (published or used before; update one rather than recreate it)\n${lines.join('\n')}` : '';
 }
 
-export function writeBrief(root: string, t: Task, sources: Source[], taskTitle?: (id: string) => string | undefined) {
+export function writeBrief(root: string, t: Task, sources: Source[], taskTitle?: (id: string) => string | undefined, cli?: string) {
   const picked = t.sources ? sources.filter(s => t.sources!.includes(s.id)) : sources;
   const files = t.files ?? [];
   const text = [
     `# ${t.title}`,
     t.description?.trim() && t.description.trim() !== t.title.trim() ? t.description.trim() : '',
     picked.length || files.length || t.images?.length ? '## Sources (the basis for this task; open only what you need)' : '',
-    ...picked.map(s => `- ${where(root, s)}${s.note ? ` — ${s.note}` : ''}`),
+    ...picked.map(s => `- ${where(root, s, cli)}${s.note ? ` — ${s.note}` : ''}`),
     ...files.map(f => `- ${/^\.justcode[\\/]/.test(f) ? path.join(root, f) : f}`), // the task's folder has no .justcode
     ...(t.images ?? []).map(f => `- ${f} (screenshot: read it first)`),
     `## Screenshots go to\n${shotsDir(root, t.id)} (any screenshot or design copy goes here, never in the repo).${isUiTask(t) ? ` Take screenshots only with the Playwright MCP browser_take_screenshot tool (headless), filename always an absolute path in that folder.` : ''}`,

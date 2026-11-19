@@ -17,6 +17,7 @@ import { SecretsFound, describeSecrets } from './secrets';
 import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript, CHAT_APPEND, TASK_APPEND } from './claude';
+import { designCommands } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -375,14 +376,14 @@ export class Runner {
     const reuse = !resume && t.output === 'artifact' && !t.artifactUrl ? this.publishedNamedIn(t) : undefined;
     if (reuse) { patch = { ...patch, artifactUrl: reuse.url }; R.link(this.root, reuse.url, t.id, t.sprintId); }
     const title = (x: string) => this.store.task(x)?.title;
-    const first = t.chat ? (prompt ?? 'Hi') : resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title)), t.init === 'design' ? designFromCodeBody() : t.init === 'fixdesign' ? this.fixDesignPrompt(t) : t.init ? setupSkillBody() : '',
+    const first = t.chat ? (prompt ?? 'Hi') : resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title, this.d.cli)), t.init === 'design' ? designFromCodeBody() : t.init === 'fixdesign' ? this.fixDesignPrompt(t) : t.init ? setupSkillBody() : '',
       t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!installedPlugin('frontend-design', undefined, 'skills'), reuse && { ...reuse, file: this.previousPage(reuse) }) : '', prompt].filter(Boolean).join('\n\n');
     if (!resume) this.linkArtifacts(t, sources);
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
     const set = this.d.settings();
     const carry = carryOver(this.root, cwd);
     const personal = set.personalSetup ? [] : userAllowRules();
-    const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), []);
+    const web = webOptions(A.isUiTask(task), A.shotsDir(this.root, id), this.d.cli ? designCommands(this.d.cli) : []);
     const terse = set.terseReplies !== false ? Terse.rules() : undefined;
     // The code map, used by JustCode rather than left to Claude (which rarely calls it): a task whose plan names its
     // files gets no map at all (its rule would only cost tokens on every step); any other task gets the map's best

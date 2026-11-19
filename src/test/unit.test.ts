@@ -1330,7 +1330,7 @@ test('playwright MCP: pinned, headless, saves into shots; review prompt UI secti
   const m = playwrightMcp('/s').playwright;
   assert.equal(PLAYWRIGHT_TOOLS, 'mcp__playwright');
   assert.ok(m.args.some(a => /^@playwright\/mcp@\d+\.\d+\.\d+$/.test(a)));
-  assert.deepEqual(m.args.slice(-4), ['--headless', '--isolated', '--output-dir', '/s']);
+  assert.deepEqual(m.args.slice(-5), ['--headless', '--isolated', '--allow-unrestricted-file-access', '--output-dir', '/s']);
   const task = { id: 'x', title: 't' } as any;
   const web = reviewPrompt(task, 'main', 'd', { shots: '/s', web: true });
   assert.match(web, /browser_take_screenshot/); assert.doesNotMatch(web, new RegExp(['npx', 'playwright', 'screenshot'].join(' ')));
@@ -1778,4 +1778,24 @@ test('fix to match: a design with screens/ is described in the brief, and the re
   assert.match(A.writeBrief(root, task, [src]), /screens\/screens\.json lists every screen/);
   assert.match(reviewPrompt(task, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
   assert.doesNotMatch(reviewPrompt({ ...task, description: 'Files: a.ts' }, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
+});
+
+import { diffMeasures, parseMeasure } from '../designdiff';
+import { SHOT_CODE, MEASURE_FN } from '../skill';
+test('design diff: measured from code, matched by text, within a few pixels', () => {
+  const item = (text: string, o: any = {}) => ({ text, x: 0, w: 100, h: 20, font: 'Fira Sans', size: 14, weight: '400', color: 'rgb(0, 0, 0)', align: 'start', bg: 'rgba(0, 0, 0, 0)', radius: '0px', box: { x: 530, w: 380, pad: '40px', radius: '12px', bg: 'rgb(255, 255, 255)', border: '1px rgb(0, 0, 0)' }, ...o });
+  const design = { items: [item('Log in', { size: 34, font: 'Bricolage Grotesque' }), item('Then apply to Agos'), item('Password')] };
+  const app = { items: [item('Log in', { size: 34, font: 'Trebuchet MS', w: 103 }), item('Password', { box: { x: 500, w: 430, pad: '40px', radius: '12px', bg: 'rgb(255, 255, 255)', border: '1px rgb(0, 0, 0)' } }), item('Show password')] };
+  assert.deepEqual(diffMeasures(design, app), [
+    '"Log in" font: design Bricolage Grotesque, app Trebuchet MS',
+    'missing in app: "Then apply to Agos"',
+    'container of "Password" x: design 530px, app 500px',
+    'container of "Password" w: design 380px, app 430px',
+    'extra in app: "Show password"',
+  ]);
+  assert.deepEqual(diffMeasures(design, design), []);
+  assert.equal(parseMeasure(JSON.stringify(JSON.stringify(design))).items.length, 3, 'a result saved as a JSON string');
+  // The browser code is embedded in prompts: it must be valid JavaScript with its placeholders.
+  assert.doesNotThrow(() => new Function(`return (${SHOT_CODE.replace("'URL'", "'u'").replace('WIDTH', '390').replace("'PNG'", "'p'")})`));
+  assert.doesNotThrow(() => new Function(`return (${MEASURE_FN})`));
 });

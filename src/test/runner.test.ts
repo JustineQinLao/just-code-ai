@@ -126,7 +126,7 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   const shot = path.join(copy, 'screens', 'c-login-390.png');
   const png = (w: number, h: number) => { const b = Buffer.alloc(24); b.write('\x89PNG\r\n\x1a\n', 0, 'latin1'); b.writeUInt32BE(13, 8); b.write('IHDR', 12); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
   fs.mkdirSync(path.dirname(shot), { recursive: true });
-  const screens = (w: number, h: number) => { fs.writeFileSync(shot, png(w, h)); fs.writeFileSync(path.join(copy, 'screens', 'screens.json'), JSON.stringify({ capture: 2, screens: [{ id: 'c-login', png: { 390: shot } }] })); };
+  const screens = (w: number, h: number) => { fs.writeFileSync(shot, png(w, h)); fs.writeFileSync(path.join(copy, 'screens', 'screens.json'), JSON.stringify({ capture: 3, screens: [{ id: 'c-login', png: { 390: shot } }] })); };
   const old = store.addTask({ title: 'Old fix from the last audit', description: `Files: ${shot}`, mode: 'auto' });
   r.cancelQueue();
   screens(500, 575);   // the gallery's scaled frame, cut at the fold

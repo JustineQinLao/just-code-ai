@@ -192,7 +192,7 @@ export const plannerMethods = {
     if (!src) return 'The design source for this task is gone. Say so in one line and stop.';
     const copy = A.hasCopy(this.root, src) ? A.sourceCopy(this.root, src.id) : src.kind === 'url' ? undefined : src.ref;
     if (!copy) return `The design ${src.ref} has no saved copy. Say in one line that the user must press Save copy on it under 📎 Sources, then stop.`;
-    return `# Fix the UI to match the design\n\n${fixDesignSteps(copy, src.ref, this.root)}`;
+    return `# Fix the UI to match the design\n\n${fixDesignSteps(copy, src.ref, this.root, this.d.cli || undefined)}`;
   },
 
   // The audit's tasks block, added as one sprint in its order (each "after" resolved by title) and queued: one pass from
