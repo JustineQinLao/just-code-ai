@@ -6,7 +6,7 @@ import { randomUUID, createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { Store, Task } from './store';
 import * as g from './git';
-import { setupSkillBody } from './skill';
+import { setupSkillBody, fixDesignSteps } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
 import * as Audit from './audit';
@@ -184,6 +184,35 @@ export const plannerMethods = {
     const parts = [added && `added ${added}`, edited && `updated ${edited}`, removed && `removed ${removed}`, reopened && `${reopened} done back to To do`, sent && `sent the change to ${sent} started`].filter(Boolean);
     this.plannerNote = parts.length ? `Applied: ${parts.join(', ')} task${n === 1 ? '' : 's'}. Keep chatting to add or change more.` : 'No tasks changed.';
     this.changed();
+  },
+
+  // The 🎨 Fix to match task's first message: its design source (the task's one source) and the steps.
+  fixDesignPrompt(this: Runner, t: Task) {
+    const src = A.loadSources(this.root).find(s => t.sources?.includes(s.id));
+    if (!src) return 'The design source for this task is gone. Say so in one line and stop.';
+    const copy = A.hasCopy(this.root, src) ? A.sourceCopy(this.root, src.id) : src.kind === 'url' ? undefined : src.ref;
+    if (!copy) return `The design ${src.ref} has no saved copy. Say in one line that the user must press Save copy on it under 📎 Sources, then stop.`;
+    return `# Fix the UI to match the design\n\n${fixDesignSteps(copy, src.ref, this.root)}`;
+  },
+
+  // The audit's tasks block, added as one sprint in its order (each "after" resolved by title) and queued: one pass from
+  // audit to running fixes. Returns how many were added.
+  addDesignFixes(this: Runner, id: string, text: string) {
+    const p = parseProposals(text, new Set()) ?? [];
+    if (!p.length) { this.d.notify('info', 'Fix to match: no differences found, or no task list in the reply. See the task card.', id); return 0; }
+    const ids = new Map<string, string>();
+    for (const c of p) {
+      const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: this.sprintFor(c.sprint ?? 'Design fix'), mode: this.defaultMode });
+      ids.set(c.title.trim().toLowerCase(), t.id);
+    }
+    for (const c of p) {
+      const deps = (c.after ?? []).map(x => ids.get(x.trim().toLowerCase())).filter((d): d is string => !!d);
+      const me = ids.get(c.title.trim().toLowerCase());
+      if (me && deps.length) this.store.updateTask(me, { dependsOn: [...new Set(deps.filter(d => d !== me))] });
+    }
+    this.runAll([...ids.values()]);
+    this.d.notify('info', `Fix to match: added ${ids.size} fix task${ids.size === 1 ? '' : 's'} and started them. The audit is in .justcode/design/audit.md.`, id);
+    return ids.size;
   },
 
   // "Sprint 2: Search" → the open sprint named "Sprint 2", created with goal "Search" when there is none.

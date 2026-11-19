@@ -83,7 +83,9 @@ export const projectSection = (root: string) => fs.existsSync(projectFile(root))
 
 // UI-ish work (or an artifact page) follows the project's DESIGN.md when one exists.
 const UI_WORDS = /\b(ui|ux|frontend|front-end|css|html|page|screen|layout|landing|dashboard|button|modal|dialog|form|component|style|styling|theme|navbar|sidebar|webview|responsive|visual)s?\b/i;
-export const isUiTask = (t: Task) => t.output === 'artifact' || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`);
+// A design screen file a task must match: a saved design's screens/ (🎨 Fix to match) or a canvas's project/ files.
+export const DESIGN_FILE = /\.justcode[\\/]sources[\\/][^\s,]+[\\/](?:screens[\\/][^\s,]+\.(?:png|html)|project[\\/][^\s,]+\.dc\.html)/;
+export const isUiTask = (t: Task) => t.output === 'artifact' || t.init === 'fixdesign' || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`) || DESIGN_FILE.test(t.description ?? '');
 const designSection = (root: string, t: Task) => isUiTask(t) && fs.existsSync(designMdFile(root))
   ? `## Design system\nFollow ${designMdFile(root)} as the style spec (colors, type, spacing, components) for any UI you build or change.` : '';
 
@@ -123,6 +125,10 @@ export const linkedSources = (all: Source[], text: string) => {
 function where(root: string, s: Source) {
   if (hasCopy(root, s)) {
     const dir = sourceCopy(root, s.id), canvas = path.join(dir, 'project', 'canvas.json');
+    if (fs.existsSync(path.join(dir, 'screens', 'screens.json')))
+      return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
+        `screens/screens.json lists every screen with its PNG per width (the design screenshot to match), its rendered HTML, its app route, and the design's fonts and tokens. ` +
+        `Build the screens your task covers to match: same sections, copy, order, colors, fonts and spacing; only the data comes from the app`;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +

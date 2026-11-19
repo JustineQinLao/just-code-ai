@@ -310,6 +310,7 @@ export async function handle(m: any, remote = false) {
       return push();
     }
     case 'designFromProject': return designFromProject(r);
+    case 'fixDesign': return fixDesign(r, m.source);
     case 'openJustcodeFile': {
       const f = path.join(r.root, '.justcode', ...String(m.file).split('/').filter(x => x && x !== '..'));
       if (fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f)); else say('Not written yet.');
@@ -627,6 +628,20 @@ export async function designFromProject(r: Runner) {
   if (running) return open(running.id);
   const task = r.store.addTask({ title: 'Write DESIGN.md from this project\'s UI', description: 'Claude reads the styles, theme and components the code already uses and writes them to .justcode/design/DESIGN.md, so new UI matches. Nothing else changes.',
     mode: 'acceptEdits', where: 'direct', init: 'design', allow: ['Write(.justcode/design/**)', 'Edit(.justcode/design/**)'] });
+  await r.run(task.id);
+  open(task.id);
+}
+
+// 🎨 Design → Fix to match: one task compares every screen of a saved design with the running app, writes
+// .justcode/design/audit.md and ends with the fix tasks, which JustCode adds as a sprint and runs.
+export async function fixDesign(r: Runner, sourceId?: string) {
+  const running = r.store.data.tasks.find(t => t.init === 'fixdesign' && !t.archived && t.status !== 'done');
+  if (running) return open(running.id);
+  const designs = A.loadSources(r.root).filter(s => A.hasCopy(r.root, s) || s.kind === 'folder');
+  const src = designs.find(s => s.id === sourceId) ?? (designs.length === 1 ? designs[0] : undefined);
+  if (!src) { vscode.window.showWarningMessage(designs.length ? 'Pick the design under 🎨 Design → Fix to match.' : 'Add the design under 📎 Sources and press Save copy first.'); return; }
+  const task = r.store.addTask({ title: 'Fix the UI to match the design: compare every screen', description: `Claude splits ${src.note || src.ref} into screen images, compares each screen with the running app, writes .justcode/design/audit.md, and ends with the fix tasks. JustCode adds them as a sprint and runs them.`,
+    mode: r.defaultMode, where: 'direct', init: 'fixdesign', sources: [src.id], allow: ['Write(.justcode/**)', 'Edit(.justcode/**)'] });
   await r.run(task.id);
   open(task.id);
 }

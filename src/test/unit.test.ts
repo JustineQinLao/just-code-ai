@@ -1091,7 +1091,7 @@ test('a subagent\'s saved transcript: steps, model, final answer, tokens and tim
 test('writePlugin writes the plugin folder once and keeps unchanged files', () => {
   const root = tmp(), dir = path.join(root, '.justcode', 'plugin');
   const a = writePlugin(root);
-  for (const f of ['.claude-plugin/plugin.json', 'skills/plan-tasks/SKILL.md', 'skills/design-from-artifact/SKILL.md', 'agents/reviewer.md', 'agents/planner.md', 'agents/implementer.md'])
+  for (const f of ['.claude-plugin/plugin.json', 'skills/plan-tasks/SKILL.md', 'skills/design-from-artifact/SKILL.md', 'skills/fix-design/SKILL.md', 'agents/reviewer.md', 'agents/planner.md', 'agents/implementer.md'])
     assert.ok(fs.existsSync(path.join(dir, f)), f);
   assert.match(fs.readFileSync(path.join(dir, 'agents', 'reviewer.md'), 'utf8'), /<root>\/\.justcode\/tasks\/<id>\/shots\//);
   assert.deepEqual(fs.readdirSync(root), ['.justcode']);
@@ -1766,4 +1766,16 @@ test('code map for planner and reviewer: changed names from a diff; outline only
   assert.match(o, /Main folders .*frontend\/src \(600\)/);
   assert.match(o, /- Order \(backend\/orders\/models\.py:5\)/);
   assert.doesNotMatch(o, /OrderTests/, 'test code is not an outline hub');
+});
+
+test('fix to match: a design with screens/ is described in the brief, and the review checks the screenshots against it', () => {
+  const root = tmp(), copy = A.sourceCopy(root, 'd1');
+  fs.mkdirSync(path.join(copy, 'screens'), { recursive: true });
+  fs.writeFileSync(path.join(copy, 'index.html'), '<html></html>');
+  fs.writeFileSync(path.join(copy, 'screens', 'screens.json'), '{"screens":[]}');
+  const src: A.Source = { id: 'd1', kind: 'url', ref: 'https://claude.ai/artifact/Abc' };
+  const task = { id: 't1', title: 'Match the login screen', description: `Files: ${path.join(copy, 'screens', 'c-login-390.png')}`, mode: 'auto', status: 'todo', created: 0 } as any;
+  assert.match(A.writeBrief(root, task, [src]), /screens\/screens\.json lists every screen/);
+  assert.match(reviewPrompt(task, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
+  assert.doesNotMatch(reviewPrompt({ ...task, description: 'Files: a.ts' }, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
 });

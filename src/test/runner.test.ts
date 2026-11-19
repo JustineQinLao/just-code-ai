@@ -8,6 +8,7 @@ import { useSdk } from '../sdk';
 import { Store, Task } from '../store';
 import { Runner } from '../runner';
 import { Limits } from '../limits';
+import * as A from '../artifacts';
 
 // A fake Agent SDK: a task session edits a file in its folder and finishes the turn; a review (structured output)
 // passes. No Claude process runs, so this checks JustCode's own state machine end to end.
@@ -109,5 +110,31 @@ test('runner with a fake SDK: a quick task runs in the checkout with no review, 
   await r.merge(t.id);
   assert.equal(store.task(t.id)!.status, 'done');
   assert.match(sh('log', '--format=%s', '-n', '1'), /^Quick d/);
+  r.dispose();
+});
+
+test('fix to match a design: the audit task gets the design copy, and its task list becomes a running sprint in order', async () => {
+  const { root } = repo();
+  const { store, r } = runner(root, []);
+  const copy = path.join(root, '.justcode', 'sources', 'd1');
+  fs.mkdirSync(copy, { recursive: true }); fs.writeFileSync(path.join(copy, 'index.html'), '<html></html>');
+  fs.writeFileSync(path.join(root, '.justcode', 'sources.json'), JSON.stringify([{ id: 'd1', kind: 'url', ref: 'https://claude.ai/artifact/Abc', note: 'Gallery' }]));
+  const audit = store.addTask({ title: 'Fix the UI to match the design: compare every screen', mode: 'auto', where: 'direct', init: 'fixdesign', sources: ['d1'] });
+  const first = r.fixDesignPrompt(audit);
+  assert.ok(first.includes(`file://${copy}/index.html`) && first.includes(`${copy}/screens/screens.json`), 'audit works from the saved copy');
+  assert.match(first, /```tasks/);
+  const shot = path.join(copy, 'screens', 'c-login-390.png');
+  const text = 'Audit done.\n```tasks\n' + JSON.stringify([
+    { title: 'Load the design fonts and shell', goal: 'Shared', files: ['frontend/src/styles.css'], done: ['fonts load'], sprint: 'Design fix: gallery' },
+    { title: 'Match the login screen', goal: 'Login', files: [shot, 'frontend/src/app/auth/login.ts'], done: ['shows the branch intro'], sprint: 'Design fix: gallery', after: ['Load the design fonts and shell'] },
+  ]) + '\n```';
+  r.cancelQueue();
+  assert.equal(r.addDesignFixes(audit.id, text), 2);
+  const [shared, login] = ['Load the design fonts and shell', 'Match the login screen'].map(x => store.data.tasks.find(t => t.title === x)!);
+  assert.ok(shared.sprintId && shared.sprintId === login.sprintId);
+  assert.deepEqual(login.dependsOn, [shared.id]);
+  assert.ok(A.isUiTask(login), 'a task naming a design screen is a UI task');
+  assert.ok(store.queue.includes(login.id) || store.task(login.id)!.status !== 'todo');
+  r.cancelQueue();
   r.dispose();
 });

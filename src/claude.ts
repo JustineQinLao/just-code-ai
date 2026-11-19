@@ -4,6 +4,7 @@ import * as path from 'path';
 import { execFile, execFileSync } from 'child_process';
 import { Task } from './store';
 import { sdk } from './sdk';
+import { DESIGN_FILE } from './artifacts';
 
 export interface AgentDef { name: string; description: string; model?: string; tools?: string; file: string; scope: 'project' | 'user' }
 
@@ -390,6 +391,9 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
       ? `# UI checks\nAn Android device is connected (${test.adb.devices.join(', ')}). If the change touches anything a user sees, open the app with adb, ` +
         `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
       : test.web ? `# UI checks\nFor a web UI with a running dev server: open the page with the Playwright MCP tools, then ${SHOT_RULE(test.shots)} Read the PNG.` : '',
+    test.web && DESIGN_FILE.test(t.description ?? '') ? `# Design match\nThis task must match the design screens its Files name. The builder saved design and app screenshots in ${test.shots}: ` +
+      `Read each screen's design image and the builder's app image of it (one per width). A missing app screenshot, or a visible difference (sections, copy, order, colors, fonts, spacing, icons) ` +
+      `that the user has not accepted, is a blocking issue: name the screen and the difference. Sample names and amounts in the design are not differences.` : '',
     test.accepted?.length ? `# Accepted by the user (not blocking; do not report again)\n${test.accepted.map(a => `- ${a}`).join('\n')}` : '',
     test.fixNote ? `# The builder's reply to the previous review round\n${test.fixNote}` : '',
     `# Diff against ${base}\n\`\`\`diff\n${clipped}\n\`\`\``,
@@ -542,7 +546,7 @@ How to plan:
 3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
 4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
 5. Build order: foundations first (models, tokens, shared components, layout), features next, and tasks that verify or document the whole (captures, PDFs, e2e reports) last. A task never depends on a later one. If the project has a plan-tasks skill, follow it.
-6. When a source is a design (a saved design canvas folder with project/canvas.json, mockups, screenshots), open it before proposing UI tasks. Give each UI task the exact screen files it must match in "files" by absolute path (e.g. "<project root>/.justcode/sources/<id>/project/Staff-Floor.dc.html": tasks run in folders without .justcode) and in "done" a check that the built screen has the same sections, labels, order and styling as that file, shown by a screenshot at the design's width.
+6. When a source is a design (a saved design canvas folder with project/canvas.json, mockups, screenshots), open it before proposing UI tasks. Give each UI task the exact screen files it must match in "files" by absolute path (e.g. "<project root>/.justcode/sources/<id>/project/Staff-Floor.dc.html", or a screen's PNG and HTML from the copy's screens/screens.json when it has one: tasks run in folders without .justcode) and in "done" a check that the built screen has the same sections, labels, order and styling as that file, shown by a screenshot at the design's width.
 
 After every turn, end your message with the FULL proposed To do list as one JSON block:
 \`\`\`tasks

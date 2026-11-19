@@ -488,7 +488,17 @@
         has ? JC.btn('Show as artifact', () => { d.close(); JC.post('designArtifact'); }, 'ghost', 'A claude.ai page showing the palette, type and components; listed under ⧉ Artifacts and updated in place') : '',
         has ? JC.btn('Open', () => { d.close(); JC.post('openJustcodeFile', { file: 'design/DESIGN.md' }); }, 'ghost') : '',
         has ? JC.btn('Remove', () => { d.close(); JC.post('designRemove'); }, 'ghost') : ''),
-      has ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Current: '), 'DESIGN.md in .justcode/design') : '');
+      has ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Current: '), 'DESIGN.md in .justcode/design') : '',
+      fixSection());
+    function fixSection() {
+      const designs = (JC.S.sources || []).filter(s => s.copy || s.kind === 'folder');
+      return JC.h('div', {},
+        JC.h('h4', {}, 'Fix to match a design'),
+        JC.h('p', { class: 'muted' }, designs.length
+          ? 'Claude compares every screen of the design with the running app, writes .justcode/design/audit.md, then adds the fix tasks as a sprint and runs them.'
+          : 'Add the design under 📎 Sources and press Save copy, then fix the app to match it here.'),
+        designs.length ? JC.h('div', { class: 'acts row' }, designs.map(s => JC.btn(`Fix to match ${JC.srcLabel(s)}`, () => { d.close(); JC.post('fixDesign', { source: s.id }); }, 'ghost', s.ref))) : '');
+    }
   }
 
   function guide() {

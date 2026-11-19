@@ -9,7 +9,7 @@ import { sweepStacks } from './docker';
 import * as CodeMap from './codemap';
 import * as Terse from './terse';
 import * as App from './app';
-import { setupSkillBody, designFromCodeBody } from './skill';
+import { setupSkillBody, designFromCodeBody, fixDesignSteps } from './skill';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
 import * as Audit from './audit';
@@ -375,7 +375,7 @@ export class Runner {
     const reuse = !resume && t.output === 'artifact' && !t.artifactUrl ? this.publishedNamedIn(t) : undefined;
     if (reuse) { patch = { ...patch, artifactUrl: reuse.url }; R.link(this.root, reuse.url, t.id, t.sprintId); }
     const title = (x: string) => this.store.task(x)?.title;
-    const first = t.chat ? (prompt ?? 'Hi') : resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title)), t.init === 'design' ? designFromCodeBody() : t.init ? setupSkillBody() : '',
+    const first = t.chat ? (prompt ?? 'Hi') : resume ? (prompt ?? 'Continue the task.') : [taskPrompt(t, A.writeBrief(this.root, t, sources, title)), t.init === 'design' ? designFromCodeBody() : t.init === 'fixdesign' ? this.fixDesignPrompt(t) : t.init ? setupSkillBody() : '',
       t.output === 'artifact' ? artifactBrief(A.artifactFile(this.root, id), !!installedPlugin('frontend-design', undefined, 'skills'), reuse && { ...reuse, file: this.previousPage(reuse) }) : '', prompt].filter(Boolean).join('\n\n');
     if (!resume) this.linkArtifacts(t, sources);
     const task = this.store.updateTask(id, { ...patch, sessionId, status: t.status === 'todo' ? 'doing' : t.status, error: undefined, live: true, startedAt: t.startedAt ?? Date.now() })!;
@@ -553,6 +553,7 @@ export class Runner {
     const reply = turn.text.trim().slice(-4000) || undefined;
     if (t.appFix) void App.start(this.root, 'after Claude\'s fix').catch(() => undefined);   // ▶ App shows whether the fix worked
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
+    if (t.init === 'fixdesign') this.addDesignFixes(id, turn.text);   // the audit's fix tasks become a sprint and run
     else this.store.updateTask(id, { status: t.status === 'done' ? 'done' : 'review', live: undefined, reply, costUsd: cost });
     if (!t.init && this.checkBudget(id)) return;
     this.emptyAt.delete(id);
