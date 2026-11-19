@@ -350,7 +350,7 @@ export function webOptions(on: boolean, shots: string, allowed: string[]) {
 
 // Commands the reviewer may run: read git, run tests and builds, adb, screenshots. Edits stay blocked.
 export const REVIEW_COMMANDS = ['git diff', 'git log', 'git show', 'git status', 'ls', 'cat',
-  'npm test', 'npm run', 'npx tsc', 'npx jest', 'npx vitest', 'npx eslint', 'npx ng test',
+  'npm test', 'npm run', 'npm --prefix * test', 'npm --prefix * test *', 'npm --prefix * run *', 'pnpm -C * test', 'pnpm -C * run *', 'yarn --cwd * test', 'yarn --cwd * run *', 'npx tsc', 'npx jest', 'npx vitest', 'npx eslint', 'npx ng test',
   'yarn test', 'yarn run', 'yarn build', 'yarn lint', 'pnpm test', 'pnpm run', 'pnpm build', 'pnpm lint', 'bun test', 'bun run',
   'pytest', 'python -m pytest', 'python3 -m pytest', 'python manage.py test', 'python3 manage.py test', 'python */manage.py test *', 'python3 */manage.py test *', 'ruff', 'mypy',
   'go test', 'go build', 'go vet', 'cargo test', 'cargo build', 'cargo check', 'cargo clippy', 'make test', 'make check', 'make build',
@@ -372,7 +372,7 @@ Never re-report an issue listed under "Accepted by the user". If the builder exp
 judge the explanation: drop the issue when the reason is sound.
 Verify, do not only read: the builder's handoff lists what it ran. Re-run the tests that cover the changed files (and the build or type check if quick)
 to confirm; do not re-run the whole suite unless the change is broad, and do not explore unrelated code.
-Run each command on its own, as written: no cd, &&, ;, pipes or redirects. Every command must finish by itself within a few minutes:
+Run each command on its own, as written: no cd, &&, ;, pipes or redirects. For a package in a subfolder, name the folder instead: npm --prefix <dir> test, npm --prefix <dir> run build (pnpm -C <dir>, yarn --cwd <dir>). Every command must finish by itself within a few minutes:
 never a dev server, watch mode or anything interactive (use flags like --run, --watchAll=false).
 Risk "critical" only when merging without a human look could do real harm: authentication or authorization, secrets, payments,
 data migrations or deletion, deployment or infrastructure config, breaking a public API. Ordinary code, tests, scripts and build or package

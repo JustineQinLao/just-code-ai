@@ -637,6 +637,9 @@ export async function designFromProject(r: Runner) {
 export async function fixDesign(r: Runner, sourceId?: string) {
   const running = r.store.data.tasks.find(t => t.init === 'fixdesign' && !t.archived && t.status !== 'done');
   if (running) return open(running.id);
+  // The last audit's fixes still running: a new audit would add the same tasks again.
+  const open_ = r.store.data.tasks.filter(t => !t.archived && t.status !== 'done' && A.DESIGN_FILE.test(t.description ?? '')).length;
+  if (open_ && !await confirm(`${open_} fix task${open_ === 1 ? '' : 's'} from the last audit ${open_ === 1 ? 'is' : 'are'} not done yet. The design changes show once they merge. Run a new audit anyway (it adds new tasks)?`, 'Run a new audit')) return;
   const designs = A.loadSources(r.root).filter(s => A.hasCopy(r.root, s) || s.kind === 'folder');
   const src = designs.find(s => s.id === sourceId) ?? (designs.length === 1 ? designs[0] : undefined);
   if (!src) { vscode.window.showWarningMessage(designs.length ? 'Pick the design under 🎨 Design → Fix to match.' : 'Add the design under 📎 Sources and press Save copy first.'); return; }
