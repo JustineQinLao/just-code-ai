@@ -244,7 +244,7 @@ export const plannerMethods = {
       if (me && deps.length) this.store.updateTask(me, { dependsOn: [...new Set(deps.filter(d => d !== me))] });
     }
     this.runAll([...ids.values()]);
-    this.d.notify('info', `Fix to match, round ${round}: added ${ids.size} fix task${ids.size === 1 ? '' : 's'} and started them. When they merge, JustCode measures again and plans what is left.`, from);
+    this.d.notify('info', `Fix to match, round ${round}: added ${ids.size} fix task${ids.size === 1 ? '' : 's'} (in All tasks / Backlog: they merge into your current branch) and started them. When they merge, JustCode measures again and plans what is left.`, from);
     return ids.size;
   },
 
@@ -260,7 +260,7 @@ export const plannerMethods = {
   // After the last fix task of a round merges: rebuild-aware wait for the app, measure every screen again with the
   // audit's own jobs (no Claude), and add the next round, or say the app matches. At most MAX_ROUNDS rounds.
   // manual: from 🎨 Design → Measure again: the same round is planned again (no new round), and a finished run restarts.
-  async designRemeasure(this: Runner, manual = false) {
+  async designRemeasure(this: Runner, manual = false, progress: (line: string) => void = () => undefined) {
     const st = DF.load(this.root);
     if (!st || (st.done && !manual)) return;
     const open = this.store.data.tasks.filter(t => t.designFix && !t.archived && t.status !== 'done');
@@ -272,10 +272,12 @@ export const plannerMethods = {
     if (!await App.current(this.root, 'Fix to match: measure again')) { this.d.notify('error', 'Fix to match: the app is not running, so it could not be measured again. Start it with ▶ App, then run Fix to match.'); return; }
     // A design measured by an older recipe (no element classes) is measured again too, from the audit's own design jobs.
     const designJobs = path.join(this.root, '.justcode', 'design', 'jobs.json');
-    if (fs.existsSync(designJobs) && DC.designMeasureOld(st.copy)) await DC.capture(DC.parseJobs(fs.readFileSync(designJobs, 'utf8')), () => undefined).catch(() => undefined);
-    const r = await DC.capture(DC.parseJobs(fs.readFileSync(jobsFile, 'utf8')), () => undefined).catch((e: Error) => ({ done: 0, failed: [e.message] }));
+    if (fs.existsSync(designJobs) && DC.designMeasureOld(st.copy)) await DC.capture(DC.parseJobs(fs.readFileSync(designJobs, 'utf8')), l => progress(`Design: ${l}`)).catch(() => undefined);
+    progress('App: starting the browser…');
+    const r = await DC.capture(DC.parseJobs(fs.readFileSync(jobsFile, 'utf8')), l => progress(`App: ${l}`)).catch((e: Error) => ({ done: 0, failed: [e.message] }));
     if (!r.done) { this.d.notify('error', `Fix to match: could not measure the app again (${r.failed[0] ?? 'nothing captured'}). Is it running?`); return; }
     const planned = this.designPlan(st.copy, true);
+    progress('Comparing…');
     if (!planned.length) { DF.save(this.root, { ...st, done: true }); this.d.notify('info', `Fix to match: every measured screen now matches the design (round ${st.round}).`); return; }
     const round = manual ? st.round : st.round + 1;
     DF.save(this.root, { ...st, round, done: false });

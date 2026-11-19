@@ -103,6 +103,13 @@ export const runnerFor = (root: string) => {
   if (!fs.existsSync(path.join(root, '.justcode'))) try { g.ignoreJustcode(root); } catch { /* read-only folder */ }
   r = new Runner(new Store(root), {
     version: st.ctx.extension.packageJSON.version, bin, env, settings: runnerSettings, limits, cli: path.join(st.ctx.extensionPath, 'out', 'cli.js'),
+    progress: (title: string) => {
+      let report: ((l: string) => void) | undefined, close = () => {};
+      const done = new Promise<void>(r => { close = r; });
+      void vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title }, p => { report = l => p.report({ message: l }); return done; });
+      const t = setTimeout(() => close(), 20 * 60_000);
+      return (l: string) => { if (l) report?.(l); else { clearTimeout(t); close(); } };
+    },
     notify: (level, text, taskId, toast) => {
       out.appendLine(`${new Date().toLocaleTimeString()} [${path.basename(root)}] ${level}: ${text}`);
       // A toast only for what you can act on (a question, ready to merge, a failure); the rest is in the output log.

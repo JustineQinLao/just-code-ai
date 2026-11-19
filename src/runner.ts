@@ -68,6 +68,8 @@ export interface RunnerDeps {
   // A modal question; resolves to the chosen button, or undefined when dismissed.
   choose(text: string, ...buttons: string[]): Promise<string | undefined>;
   cli: string; // out/cli.js, for the reviewer's screenshot command
+  // A long background job's live line (a VS Code progress notification): returns the reporter, closed by reporting ''. Optional (tests).
+  progress?: (title: string) => ((line: string) => void) | undefined;
   // Publishes an artifact task's page (needs an interactive claude: the Agent SDK cannot publish artifacts).
   publish?(id: string): void;
   // Saves a local copy of every claude.ai artifact source that has none yet (links in `text` are added as sources
