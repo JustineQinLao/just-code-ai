@@ -206,6 +206,7 @@
         (n => q.queued.length && n.length ? [' · ', h('a', { href: '#', title: 'Run all goes on without these; open the first', onclick: e => { e.preventDefault(); JC.openTask(n[0].id); } }, `${n.length} need${n.length === 1 ? 's' : ''} you`)] : '')(tasks.filter(t => lane(t) === 'needs')),
         q.queued.length ? btn('Stop queue', () => post('cancelQueue'), 'ghost') : '') : '',
       showArchived ? btn('Showing archived ×', () => { showArchived = false; render(); }, 'ghost') : '',
+      S.designStatus ? btn(`📐 Measuring design · ${S.designStatus}`, () => JC.designDialog?.(), 'ghost app-building', 'Fix to match is measuring every screen of the design and the app (no Claude). New fix tasks appear in All tasks when it is done.') : '',
       !REMOTE ? btn('💬 Chat', () => post('openChat'), 'ghost', 'Talk to Claude in the project folder: no task, checks, review or merge') : '',
       !REMOTE ? (a => {
         const building = a.busy || a.state === 'building', stopped = !building && (a.state === 'stopped' || !a.state);

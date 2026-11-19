@@ -657,7 +657,8 @@ export class Runner {
 
 
 
-  defaultMode: Task['mode'] = 'auto';  // set by the extension from justCode.defaultMode
+  defaultMode: Task['mode'] = 'auto';
+  designStatus?: string;   // Fix to match measuring: what it is on now (shown on the board), undefined when idle  // set by the extension from justCode.defaultMode
 
 
   dispose() {

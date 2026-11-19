@@ -260,7 +260,16 @@ export const plannerMethods = {
   // After the last fix task of a round merges: rebuild-aware wait for the app, measure every screen again with the
   // audit's own jobs (no Claude), and add the next round, or say the app matches. At most MAX_ROUNDS rounds.
   // manual: from 🎨 Design → Measure again: the same round is planned again (no new round), and a finished run restarts.
+  // Wraps the measuring so the board shows it (designStatus, refreshed at most once a second) and clears it at the end.
   async designRemeasure(this: Runner, manual = false, progress: (line: string) => void = () => undefined) {
+    if (this.designStatus) { if (manual) this.d.notify('info', 'Fix to match is already measuring.'); return; }
+    let last = 0;
+    const show = (line: string) => { progress(line); this.designStatus = line.replace(/^(Design|App): (\d+\/\d+).*/, '$1 $2'); if (Date.now() - last > 1000) { last = Date.now(); this.changed(); } };
+    this.designStatus = 'starting…'; this.changed();
+    try { await this.measureRound(manual, show); } finally { this.designStatus = undefined; this.changed(); }
+  },
+
+  async measureRound(this: Runner, manual: boolean, progress: (line: string) => void) {
     const st = DF.load(this.root);
     if (!st || (st.done && !manual)) return;
     const open = this.store.data.tasks.filter(t => t.designFix && !t.archived && t.status !== 'done');
