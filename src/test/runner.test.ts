@@ -124,6 +124,15 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   assert.ok(first.includes(`file://${copy}/index.html`) && first.includes(`${copy}/screens/screens.json`), 'audit works from the saved copy');
   assert.match(first, /```tasks/);
   const shot = path.join(copy, 'screens', 'c-login-390.png');
+  const png = (w: number, h: number) => { const b = Buffer.alloc(24); b.write('\x89PNG\r\n\x1a\n', 0, 'latin1'); b.writeUInt32BE(13, 8); b.write('IHDR', 12); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
+  fs.mkdirSync(path.dirname(shot), { recursive: true });
+  const screens = (w: number, h: number) => { fs.writeFileSync(shot, png(w, h)); fs.writeFileSync(path.join(copy, 'screens', 'screens.json'), JSON.stringify({ capture: 2, screens: [{ id: 'c-login', png: { 390: shot } }] })); };
+  const old = store.addTask({ title: 'Old fix from the last audit', description: `Files: ${shot}`, mode: 'auto' });
+  r.cancelQueue();
+  screens(500, 575);   // the gallery's scaled frame, cut at the fold
+  assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'bad design images add no tasks');
+  assert.match(A.screenShotProblems(copy)[0], /500×575, expected 390 wide/);
+  screens(390, 1800);
   const text = 'Audit done.\n```tasks\n' + JSON.stringify([
     { title: 'Load the design fonts and shell', goal: 'Shared', files: ['frontend/src/styles.css'], done: ['fonts load'], sprint: 'Design fix: gallery' },
     { title: 'Match the login screen', goal: 'Login', files: [shot, 'frontend/src/app/auth/login.ts'], done: ['shows the branch intro'], sprint: 'Design fix: gallery', after: ['Load the design fonts and shell'] },
@@ -134,6 +143,7 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   assert.ok(shared.sprintId && shared.sprintId === login.sprintId);
   assert.deepEqual(login.dependsOn, [shared.id]);
   assert.ok(A.isUiTask(login), 'a task naming a design screen is a UI task');
+  await until('old fix removed', () => !store.task(old.id));
   assert.ok(store.queue.includes(login.id) || store.task(login.id)!.status !== 'todo');
   r.cancelQueue();
   r.dispose();

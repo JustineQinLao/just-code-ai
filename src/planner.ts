@@ -200,6 +200,17 @@ export const plannerMethods = {
   addDesignFixes(this: Runner, id: string, text: string) {
     const p = parseProposals(text, new Set()) ?? [];
     if (!p.length) { this.d.notify('info', 'Fix to match: no differences found, or no task list in the reply. See the task card.', id); return 0; }
+    // Fixes planned from bad design images would chase the wrong target: check them first.
+    const audit = this.store.task(id), src = A.loadSources(this.root).find(s => audit?.sources?.includes(s.id));
+    const copy = src && (A.hasCopy(this.root, src) ? A.sourceCopy(this.root, src.id) : src.kind === 'folder' ? src.ref : undefined);
+    const bad = copy ? A.screenShotProblems(copy) : [];
+    if (bad.length) {
+      this.d.notify('error', `Fix to match: the design screenshots are not usable, so no fix tasks were added (${bad.length} problem${bad.length === 1 ? '' : 's'}: ${bad.slice(0, 3).join('; ')}). Delete ${copy}/screens and run it again.`, id);
+      return 0;
+    }
+    // A new audit replaces the last one's fixes that have not started yet.
+    for (const t of this.store.data.tasks.filter(t => t.status === 'todo' && !t.branch && !t.archived && A.DESIGN_FILE.test(t.description ?? '') && (!copy || (t.description ?? '').includes(copy))))
+      void this.remove(t.id);
     const ids = new Map<string, string>();
     for (const c of p) {
       const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: this.sprintFor(c.sprint ?? 'Design fix'), mode: this.defaultMode });

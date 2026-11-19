@@ -139,6 +139,24 @@ there today.
    image paths. Do not re-shoot unchanged screens or re-run passing suites.
 `;
 
+// Version of the screenshot recipe below: a screens.json without it was made another way and is redone.
+export const SHOT_VERSION = 2;
+// The one screenshot recipe for design and app: exact viewport width, inner scroll areas and scaling undone, full page.
+export const SHOT_CODE = `async function shot(page, url, width, png) {
+  await page.setViewportSize({ width, height: width < 800 ? 844 : 900 });
+  await page.goto(url, { waitUntil: 'networkidle' });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    for (const e of [document.documentElement, document.body, ...document.body.querySelectorAll('*')]) {
+      const s = getComputedStyle(e);
+      if (/auto|scroll|hidden/.test(s.overflowY + s.overflow) && e.scrollHeight > e.clientHeight + 1)
+        Object.assign(e.style, { overflow: 'visible', height: 'auto', maxHeight: 'none' });
+      if (/matrix/.test(s.transform) && e.getBoundingClientRect().width < e.offsetWidth - 1) e.style.transform = 'none';
+    }
+  });
+  await page.screenshot({ path: png, fullPage: true });
+}`;
+
 // 🎨 Design → Fix to match, and the /justcode:fix-design skill: split the design into screen images once, compare every
 // screen with the running app, write the audit, and end with the fix tasks (JustCode adds them as a sprint and runs them).
 // One pass, so a gallery page (all screens drawn by one script) works as well as a Design canvas.
@@ -148,17 +166,32 @@ detached and add dev sample data through the app's own commands.
 
 ## 1. Split the design into screens (once)
 
-If \`${copy}/screens/screens.json\` exists, use it and go to step 2. Else make it:
-- A Design canvas (\`project/canvas.json\`): one screen per board, size \`w\`×\`h\`, file \`project/<name>.dc.html\`.
-- One page holding every screen (a gallery: a list of screens, a Desktop/Mobile switch, state tabs): open
-  \`file://${copy}/index.html\` with the Playwright MCP. Find how it lists its screens (the side list, or the script's
-  screen table) with browser_evaluate. Show each screen and each of its states alone the way the gallery does (click it
-  or set its state), hide the gallery's own chrome (screen list, top bar, device frame, browser bar, notes, assumption
-  tags), and screenshot only the screen: 390×844 full page, and 1440×900 full page when the gallery has a desktop view.
-Save \`${copy}/screens/<id>[-<state>]-<width>.png\` and the screen's rendered markup as \`${copy}/screens/<id>[-<state>].html\`
-(outerHTML of the screen's root, with the design's CSS custom properties). Write \`${copy}/screens/screens.json\`:
-\`{"source": "<link>", "fonts": [font families and the font stylesheet URLs the design loads], "tokens": {"--name": "value"},
-"screens": [{"id", "title", "group", "role", "state", "route", "html": "<abs path>", "png": {"390": "<abs path>", "1440": "<abs path>"}}]}\`.
+If \`${copy}/screens/screens.json\` exists and has \`"capture": ${SHOT_VERSION}\`, use it and go to step 2. Else (re)make it.
+
+**a. One standalone page per screen.** Never screenshot the gallery itself: it scales its device frame to fit the window
+and scrolls inside it, so its images come out at random sizes and cut off below the fold.
+- A Design canvas (\`project/canvas.json\`): each \`project/<name>.dc.html\` is already one screen.
+- One page holding every screen (a gallery: a screen list, a Desktop/Mobile switch, state tabs): open
+  \`file://${copy}/index.html\` with the Playwright MCP and find its screen list (the side list or the script's screen
+  table) with browser_evaluate. For each screen, each state and each device the gallery has (mobile; desktop when it
+  has a desktop view): switch the gallery to it, take the outerHTML of the screen's own root (inside the device or
+  browser frame, without the frame, notes or assumption tags), and write \`${copy}/screens/<id>[-<state>]-<width>.html\`:
+  \`<!doctype html><html><head>\` + every \`<style>\` and font \`<link>\` of the gallery + \`</head><body style="margin:0">\`
+  + that markup + \`</body></html>\`. Width 390 for mobile, 1440 for desktop.
+
+**b. Screenshot with exactly this code** (browser_run_code_unsafe), once per file, for the design and later the app alike,
+so both sides have the same width, scale and full height:
+\`\`\`js
+${SHOT_CODE}
+\`\`\`
+Call it as \`await shot(page, 'file://<html>', <width>, '<png>')\`; save \`${copy}/screens/<id>[-<state>]-<width>.png\`.
+
+**c. Check before going on:** every PNG is exactly its width wide (390 or 1440) and at least 600 px high, and shows the
+whole screen down to its last section and its tab bar. Redo any that fail.
+
+Write \`${copy}/screens/screens.json\`: \`{"capture": ${SHOT_VERSION}, "source": "<link>", "fonts": [font families and the font
+stylesheet URLs], "tokens": {"--name": "value"}, "screens": [{"id", "title", "group", "role", "state", "route",
+"html": {"390": "<abs path>", "1440": "<abs path>"}, "png": {"390": "<abs path>", "1440": "<abs path>"}}]}\`.
 "route" is the app route that shows the screen (grep the app's routes), or "" when the app has none yet.
 
 ## 2. Compare every screen with the app
@@ -167,10 +200,11 @@ Save \`${copy}/screens/<id>[-<state>]-<width>.png\` and the screen's rendered ma
   \`docker compose up -d\`, or a background process logging to \`${root}/.justcode/design/app.log\`) and wait until it answers.
 - Sign in as each role with the seed or demo accounts (\`.justcode/project.md\`, the README, the seed code). When the design
   shows data the app lacks (an order, a customer), add dev sample data with the app's own commands.
+- Each screen and state: \`shot(page, '<app url of its route>', <width>, '${root}/.justcode/design/audit/<id>[-<state>]-<width>.png')\`
+  at each width the design has, signed in as its role (the same code as the design, so the two images compare 1:1).
 - Shared first: the design's fonts load in the app (a font named in the CSS but never loaded is a difference), the
   tokens match, and the shell (header, nav, tab bar, role and branch chips) matches for each role.
-- Each screen and state: screenshot its route at the same widths to \`${root}/.justcode/design/audit/<id>[-<state>]-<width>.png\`.
-  Read the design and app images and list what differs: sections, copy, order, colors, fonts, spacing, components,
+- Read each design and app image pair and list what differs: sections, copy, order, colors, fonts, spacing, components,
   icons, states. Sample names and amounts in the design are not differences. With many screens, give groups of
   screens to subagents when you can, each returning only its differences.
 - Write \`${root}/.justcode/design/audit.md\`: shared differences first, then one section per screen with differences

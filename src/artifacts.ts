@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Task } from './store';
 import * as R from './registry';
+import { SHOT_CODE, SHOT_VERSION } from './skill';
 
 // Artifacts are the basis of every task: small written files each step reads instead of re-exploring the code or
 // carrying a long history. All live under the project's .justcode/ (outside git):
@@ -128,7 +129,9 @@ function where(root: string, s: Source) {
     if (fs.existsSync(path.join(dir, 'screens', 'screens.json')))
       return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `screens/screens.json lists every screen with its PNG per width (the design screenshot to match), its rendered HTML, its app route, and the design's fonts and tokens. ` +
-        `Build the screens your task covers to match: same sections, copy, order, colors, fonts and spacing; only the data comes from the app`;
+        `Build the screens your task covers to match: same sections, copy, order, colors, fonts and spacing; only the data comes from the app. ` +
+        `Screenshot the built screen at each width with this code (browser_run_code_unsafe), the same code that made the design images, so they compare 1:1, ` +
+        `saving to the Screenshots folder as <id>-app-<width>.png:\n\`\`\`js\n${SHOT_CODE}\n\`\`\``;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +
@@ -247,4 +250,28 @@ export function triage(diff: string): { level: 'none' | 'light' | 'full'; files:
   if (code.some(f => SENSITIVE.test(f))) return { level: 'full', files, changed, why: 'touches sensitive code' };
   if (changed <= 60 && code.length <= 3) return { level: 'light', files, changed, why: `small change (${changed} lines in ${code.length} file${code.length === 1 ? '' : 's'})` };
   return { level: 'full', files, changed, why: `${changed} changed lines in ${code.length} files` };
+}
+
+// A PNG's size from its header (IHDR), without an image library.
+export function pngSize(file: string) {
+  try {
+    const b = Buffer.alloc(24), fd = fs.openSync(file, 'r');
+    try { fs.readSync(fd, b, 0, 24, 0); } finally { fs.closeSync(fd); }
+    return b.toString('ascii', 12, 16) === 'IHDR' ? { w: b.readUInt32BE(16), h: b.readUInt32BE(20) } : undefined;
+  } catch { return undefined; }
+}
+
+// Checks a design copy's screens/ made by 🎨 Fix to match: the recipe version, and each PNG exactly its width wide and
+// tall enough to be a whole screen. Returns what is wrong (empty when all is well).
+export function screenShotProblems(copy: string) {
+  let j: any;
+  try { j = JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')); } catch { return ['screens/screens.json is missing or not JSON']; }
+  const out: string[] = [];
+  if (j.capture !== SHOT_VERSION) out.push(`screens.json was not made with the current screenshot recipe (capture ${SHOT_VERSION})`);
+  for (const sc of Array.isArray(j.screens) ? j.screens : []) for (const [w, f] of Object.entries(sc?.png ?? {})) {
+    const z = typeof f === 'string' ? pngSize(f) : undefined;
+    if (!z) out.push(`${sc.id}: ${w} image missing`);
+    else if (z.w !== Number(w) || z.h < 600) out.push(`${path.basename(f as string)}: ${z.w}×${z.h}, expected ${w} wide and at least 600 high`);
+  }
+  return out;
 }
