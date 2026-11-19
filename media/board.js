@@ -190,7 +190,8 @@
       sprint?.branch && tasks.length && tasks.every(t => t.status === 'done') && [`Merge sprint into ${sprint.target}`, `${sprint.branch} → ${sprint.target}`, () => post('mergeSprint', { sprintId: sprint.id })],
       sprint && ['Delete sprint…', 'Asks first. Its tasks move to the Backlog', () => post('deleteSprint', { sprintId: sprint.id })],
       ready.length && [`✓ Merge ready (${ready.length})`, 'Merge every task whose review passed', () => post('mergeReady', { ids: ready.map(t => t.id) })],
-      view === 'backlog' && !showArchived && tasks.some(t => !t.worktree && t.status !== 'doing' && t.status !== 'review') && ['Clear backlog…', 'Archive every idle backlog task (asks first)', () => post('clearBacklog')],
+      !showArchived && (n => n && [`🗂 Archive done (${n})`, 'Hide every done task in this view (asks first; ⋯ › Show archived tasks brings them back)', () => post('tidy', { view, kind: 'done' })])(tasks.filter(t => t.status === 'done').length),
+      !showArchived && (n => n && [`Clear not started (${n})…`, 'Archive every To do task here that has not started (asks first)', () => post('tidy', { view, kind: 'idle' })])(tasks.filter(t => t.status === 'todo' && !t.init && !t.worktree && !t.branch).length),
     ].filter(Boolean);
     $('#toolbar').replaceChildren(
       h('select', { onchange: e => { view = e.target.value; remember(); render(); } },

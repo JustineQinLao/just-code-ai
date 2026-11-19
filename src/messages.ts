@@ -130,13 +130,17 @@ export async function handle(m: any, remote = false) {
       return;
     }
     case 'reorder': s.reorder(m.id, m.before); return;
-    // Clear backlog: archives (never deletes) every backlog task that is not running or in review.
-    case 'clearBacklog': {
-      const idle = s.data.tasks.filter(t => !t.sprintId && !t.archived && !t.init && !t.worktree && t.status !== 'doing' && t.status !== 'review');
-      if (!idle.length) return say('Nothing to clear: the backlog has no idle tasks.');
-      if (!await confirm(`Archive ${idle.length} backlog task${idle.length === 1 ? '' : 's'}? Running and in-review ones stay. Archived tasks come back with ⋯ › Show archived tasks.`, 'Clear backlog')) return;
-      s.setQueue(s.queue.filter(id => !idle.some(t => t.id === id)));
-      for (const t of idle) s.updateTask(t.id, { archived: true });
+    // Tidy a view (all, backlog or a sprint): archive (never delete) its done tasks, or its not-started ones. Running,
+    // in-review and branched tasks stay. Archived tasks come back with ⋯ › Show archived tasks.
+    case 'clearBacklog': m = { ...m, view: 'backlog', kind: 'idle' }; // falls through
+    case 'tidy': {
+      const inView = (t: Task) => !t.archived && !t.chat && (m.view === 'all' || (m.view === 'backlog' ? !t.sprintId : t.sprintId === m.view));
+      const list = s.data.tasks.filter(t => inView(t) && (m.kind === 'done' ? t.status === 'done' : t.status === 'todo' && !t.init && !t.worktree && !t.branch && !r.isOpen(t.id)));
+      const what = m.kind === 'done' ? 'done' : 'not-started';
+      if (!list.length) return say(`Nothing to archive: no ${what} tasks here.`);
+      if (!await confirm(`Archive ${list.length} ${what} task${list.length === 1 ? '' : 's'}? Nothing is deleted: ⋯ › Show archived tasks brings them back.`, 'Archive')) return;
+      s.setQueue(s.queue.filter(id => !list.some(t => t.id === id)));
+      for (const t of list) s.updateTask(t.id, { archived: true });
       return;
     }
     case 'archive': r.stop(m.id); s.updateTask(m.id, { archived: !t?.archived }); return;
