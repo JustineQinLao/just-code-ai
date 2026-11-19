@@ -261,9 +261,11 @@ stylesheet URLs], "tokens": {"--name": "value"}, "screens": [{"id", "title", "gr
 
 ## 3. Sample data, then only the shared fixes
 
-- Before the diff, write \`${root}/.justcode/design/sample.json\`: a JSON array of the design's sample texts, the names,
-  amounts, dates, order numbers and addresses the app fills from its own data (e.g. ["Maria Santos", "₱75", "#AR-10488"]).
-  design-diff then never reports them as missing or extra. Keep \`app-jobs.json\` where it is: JustCode reuses it to
+- Before the diff, write \`${root}/.justcode/design/sample.json\`: a JSON array of the design's sample VALUES only, the
+  ones the app fills from its own data: people and business names, amounts, dates, times, counts, order numbers,
+  addresses (e.g. ["Maria Santos", "₱75", "#AR-10488", "18 Nov, 5:30 PM"]). Never labels, headings, buttons or
+  sentences: those are the copy to match. Each entry at most 40 characters and 5 words (longer ones are ignored); a few
+  dozen to ~150 in all. design-diff then never reports a text that IS a sample value as missing or extra. Keep \`app-jobs.json\` where it is: JustCode reuses it to
   measure the app again after each round of fixes, with no Claude.
 - Plan ONLY the shared differences now (shared.txt, plus fonts and shell): at most 3 tasks, each one CSS or shared
   component change that fixes many screens. JustCode measures again once they merge and plans the per-screen tasks

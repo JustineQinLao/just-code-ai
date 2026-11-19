@@ -647,6 +647,8 @@ export async function fixDesign(r: Runner, sourceId?: string) {
   const designs = A.loadSources(r.root).filter(s => A.hasCopy(r.root, s) || s.kind === 'folder');
   const src = designs.find(s => s.id === sourceId) ?? (designs.length === 1 ? designs[0] : undefined);
   if (!src) { vscode.window.showWarningMessage(designs.length ? 'Pick the design under 🎨 Design → Fix to match.' : 'Add the design under 📎 Sources and press Save copy first.'); return; }
+  // The audit measures the running app: make it the checked-out code first (a fix merged since it was built).
+  if (App.detect(r.root) && !await App.current(r.root, 'Fix to match')) vscode.window.showWarningMessage('Fix to match: the app is not running. The audit will try to start it.');
   const task = r.store.addTask({ title: 'Fix the UI to match the design: compare every screen', description: `Claude splits ${src.note || src.ref} into screen images, compares each screen with the running app, writes .justcode/design/audit.md, and ends with the fix tasks. JustCode adds them as a sprint and runs them.`,
     mode: r.defaultMode, where: 'direct', init: 'fixdesign', sources: [src.id], allow: ['Write(.justcode/**)', 'Edit(.justcode/**)'] });
   await r.run(task.id);

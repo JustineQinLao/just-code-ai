@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { SHOT_CODE, MEASURE_FN } from './skill';
-import { parseMeasure, diffItems, Diff } from './designdiff';
+import { parseMeasure, diffItems, Diff, usableSample } from './designdiff';
 
 // `cli.js design-capture <jobs.json>`: every screenshot and measure of a design or an app in ONE command, so an audit
 // of many screens is not hundreds of tool calls (which sessions give up on, or auto mode blocks as a script). It drives
@@ -154,7 +154,7 @@ export const screenOf = (name: string) => name.replace(/-\d{3,4}$/, '');
 
 // The sample texts the audit listed (.justcode/design/sample.json: an array of strings), or none.
 export function loadSample(file: string): string[] {
-  try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []; } catch { return []; }
+  try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? usableSample(v.filter((x): x is string => typeof x === 'string')) : []; } catch { return []; }
 }
 
 // The next round of fix tasks, planned from the measures alone (no Claude): when a rule differs on several screens,

@@ -20,9 +20,17 @@ export function parseMeasure(text: string): Measure {
 
 const TOL = 6;   // px: anti-aliasing and rounding, not a design difference
 
-// Sample data in the design (names, amounts, dates the app fills from its own data): a text containing one of these
-// is never "missing" or "extra", only compared for style when both sides have it.
-export const isSample = (text: string, sample: string[]) => { const t = text.toLowerCase(); return sample.some(s => !!s && t.includes(s.toLowerCase())); };
+// Sample data in the design (names, amounts, dates the app fills from its own data): a text that IS one of these
+// (alone, or with only digits, symbols and up to 3 letters around it, e.g. "₱75 · 3 items") is never "missing" or
+// "extra". A sentence that merely mentions one ("Then apply to Agos Water – Malanday") is still compared.
+const norm = (x: string) => x.toLowerCase().replace(/\s+/g, ' ').trim();
+export const isSample = (text: string, sample: string[]) => {
+  const t = norm(text);
+  return sample.some(raw => { const s = norm(raw); return !!s && (t === s || (t.includes(s) && t.split(s).join('').replace(/[^a-z]/g, '').length <= 3)); });
+};
+// Only data-like entries count as sample: short (at most 40 characters and 5 words). Labels, headings and sentences are
+// design copy, never sample, even when an audit lists them.
+export const usableSample = (list: string[]) => list.filter(x => { const t = x.trim(); return t.length > 0 && t.length <= 40 && t.split(/\s+/).length <= 5; });
 
 export function diffItems(design: Measure, app: Measure, sample: string[] = []): Diff[] {
   const out: Diff[] = [], pool = new Map<string, Item[]>(), k = (x: Item) => x.text.trim().toLowerCase();

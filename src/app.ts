@@ -612,6 +612,22 @@ export const needsBuild = (files: string[]) => files.some(f => !NO_BUILD.test(f)
 const BUILD_INPUT = /(^|\/)(Dockerfile[^/]*|[^/]*\.dockerfile|\.dockerignore|(docker-)?compose[^/]*\.ya?ml|package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|Gemfile(\.lock)?|composer\.(json|lock)|go\.(mod|sum)|Cargo\.(toml|lock)|mix\.(exs|lock)|pom\.xml|build\.gradle(\.kts)?|[^/]*\.csproj|nginx[^/]*\.conf|\.env\.example)$|(^|\/)migrations\//i;
 export const modeFor = (files: string[]): Mode => files.some(f => BUILD_INPUT.test(f)) ? 'build' : 'restart';
 
+// Before measuring the app (Fix to match): make the running app the checked-out commit. Waits for a build in progress,
+// starts it when it is not running, and rebuilds or restarts it when it was built from an older commit with changes
+// that need it. Returns whether the app is up afterwards.
+export async function current(root: string, why: string) {
+  await whenIdle(root);
+  let s = load(root);
+  if (s.state !== 'running') { if (detect(root)) await start(root, why, s.head ? 'start' : 'build').catch(() => undefined); return load(root).state === 'running'; }
+  const head = await headOf(root);
+  if (s.head && head && s.head !== head) {
+    const files = (await out('git', ['diff', '--name-only', s.head, head], root).catch(() => '')).split('\n').filter(Boolean);
+    if (needsBuild(files)) await start(root, why, modeFor(files)).catch(() => undefined);
+  }
+  s = load(root);
+  return s.state === 'running';
+}
+
 // After a sprint merged (always, when code changed) or a task merged into the checked-out branch (when the app runs):
 // rebuild only when the change needs it, otherwise restart.
 export async function afterMerge(root: string, files: string[], why: string, always: boolean) {

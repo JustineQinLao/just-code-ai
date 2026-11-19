@@ -267,8 +267,7 @@ export const plannerMethods = {
     if (!fs.existsSync(jobsFile)) { this.d.notify('warn', 'Fix to match: no .justcode/design/app-jobs.json to measure the app again. Run Fix to match again.'); return; }
     if (st.round >= DF.MAX_ROUNDS) { DF.save(this.root, { ...st, done: true }); this.d.notify('warn', `Fix to match: ${DF.MAX_ROUNDS} rounds done. What still differs is in .justcode/design/audit (*.diff.txt).`); return; }
     this.d.notify('info', 'Fix to match: the round merged. Measuring every screen again (no Claude)…');
-    await App.whenIdle(this.root);
-    if (App.load(this.root).state !== 'running') await App.start(this.root, 'design re-measure', 'start').catch(() => undefined);
+    if (!await App.current(this.root, 'Fix to match: measure again')) { this.d.notify('error', 'Fix to match: the app is not running, so it could not be measured again. Start it with ▶ App, then run Fix to match.'); return; }
     const r = await DC.capture(DC.parseJobs(fs.readFileSync(jobsFile, 'utf8')), () => undefined).catch((e: Error) => ({ done: 0, failed: [e.message] }));
     if (!r.done) { this.d.notify('error', `Fix to match: could not measure the app again (${r.failed[0] ?? 'nothing captured'}). Is it running?`); return; }
     const planned = this.designPlan(st.copy, true);
