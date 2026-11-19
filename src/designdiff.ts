@@ -30,9 +30,9 @@ export const isSample = (text: string, sample: string[]) => {
   const t = norm(text);
   return sample.some(raw => { const s = norm(raw); return !!s && (t === s || (t.includes(s) && t.split(s).join('').replace(/[^a-z]/g, '').length <= 3)); });
 };
-// Only data-like entries count as sample: short (at most 40 characters and 5 words). Labels, headings and sentences are
+// Only data-like entries count as sample: short (at most 60 characters and 8 words, room for an address). Labels, headings and sentences are
 // design copy, never sample, even when an audit lists them.
-export const usableSample = (list: string[]) => list.filter(x => { const t = x.trim(); return t.length > 0 && t.length <= 40 && t.split(/\s+/).length <= 5; });
+export const usableSample = (list: string[]) => list.filter(x => { const t = x.trim(); return t.length > 0 && t.length <= 60 && t.split(/\s+/).length <= 8; });
 
 // An unlabelled icon, image or control is measured under its tag name ("svg"): with nothing to match it by, pairing it
 // with "the next svg" compares unrelated elements, so such items are left out of the diff.
@@ -45,12 +45,14 @@ export function diffItems(design: Measure, app: Measure, sample: string[] = []):
   for (const y of app.items) { const key = k(y); if (!pool.has(key)) pool.set(key, []); pool.get(key)!.push(y); }
   for (const x of design.items) {
     const y = pool.get(k(x))?.shift();
-    if (!y) { if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"` }); continue; }
+    // Missing and extra texts carry a rule too: the same text missing on many screens is one shared piece (a header,
+    // a nav item), fixed once, not per screen.
+    if (!y) { if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"`, rule: `missing in app: "${x.text.slice(0, 40)}"`, text: x.text }); continue; }
     const cls = (x.cls || y.cls || '').trim(), on = cls ? `.${cls.split(/\s+/).slice(0, 2).join('.')}` : `<${x.text.slice(0, 20)}>`;
     for (const p of ['font', 'size', 'weight', 'color', 'align', 'bg', 'radius'] as const)
       if (String(x[p]) !== String(y[p])) out.push({ line: `"${x.text}" ${p}: design ${x[p]}, app ${y[p]}`, rule: `${on} ${p}: design ${x[p]}, app ${y[p]}`, text: x.text });
     for (const p of ['x', 'w', 'h'] as const)
-      if (Math.abs(x[p] - y[p]) > TOL) out.push({ line: `"${x.text}" ${p}: design ${x[p]}px, app ${y[p]}px` });
+      if (Math.abs(x[p] - y[p]) > TOL) out.push({ line: `"${x.text}" ${p}: design ${x[p]}px, app ${y[p]}px`, rule: `${on} ${p}: design ${x[p]}px, app ${y[p]}px`, text: x.text });
     if (x.box && y.box) {
       const card = `${x.box.x}:${x.box.w}:${x.box.bg}`, at = `container of "${x.text}"`;
       for (const p of ['x', 'w'] as const)
@@ -59,7 +61,7 @@ export function diffItems(design: Measure, app: Measure, sample: string[] = []):
         if (x.box[p] !== y.box[p]) once(`${card}:${p}`, { line: `${at} ${p}: design ${x.box[p]}, app ${y.box[p]}`, rule: `${on} container ${p}: design ${x.box[p]}, app ${y.box[p]}`, text: x.text });
     } else if (x.box && !y.box) out.push({ line: `"${x.text}" container: design has a card or panel (${x.box.w}px, ${x.box.bg}), app has none` });
   }
-  for (const rest of pool.values()) for (const y of rest) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"` });
+  for (const rest of pool.values()) for (const y of rest) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"`, rule: `extra in app: "${y.text.slice(0, 40)}"`, text: y.text });
   return out;
 }
 

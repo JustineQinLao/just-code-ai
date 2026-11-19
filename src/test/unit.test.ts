@@ -1850,8 +1850,8 @@ test('fix to match rounds: sample data is not a difference, a rule on many scree
 
 import { isSample, usableSample } from '../designdiff';
 test('design sample data: whole values only, so a sentence mentioning one is still compared', () => {
-  const sample = usableSample(['Malanday', '₱75', 'Then apply to Agos Water – Malanday. You will not need to register again.']);
-  assert.deepEqual(sample, ['Malanday', '₱75'], 'sentences are copy, not sample');
+  const sample = usableSample(['Malanday', '₱75', 'Blk 7 Lot 12 Sampaguita St., Brgy. Malanday', 'Then apply to Agos Water – Malanday. You will not need to register again.']);
+  assert.deepEqual(sample, ['Malanday', '₱75', 'Blk 7 Lot 12 Sampaguita St., Brgy. Malanday'], 'an address is sample, a sentence is copy');
   assert.ok(isSample('Malanday', sample));
   assert.ok(isSample('₱75 · 3', sample));
   assert.ok(!isSample('Then apply to Agos Water – Malanday.', sample));
