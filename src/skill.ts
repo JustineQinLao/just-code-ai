@@ -249,7 +249,8 @@ stylesheet URLs], "tokens": {"--name": "value"}, "screens": [{"id", "title", "gr
   widths: url \`<app>/<url>\`, png \`${root}/.justcode/design/audit/<name>.png\`, json \`${root}/.justcode/design/audit/<name>.json\`
   (the same <name> as the design). Run design-capture once.
 - Then \`node ${arg(cli)} design-diff --all ${copy}/screens ${root}/.justcode/design/audit ${root}/.justcode/design/audit\`:
-  one \`<name>.diff.txt\` per screen and a summary. These measured lines are the differences (exact fonts, sizes, colors,
+  one \`<name>.diff.txt\` per screen (starting with the share of pixels that differ, from pixelmatch as in Playwright's
+  screenshot tests) and a \`<name>.diff.png\` (differences in red), plus a summary. These measured lines are the differences (exact fonts, sizes, colors,
   widths, padding, missing or extra text). Read the diff files, and the image pairs only for what numbers cannot show
   (an icon, a layout order). Sample names and amounts in the design are not differences.
 - Shared first: the design's fonts load in the app (a font named in the CSS but never loaded is a difference), the

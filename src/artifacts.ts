@@ -136,7 +136,7 @@ function where(root: string, s: Source, cli?: string) {
         `Then check them in ONE command: write a jobs file in the Screenshots folder ` +
         `({"groups": [{"setup": "<async (page) => {...} signing in as the screen's role>", "shots": [{"url": "<app url of the state>", "width": 390, "png": "<Screenshots folder>/<name>.png", "json": "<Screenshots folder>/<name>.json"}]}]}, ` +
         `one shot per screen and width, <name> = the design file's name, e.g. c-login-390), run node ${arg(cli ?? '<cli.js>')} design-capture <jobs file> (Bash, timeout 600000), ` +
-        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${dir}/screens <Screenshots folder> <Screenshots folder> --sample ${arg(jc(root, 'design', 'sample.json'))}. Fix what the <name>.diff.txt files report until only sample data differs.`;
+        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${dir}/screens <Screenshots folder> <Screenshots folder> --sample ${arg(jc(root, 'design', 'sample.json'))}. Fix what the <name>.diff.txt files report until only sample data differs. Each starts with the share of pixels that differ; <name>.diff.png shows where in red: look at it for what numbers cannot say (an icon, an order, a missing block). Never redefine a design class in a page or component: fix it once in the shared styles.`;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +

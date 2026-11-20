@@ -396,7 +396,7 @@ export function reviewPrompt(t: Task, base: string, diff: string, test: { shots:
         `capture the screen with exactly: \`node ${q(test.cli!)} screenshot ${q(test.shots + '/<name>.png')}\`, then Read the PNG.`
       : test.web ? `# UI checks\nFor a web UI with a running dev server: open the page with the Playwright MCP tools, then ${SHOT_RULE(test.shots)} Read the PNG.` : '',
     test.web && DESIGN_FILE.test(t.description ?? '') ? `# Design match\nThis task must match the design screens its Files name. The builder saved design and app screenshots in ${test.shots}: ` +
-      `Read the builder's <id>-<width>.diff.txt for each screen and width (design measured against the built screen), and the design and app images. A missing diff or screenshot, a diff line that is not sample data, or a visible difference (sections, copy, order, colors, fonts, spacing, icons) ` +
+      `Read the builder's <id>-<width>.diff.txt for each screen and width (design measured against the built screen, with the share of pixels that differ), and its .diff.png where layout is in question. A missing diff or screenshot, a diff line that is not sample data, or a visible difference (sections, copy, order, colors, fonts, spacing, icons) ` +
       `that the user has not accepted, is a blocking issue: name the screen and the difference. Sample names and amounts in the design are not differences.` : '',
     test.accepted?.length ? `# Accepted by the user (not blocking; do not report again)\n${test.accepted.map(a => `- ${a}`).join('\n')}` : '',
     test.fixNote ? `# The builder's reply to the previous review round\n${test.fixNote}` : '',

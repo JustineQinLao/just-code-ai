@@ -38,16 +38,23 @@ export const usableSample = (list: string[]) => list.filter(x => { const t = x.t
 // with "the next svg" compares unrelated elements, so such items are left out of the diff.
 export const unlabelled = (x: Item) => /^(svg|img|input|button|select|textarea)$/i.test(x.text.trim());
 
+// How alike two texts are: the Dice coefficient of their letter pairs (1 = same, 0 = nothing shared).
+export function similarity(a: string, b: string) {
+  const pairs = (x: string) => { const t = x.toLowerCase().replace(/\s+/g, ' ').trim(), m = new Map<string, number>(); for (let i = 0; i < t.length - 1; i++) { const p = t.slice(i, i + 2); m.set(p, (m.get(p) ?? 0) + 1); } return m; };
+  const A = pairs(a), B = pairs(b);
+  let both = 0, n = 0;
+  for (const [p, c] of A) { both += Math.min(c, B.get(p) ?? 0); n += c; }
+  for (const c of B.values()) n += c;
+  return n ? (2 * both) / n : (a.trim().toLowerCase() === b.trim().toLowerCase() ? 1 : 0);
+}
+const NEAR = 0.6;   // texts this alike (and on the same kind of element) are the same element with different copy
+
 export function diffItems(design: Measure, app: Measure, sample: string[] = []): Diff[] {
   design = { ...design, items: design.items.filter(x => !unlabelled(x)) }; app = { ...app, items: app.items.filter(x => !unlabelled(x)) };
   const out: Diff[] = [], pool = new Map<string, Item[]>(), k = (x: Item) => x.text.trim().toLowerCase();
   const seen = new Set<string>(), once = (key: string, d: Diff) => { if (!seen.has(key)) { seen.add(key); out.push(d); } };   // a card's difference once, not per text in it
   for (const y of app.items) { const key = k(y); if (!pool.has(key)) pool.set(key, []); pool.get(key)!.push(y); }
-  for (const x of design.items) {
-    const y = pool.get(k(x))?.shift();
-    // Missing and extra texts carry a rule too: the same text missing on many screens is one shared piece (a header,
-    // a nav item), fixed once, not per screen.
-    if (!y) { if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"`, rule: `missing in app: "${x.text.slice(0, 40)}"`, text: x.text }); continue; }
+  const compare = (x: Item, y: Item) => {
     const cls = (x.cls || y.cls || '').trim(), on = cls ? `.${cls.split(/\s+/).slice(0, 2).join('.')}` : `<${x.text.slice(0, 20)}>`;
     for (const p of ['font', 'size', 'weight', 'color', 'align', 'bg', 'radius'] as const)
       if (String(x[p]) !== String(y[p])) out.push({ line: `"${x.text}" ${p}: design ${x[p]}, app ${y[p]}`, rule: `${on} ${p}: design ${x[p]}, app ${y[p]}`, text: x.text });
@@ -60,8 +67,30 @@ export function diffItems(design: Measure, app: Measure, sample: string[] = []):
       for (const p of ['pad', 'radius', 'bg', 'border'] as const)
         if (x.box[p] !== y.box[p]) once(`${card}:${p}`, { line: `${at} ${p}: design ${x.box[p]}, app ${y.box[p]}`, rule: `${on} container ${p}: design ${x.box[p]}, app ${y.box[p]}`, text: x.text });
     } else if (x.box && !y.box) out.push({ line: `"${x.text}" container: design has a card or panel (${x.box.w}px, ${x.box.bg}), app has none` });
+  };
+  // 1. The same text on both sides.
+  const unmatched: Item[] = [];
+  for (const x of design.items) { const y = pool.get(k(x))?.shift(); if (y) compare(x, y); else unmatched.push(x); }
+  // 2. Near text on the same kind of element (same first class, or nearly the same words): one element whose copy
+  //    differs, compared like the rest, instead of a "missing" plus an "extra".
+  const left = [...pool.values()].flat();
+  for (const x of unmatched) {
+    let best: Item | undefined, score = 0;
+    for (const y of left) {
+      const sim = similarity(x.text, y.text), same = (x.cls || '').split(/\s+/)[0] === (y.cls || '').split(/\s+/)[0];
+      if (sim > score && sim >= NEAR && (same || sim >= 0.8)) { best = y; score = sim; }
+    }
+    if (best) {
+      left.splice(left.indexOf(best), 1);
+      if (!isSample(x.text, sample) && !isSample(best.text, sample)) out.push({ line: `copy differs: design "${x.text}", app "${best.text}"`, rule: `copy "${x.text.slice(0, 40)}": app "${best.text.slice(0, 40)}"`, text: x.text });
+      compare(x, best);
+      continue;
+    }
+    // Missing and extra texts carry a rule too: the same text missing on many screens is one shared piece (a header,
+    // a nav item), fixed once, not per screen.
+    if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"`, rule: `missing in app: "${x.text.slice(0, 40)}"`, text: x.text });
   }
-  for (const rest of pool.values()) for (const y of rest) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"`, rule: `extra in app: "${y.text.slice(0, 40)}"`, text: y.text });
+  for (const y of left) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"`, rule: `extra in app: "${y.text.slice(0, 40)}"`, text: y.text });
   return out;
 }
 

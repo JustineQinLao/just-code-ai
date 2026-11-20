@@ -1788,9 +1788,9 @@ test('design diff: measured from code, matched by text, within a few pixels', ()
   const app = { items: [item('Log in', { size: 34, font: 'Trebuchet MS', w: 103 }), item('Password', { box: { x: 500, w: 430, pad: '40px', radius: '12px', bg: 'rgb(255, 255, 255)', border: '1px rgb(0, 0, 0)' } }), item('Show password')] };
   assert.deepEqual(diffMeasures(design, app), [
     '"Log in" font: design Bricolage Grotesque, app Trebuchet MS',
-    'missing in app: "Then apply to Agos"',
     'container of "Password" x: design 530px, app 500px',
     'container of "Password" w: design 380px, app 430px',
+    'missing in app: "Then apply to Agos"',
     'extra in app: "Show password"',
   ]);
   assert.deepEqual(diffMeasures(design, design), []);
@@ -1816,7 +1816,7 @@ test('design capture: one jobs file for every screen, run_code results read back
   fs.writeFileSync(path.join(a, 'x-390.json'), JSON.stringify({ items: [it('Hi', 15)] }));
   fs.writeFileSync(path.join(d, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
   fs.writeFileSync(path.join(a, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
-  assert.deepEqual(diffAll(d, a, a).rows, [{ name: 'x-390', n: 1 }, { name: 'y-390', n: 0 }]);
+  assert.deepEqual(diffAll(d, a, a).rows.map(r => ({ name: r.name, n: r.n })), [{ name: 'x-390', n: 1 }, { name: 'y-390', n: 0 }]);
   assert.match(fs.readFileSync(path.join(a, 'x-390.diff.txt'), 'utf8'), /"Hi" size: design 16, app 15/);
 });
 
@@ -1855,4 +1855,22 @@ test('design sample data: whole values only, so a sentence mentioning one is sti
   assert.ok(isSample('Malanday', sample));
   assert.ok(isSample('₱75 · 3', sample));
   assert.ok(!isSample('Then apply to Agos Water – Malanday.', sample));
+});
+
+import { similarity } from '../designdiff';
+import { pixelScore } from '../designcapture';
+import { PNG } from 'pngjs';
+test('design diff: near copy is one element, and screenshots get a pixel score with a diff image', () => {
+  const it = (text: string, cls = 'muted') => ({ text, cls, x: 0, w: 10, h: 10, font: 'F', size: 14, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
+  assert.ok(similarity('You won\'t need to register again.', 'You will not need to register again.') > 0.6);
+  assert.deepEqual(diffMeasures({ items: [it("You won't need to register again.")] }, { items: [it('You will not need to register again.')] }),
+    ['copy differs: design "You won\'t need to register again.", app "You will not need to register again."']);
+  assert.deepEqual(diffMeasures({ items: [it('Orders')] }, { items: [it('Logout', 'x')] }), ['missing in app: "Orders"', 'extra in app: "Logout"'], 'unalike texts stay apart');
+  const root = tmp(), png = (name: string, w: number, h: number, red: number) => { const p = new PNG({ width: w, height: h }); for (let i = 0; i < p.data.length; i += 4) { p.data[i] = (i / 4) < red ? 255 : 255; p.data[i + 1] = (i / 4) < red ? 0 : 255; p.data[i + 2] = (i / 4) < red ? 0 : 255; p.data[i + 3] = 255; } fs.writeFileSync(path.join(root, name), PNG.sync.write(p)); return path.join(root, name); };
+  const a = png('a.png', 10, 10, 0), same = png('b.png', 10, 10, 0), half = png('c.png', 10, 10, 50), longer = png('d.png', 10, 20, 0);
+  assert.equal(pixelScore(a, same), 0);
+  assert.equal(pixelScore(a, half, path.join(root, 'diff.png')), 50);
+  assert.ok(fs.existsSync(path.join(root, 'diff.png')));
+  assert.equal(pixelScore(a, longer), 50, 'rows only one side has count as different');
+  assert.equal(pixelScore(a, png('e.png', 20, 10, 0)), 100, 'other widths are not comparable');
 });

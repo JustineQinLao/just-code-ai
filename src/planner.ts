@@ -251,7 +251,9 @@ export const plannerMethods = {
   // Plans from the latest measures in .justcode/design/audit (recaptured first when asked): shared rules, else screens.
   designPlan(this: Runner, copy: string, _fresh: boolean) {
     const auditDir = path.join(this.root, '.justcode', 'design', 'audit');
-    const { rows, shared } = DC.diffAll(path.join(copy, 'screens'), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
+    const { rows, shared, avgPx } = DC.diffAll(path.join(copy, 'screens'), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
+    this.designPx = avgPx;
+    this.designScreensPx = Object.fromEntries(rows.filter(r => r.px !== undefined).map(r => [r.name, r.px!]));
     let screens: { id: string; title?: string; url?: string }[] = [];
     try { screens = JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
     this.designLines = rows.reduce((n, r) => n + r.n, 0);   // the measured total, for "is the fix still making progress"
@@ -291,14 +293,22 @@ export const plannerMethods = {
     if (!planned.length) { DF.save(this.root, { ...st, done: true }); this.d.notify('info', `Fix to match: every measured screen now matches the design (round ${st.round}).`); return; }
     // Go on while the measured differences keep falling; stop after STALE_ROUNDS rounds without progress (fixes that do
     // not land would otherwise repeat). Measure again always plans.
-    const lines = this.designLines ?? 0, stale = st.lines !== undefined && lines >= st.lines ? (st.stale ?? 0) + 1 : 0;
+    // Progress is the average pixel score (what you see) when there is one, else the count of measured differences.
+    const lines = this.designLines ?? 0, px = this.designPx, screensPx = this.designScreensPx ?? {};
+    const better = px !== undefined && st.px !== undefined ? px <= st.px - 0.5 : st.lines === undefined || lines < st.lines;
+    const stale = st.lines === undefined && st.px === undefined ? 0 : better ? 0 : (st.stale ?? 0) + 1;
+    // Screens a round made worse (2+ points more pixels differing): named, so a regression is seen, not averaged away.
+    const worse = Object.entries(screensPx).filter(([n, v]) => st.screensPx?.[n] !== undefined && v >= st.screensPx[n] + 2).map(([n, v]) => `${n} ${st.screensPx![n]}→${v}%`);
+    if (worse.length) this.d.notify('warn', `Fix to match: the last round made ${worse.length} screen${worse.length === 1 ? '' : 's'} look less like the design: ${worse.slice(0, 6).join(', ')}${worse.length > 6 ? ', …' : ''}. See .justcode/design/audit/<name>.diff.png.`);
+    const saved = { ...st, lines, px, screensPx, stale };
     if (!manual && stale >= DF.STALE_ROUNDS) {
-      DF.save(this.root, { ...st, lines, stale, done: true });
-      this.d.notify('warn', `Fix to match: ${DF.STALE_ROUNDS} rounds without fewer differences (${lines} left), so it stopped. See .justcode/design/audit (*.diff.txt); Measure again to go on.`);
+      DF.save(this.root, { ...saved, done: true });
+      this.d.notify('warn', `Fix to match: ${DF.STALE_ROUNDS} rounds without getting closer to the design (${px !== undefined ? `${px}% pixels differ on average` : `${lines} differences left`}), so it stopped. See .justcode/design/audit; Measure again to go on.`);
       return;
     }
     const round = manual ? st.round : st.round + 1;
-    DF.save(this.root, { ...st, round, lines, stale, done: false });
+    DF.save(this.root, { ...saved, round, done: false });
+    if (px !== undefined) this.d.notify('info', `Fix to match: ${px}% of pixels differ from the design on average${st.px !== undefined ? ` (was ${st.px}%)` : ''}.`);
     this.addRound(planned.map(x => ({ title: x.title, description: taskText(x) })), round);
   },
 

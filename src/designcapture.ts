@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { PNG } from 'pngjs';
 import { SHOT_CODE, MEASURE_FN } from './skill';
 import { parseMeasure, diffItems, Diff, usableSample, MEASURE_V } from './designdiff';
 
@@ -127,7 +128,26 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
 // in outDir, a one-line-per-screen summary (most differences first), and the shared differences: the same rule (class,
 // property and values) differing on SHARED_MIN or more screens, which one CSS change fixes everywhere (shared.txt).
 export const SHARED_MIN = 3;
-export interface DiffRow { name: string; n: number }
+export interface DiffRow { name: string; n: number; px?: number }
+
+// pixelmatch (the library Playwright's toHaveScreenshot uses), ESM, loaded once. threshold 0.1 is its own default;
+// anti-aliased pixels are ignored (includeAA false), so font smoothing is not a difference.
+type PixelMatch = (a: Uint8Array, b: Uint8Array, out: Uint8Array | null, w: number, h: number, o?: { threshold?: number; includeAA?: boolean }) => number;
+let pm: PixelMatch | undefined;
+const pixelmatch = (): PixelMatch => { if (!pm) { const m = require('pixelmatch'); pm = (m.default ?? m) as PixelMatch; } return pm; };
+
+// How different two screenshots are, in percent of the taller one's pixels: pixelmatch over the rows both have, plus
+// every row only one has (a page that is longer or shorter differs there). Writes a diff image (changed pixels red)
+// when out is given. Different widths: 100 (not comparable).
+export function pixelScore(design: string, app: string, out?: string): number {
+  const A = PNG.sync.read(fs.readFileSync(design)), B = PNG.sync.read(fs.readFileSync(app));
+  if (A.width !== B.width) return 100;
+  const w = A.width, h = Math.min(A.height, B.height), H = Math.max(A.height, B.height), bytes = w * h * 4;
+  const diff = new PNG({ width: w, height: h });
+  const n = pixelmatch()(A.data.subarray(0, bytes), B.data.subarray(0, bytes), diff.data, w, h, { threshold: 0.1 });
+  if (out) fs.writeFileSync(out, PNG.sync.write(diff));
+  return Math.round(((n + (H - h) * w) / (w * H)) * 1000) / 10;
+}
 export interface Shared { rule: string; screens: string[]; examples: string[] }
 export function diffAll(designDir: string, appDir: string, outDir: string, sample: string[] = []) {
   fs.mkdirSync(outDir, { recursive: true });
@@ -146,13 +166,18 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
       rules.get(x.rule)!.add(screen);
       if (x.text && texts.get(x.rule)!.size < 3) texts.get(x.rule)!.add(`"${x.text.slice(0, 40)}" on ${screen}`);
     }
-    fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (d.length ? d.map(x => x.line).join('\n') : 'No differences.') + '\n');
-    rows.push({ name, n: d.length });
+    const dp = path.join(designDir, `${name}.png`), ap = path.join(appDir, `${name}.png`);
+    let px: number | undefined;
+    try { if (fs.existsSync(dp) && fs.existsSync(ap)) px = pixelScore(dp, ap, path.join(outDir, `${name}.diff.png`)); } catch { /* a broken image: no score */ }
+    fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (px !== undefined ? `Pixels differing: ${px}% (see ${name}.diff.png: red is different)\n` : '') + (d.length ? d.map(x => x.line).join('\n') : 'No differences.') + '\n');
+    rows.push({ name, n: d.length, px });
   }
   rows.sort((a, b) => b.n - a.n);
   const shared: Shared[] = [...rules].filter(([, v]) => v.size >= SHARED_MIN).map(([rule, v]) => ({ rule, screens: [...v].sort(), examples: [...texts.get(rule)!] })).sort((a, b) => b.screens.length - a.screens.length);
   fs.writeFileSync(path.join(outDir, 'shared.txt'), shared.length ? shared.map(x => `${x.rule}  (${x.screens.length} screens, e.g. ${x.examples.join('; ')})`).join('\n') + '\n' : 'No shared differences.\n');
-  return { rows, shared };
+  const scored = rows.filter(r => r.px !== undefined);
+  const avgPx = scored.length ? Math.round(scored.reduce((n, r) => n + r.px!, 0) / scored.length * 10) / 10 : undefined;
+  return { rows, shared, avgPx };
 }
 
 // "c-login-390" → "c-login"; "c-root-guest-1440" → "c-root-guest".
@@ -175,7 +200,9 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
     const top = shared.slice(0, 15), examples = [...new Set(top.flatMap(x => x.screens))].slice(0, 3);
     return [{ title: 'Design fix: shared styles', goal: `Fix the ${top.length} style rule${top.length === 1 ? '' : 's'} that differ from the design on several screens at once, in the shared styles (one change each, not per page).`,
       files: [...examples.flatMap(refs).filter(f => f.endsWith('.css')), path.join(auditDir, 'shared.txt')],
-      done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens, e.g. ${x.examples.join('; ')})`), 'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] }];
+      done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens, e.g. ${x.examples.join('; ')})`),
+        'each fix is made once in the shared styles or component, and no page or component file overrides those design classes locally any more (grep the class names)',
+        'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] }];
   }
   const left = [...new Set(rows.filter(r => r.n > 0).map(r => screenOf(r.name)))];
   const byArea = new Map<string, string[]>();
@@ -187,7 +214,9 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
     out.push({ title: `Design fix: ${names.join(', ')}`.slice(0, 90),
       goal: `Make ${part.map(id => `${id}${info(id)?.url ? ` (${info(id)!.url})` : ''}`).join(', ')} match the design at every width.`,
       files: part.flatMap(refs),
-      done: [...part.map(id => `every line in ${path.join(auditDir, `${id}-<width>.diff.txt`)} is fixed, except sample data`), 'the design-diff of these screens shows only sample data', 'tests for the changed code pass'] });
+      done: [...part.map(id => { const px = rows.filter(r => screenOf(r.name) === id && r.px !== undefined).map(r => `${r.px}% at ${r.name.slice(id.length + 1)}`);
+          return `every line in ${path.join(auditDir, `${id}-<width>.diff.txt`)} is fixed, except sample data${px.length ? `; pixels differing go down from ${px.join(', ')}` : ''}`; }),
+        'the design-diff of these screens shows only sample data', 'tests for the changed code pass'] });
   }
   return out;
 }

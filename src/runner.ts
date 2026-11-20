@@ -659,7 +659,9 @@ export class Runner {
 
   defaultMode: Task['mode'] = 'auto';
   designStatus?: string;   // Fix to match measuring: what it is on now (shown on the board), undefined when idle
-  designLines?: number;    // Fix to match: the total of measured differences at the last plan  // set by the extension from justCode.defaultMode
+  designLines?: number;    // Fix to match: the total of measured differences at the last plan
+  designPx?: number;       // Fix to match: average % of pixels differing at the last plan
+  designScreensPx?: Record<string, number>;  // set by the extension from justCode.defaultMode
 
 
   dispose() {

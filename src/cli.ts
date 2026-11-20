@@ -53,8 +53,9 @@ function main(argv: string[]): number | undefined {
     if (cmd === 'design-diff' && rest[0] === '--all') {
       if (rest.length < 4) { console.error('Usage: cli.js design-diff --all <designDir> <appDir> <outDir>'); return 1; }
       const si = rest.indexOf('--sample'), sample = loadSample(si > 0 ? rest[si + 1] : path.join(rest[3], '..', 'sample.json'));
-      const { rows, shared } = diffAll(rest[1], rest[2], rest[3], sample);
-      console.log(rows.length ? rows.map(r => `${r.name}: ${r.n ? `${r.n} difference${r.n === 1 ? '' : 's'}` : 'matches'}`).join('\n') : 'No screen measured on both sides (same <id>-<width>.json names).');
+      const { rows, shared, avgPx } = diffAll(rest[1], rest[2], rest[3], sample);
+      console.log(rows.length ? rows.map(r => `${r.name}: ${r.n ? `${r.n} difference${r.n === 1 ? '' : 's'}` : 'matches'}${r.px !== undefined ? `, ${r.px}% pixels` : ''}`).join('\n') : 'No screen measured on both sides (same <id>-<width>.json names).');
+      if (avgPx !== undefined) console.log(`\nAverage pixels differing: ${avgPx}%`);
       if (shared.length) console.log(`\nShared (same rule on ${shared[0].screens.length >= 3 ? '3+' : 'several'} screens, see shared.txt):\n${shared.slice(0, 15).map(x => `${x.rule}  (${x.screens.length} screens)`).join('\n')}`);
       return 0;
     }
