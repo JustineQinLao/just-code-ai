@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { Store, Task, resolveWhere, runsApp, resolveOutput, splitTitle } from './store';
 import { Runner, RunnerSettings } from './runner';
+import * as Out from './outside';
 import * as g from './git';
 import { pluginDir } from './plugin';
 import { transcript, agentLog, archivedLog, artifactUrlIn, claudeBin, claudeEnv, discoverAgents, discoverSkills, savedAgents, sessionLog, slashCommands } from './claude';
@@ -263,7 +264,17 @@ export async function handle(m: any, remote = false) {
         if (await confirm(`Discard "${t.title}"? These files are reverted (new ones deleted):\n${fl.join('\n') || '(none)'}`, 'Discard')) await r.discard(m.id, who);
         return;
       }
-      if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.`, 'Discard')) await r.discard(m.id, who);
+      // A Fix to match task is planned from measures: discarded, it is archived (not sent back to To do), so the round
+      // can end and Measure again plans from what the app looks like now.
+      if (t?.designFix) {
+        if (await confirm(`Discard "${t.title}"? Its branch is deleted and the task is archived (Fix to match plans again from new measures).`, 'Discard')) {
+          await r.discard(m.id, who);
+          s.setQueue(s.queue.filter(id => id !== m.id));
+          s.updateTask(m.id, { archived: true });
+        }
+        return;
+      }
+      if (t && await confirm(`Discard all work on "${t.title}"? Its branch is deleted and the task goes back to To do.${t.outside?.length ? `\n\nFiles it changed outside the project are left as they are:\n${t.outside.map(o => o.file).join('\n')}` : ''}`, 'Discard')) await r.discard(m.id, who);
       return;
     case 'remotePr': await r.remotePr(m.id); return;
     case 'remote': return handoff(r, t);
@@ -585,6 +596,15 @@ export function openTaskFile(r: Runner, t: Task | undefined, file: unknown) {
 export async function diff(t: Task | undefined, file: string) {
   const r = runner();
   if (!t || !r || typeof file !== 'string') return;
+  // A file in another folder or repo (outside.ts): its own repo's HEAD against the file now, or just the file.
+  const out = Out.findOutside(r.root, t.outside, file);
+  if (out) {
+    if (!out.repo) { void vscode.window.showTextDocument(vscode.Uri.file(out.file)); return; }
+    const rel = path.relative(out.repo, out.file);
+    const left = vscode.Uri.from({ scheme: 'justcode-base', path: '/' + rel, query: JSON.stringify({ dir: out.repo, ref: 'HEAD', file: rel }) });
+    void vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(out.file), `${file} (HEAD ↔ ${t.title})`);
+    return;
+  }
   if (/\.(pdf|png|jpe?g|gif|webp|svg|ico|docx?|xlsx?|pptx?|zip|mp4|mov|webm|mp3|wav|apk|aab)$/i.test(file)) return openTaskFile(r, t, file);
   if (!t.worktree && t.status === 'done' && t.branch) { // merged: the merge commit against what base had before it
     const sha = await g.mergeCommit(r.root, t.branch);

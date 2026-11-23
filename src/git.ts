@@ -249,7 +249,7 @@ export async function revertFiles(repo: string, files: string[]) {
   }
 }
 
-export interface Change { status: string; file: string; add?: number; del?: number }
+export interface Change { status: string; file: string; add?: number; del?: number; outside?: boolean }  // outside: in another folder/repo (see outside.ts)
 
 // What the PR changes: base...branch, like a PR view, plus anything not committed yet.
 export async function changes(dir: string, base: string): Promise<Change[]> {

@@ -21,6 +21,10 @@ import { Limits, isLimitError } from './limits';
 import type { Runner } from './runner';
 import { BASELINE, sha, TEST_CMD, UI_FILE, effectiveMode } from './runner';
 
+// A task that only needs your reply and changed no project file has nothing a later task builds on: tasks that depend
+// on it may start. (Mirrored in media/status.js for the card's "waits for" text.)
+export const doneEnough = (d: Task, open: boolean) => !!d.noProjectChanges && d.status === 'review' && !open;
+
 // Runner methods: Run all's queue: what runs next, what holds a slot, what the toolbar says it waits for.
 // Attached to Runner.prototype in runner.ts; `this` is the project's Runner.
 export const queueMethods = {
@@ -76,6 +80,9 @@ export const queueMethods = {
       // Stopped on an error: nothing runs until you press Resume, so it must not hold the slot (a stopped task in
       // another sprint left ▶ Run only queueing, with nothing visible to wait for).
       if (t.error || t.noWait || this.stuck(t)) return false;
+      // Its turn changed no project file (Claude only answered, or only edited another repo): nothing to merge here,
+      // so it must not hold the slot. It still waits for you on its card (Reply, Finish or Discard).
+      if (t.noProjectChanges) return false;
       return t.where !== 'direct' && !!t.worktree && (t.status === 'doing' || t.status === 'review');
     });
   },
@@ -121,7 +128,7 @@ export const queueMethods = {
 
   // The tasks this one waits for that are not done yet (deleted ones no longer count).
   waitsFor(this: Runner, t: Task) {
-    return (t.dependsOn ?? []).map(d => this.store.task(d)).filter((d): d is Task => !!d && !d.archived && d.status !== 'done');
+    return (t.dependsOn ?? []).map(d => this.store.task(d)).filter((d): d is Task => !!d && !d.archived && d.status !== 'done' && !doneEnough(d, this.isOpen(d.id)));
   },
 
   // The direct task (other than `except`) still working or waiting to be finished in the project folder.

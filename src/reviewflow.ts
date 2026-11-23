@@ -69,6 +69,14 @@ export const reviewMethods = {
           if (await this.check(t.id) !== 'fail') await this.review(t.id);  // the reviewer only sees work whose checks pass
           continue;
         }
+        // A task that ended (maybe before a reload, or before this flag existed) with no project change: Run all does
+        // not wait for it (queue.ts inFlight / doneEnough).
+        if (t.status === 'review' && !t.review && !t.noProjectChanges && t.reply && !(await this.hasWork(t.id))) {
+          this.emptyAt.add(t.id);
+          this.store.updateTask(t.id, { noProjectChanges: true });
+          this.pump();
+          continue;
+        }
         // A review that could not run before (e.g. before this setting existed, or the window closed): one more try,
         // then the automatic merge applies.
         if (t.status === 'review' && t.review?.state === 'error' && o.autoMerge && o.mergeIfCannotRun && !this.errorSwept.has(t.id) && !isLimitError(t.review.error ?? '')) {

@@ -61,8 +61,13 @@ export interface Task {
   publishing?: boolean;       // JustCode is publishing the page now (interactive claude in a terminal)
   archived?: boolean;
   dependsOn?: string[];      // task ids that must be done before Run all starts this one
+  outside?: OutsideFile[];    // files Claude changed outside the project folder (another repo); committed there on Finish
+  noProjectChanges?: boolean; // its last turn changed no project file: Run all does not wait for it (it still waits for you on its card)
   created: number;
 }
+
+// A file outside the project folder that a task changed: its absolute path and the git repo holding it (if any).
+export interface OutsideFile { file: string; repo?: string }
 
 // AI review after each finished turn: running → pass, or fail with issues (sent back to the builder).
 export interface CheckRun { name: string; cmd: string; ok: boolean; ms: number; tail?: string; preexisting?: boolean; timedOut?: boolean }

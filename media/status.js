@@ -54,7 +54,8 @@
       return { text: `Stopped: ${t.error}`, tone: 'err', actions: [[`↻ Raise ${over[2]} budget to $${usd} and resume`, () => post('setBudget', { id, key: over[2], usd })], ['Open task', () => c.open(id, 'activity')], discard] };
     }
     if (t.error) return { text: `Stopped: ${t.error}${hint(t.error)}`, tone: 'err', actions: [resume, ['Open task', () => c.open(id, 'activity')], discard] };
-    const waits = (t.dependsOn || []).map(d => (c.tasks || []).find(o => o.id === d)).filter(o => o && !o.archived && o.status !== 'done');
+    // A task that changed no project file and only waits for your reply does not hold back the tasks after it (queue.ts doneEnough).
+    const waits = (t.dependsOn || []).map(d => (c.tasks || []).find(o => o.id === d)).filter(o => o && !o.archived && o.status !== 'done' && !(o.noProjectChanges && o.status === 'review' && !busy(o)));
     if (t.status === 'todo' && waits.length) return { text: `⟂ waits for “${waits[0].title.slice(0, 50)}”${waits.length > 1 ? ` and ${waits.length - 1} more` : ''}${t.queued ? ' (queued)' : ''}`, tone: 'muted',
       actions: [['▶ Run anyway', () => post(t.queued ? 'runNow' : 'run', { id })]] };
     if (t.status === 'todo') return t.queued ? { text: `Queued #${c.queue.queued.indexOf(id) + 1}${c.queue.blocker ? ` · waits for “${c.queue.blocker.title.slice(0, 40)}”, which ${c.queue.blocker.why}` : ''}`, tone: 'muted', actions: [['▶ Run now', () => post('runNow', { id })]] }
@@ -102,6 +103,12 @@
     }
     if (r?.state === 'error') return { text: `Review could not run: ${r.error ?? ''}${hint(r.error)}`, tone: 'err',
       actions: [['↻ Retry review', () => post('review', { id })], ...(t.worktree || isDirect(t) ? [[`${fin} without review`, () => post('merge', { id }), 'ghost']] : []), discard] };
+    // Claude changed files only in another folder or repo (a sibling repo's README): Finish commits them there.
+    if (!r && (t.outside || []).length && !busy(t) && (isDirect(t) ? !(t.directFiles || []).length : t.noProjectChanges)) {
+      const names = t.outside.map(o => o.file.split('/').slice(-2).join('/'));
+      return { text: `Claude changed ${names.length} file(s) outside this project: ${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''}. Finish commits them in their own repo.`, tone: 'ok',
+        actions: [['✓ Finish', () => post('merge', { id })], ['See changes', () => c.open(id, 'changes')], ['Reply', () => c.open(id, 'activity'), 'ghost'], discard] };
+    }
     if (!r && t.reply && !busy(t) && (!isDirect(t) || !(t.directFiles || []).length)) return { text: `Claude finished without changing project files: "${t.reply.slice(0, 140)}"`, tone: 'warn',
       actions: [['Reply', () => c.open(id, 'activity')], ['Finish (no changes)', () => post('merge', { id }), 'ghost'], discard] };
     if (!s.review.auto) return { text: `Finished. Look at the changes, then ${fin.toLowerCase()}.`, tone: 'ok', actions: [[`✓ ${fin}`, () => post('merge', { id })]] };

@@ -1,5 +1,6 @@
 import type { Actor } from './audit';
 import { EventEmitter } from 'events';
+import * as nodePath from 'path';
 import { randomUUID } from 'crypto';
 import { sdk, Sdk } from './sdk';
 import { alwaysChoice, allowedBy, toolArg, Suggestion } from './policy';
@@ -120,6 +121,16 @@ export class Session {
   private pending = new Map<string, (answer: Answer) => void>();
   private idle?: NodeJS.Timeout;
   private ended = false;
+
+  // Absolute paths Claude (or a subagent) edited with Edit/Write/MultiEdit/NotebookEdit since the last takeEdited().
+  // The runner uses them to find files changed outside the task's folder, which git there never sees.
+  private edited = new Set<string>();
+
+  takeEdited() {
+    const out = [...this.edited];
+    this.edited.clear();
+    return out;
+  }
 
   constructor(private o: SessionOptions) {
     this.mode = o.mode;
@@ -274,6 +285,8 @@ export class Session {
           if (c.type === 'text' && c.text?.trim() && !sub) this.step({ kind: 'say', text: c.text.trim() });
           else if (c.type === 'tool_use') {
             if (!sub) { main.tools++; main.last = c.name; }
+            const f = EDIT_TOOLS.has(c.name) ? c.input?.file_path ?? c.input?.notebook_path : undefined;
+            if (typeof f === 'string' && f) this.edited.add(nodePath.resolve(this.o.cwd, f));
             this.step({ kind: 'tool', text: `${c.name}(${toolArg(c.input)})`, agent: sub });
           }
         }

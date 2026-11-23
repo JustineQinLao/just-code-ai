@@ -8,7 +8,7 @@ export type AuditEvent =
   | 'task.create' | 'task.run' | 'task.stop' | 'task.message'
   | 'permission.allow' | 'permission.always' | 'permission.deny' | 'mode.switch'
   | 'review.pass' | 'review.fail' | 'review.accept' | 'review.override' | 'checks.fail'
-  | 'merge' | 'finish' | 'discard' | 'publish'
+  | 'merge' | 'finish' | 'discard' | 'publish' | 'outside.commit'
   | 'policy.deny' | 'policy.change' | 'cleanup' | 'conflicts.resolved' | 'budget.stop' | 'secrets.block' | 'phone.pair' | 'phone.action';
 export interface AuditEntry { time: string; actor: Actor; event: AuditEvent; taskId?: string; sprintId?: string; detail?: string }
 

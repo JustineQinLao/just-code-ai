@@ -19,6 +19,7 @@ import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sess
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
 import * as C from './checks';
+import * as Out from './outside';
 import { Limits, isLimitError } from './limits';
 import type { Runner } from './runner';
 import { BASELINE, sha, TEST_CMD, UI_FILE, effectiveMode } from './runner';
@@ -26,7 +27,14 @@ import { BASELINE, sha, TEST_CMD, UI_FILE, effectiveMode } from './runner';
 // Runner methods: Merging and finishing tasks, sprint merges, conflicts, discard, pull requests and removal.
 // Attached to Runner.prototype in runner.ts; `this` is the project's Runner.
 export const mergeMethods = {
-  changes(this: Runner, id: string) {
+  async changes(this: Runner, id: string) {
+    const t = this.store.task(id);
+    const inProject = await this.projectChanges(id);
+    // Files Claude changed in another folder or repo (outside.ts), listed after the project's own.
+    return t?.outside?.length && t.status !== 'done' ? [...inProject, ...await Out.outsideChanges(this.root, t.outside).catch(() => [])] : inProject;
+  },
+
+  projectChanges(this: Runner, id: string): Promise<g.Change[]> {
     const t = this.store.task(id);
     if (t?.status === 'done' && !t.worktree && t.branch && t.where !== 'direct') return g.mergedChanges(this.root, t.branch);
     if (t?.where === 'direct' && !t.init) return t.startHead && t.directFiles?.length ? g.workingChanges(this.root, t.startHead, t.directFiles) : Promise.resolve([]);
@@ -46,6 +54,16 @@ export const mergeMethods = {
       if (this.store.task(id)) this.store.updateTask(id, { warning: String(e?.message ?? e).slice(0, 400) });
       this.d.notify('error', e.message, id);
     } finally { this.busy.delete(id); this.changed(); }
+  },
+
+  // Finish/Merge: the task's files in other repos get their own commit there (same message). Said on the card.
+  async finishOutside(this: Runner, t: Task) {
+    if (!t.outside?.length) return '';
+    const { committed, loose } = await Out.commitOutside(t.outside, A.commitMessage(this.root, t), this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(t.id, e); throw e; });
+    this.store.updateTask(t.id, { outside: undefined });
+    const said = [committed.length ? `committed in ${committed.map(r => path.basename(r)).join(', ')}` : '', loose.length ? `${loose.length} file(s) outside any git repo left as they are` : ''].filter(Boolean).join('; ');
+    if (said) this.audit('outside.commit', t.id, `${said}: ${t.outside.map(o => o.file).join(', ')}`, 'justcode');
+    return said;
   },
 
   mergeLater(this: Runner, t: Task) {
@@ -78,6 +96,8 @@ export const mergeMethods = {
         if (t.status !== 'review' || this.reviews.has(id) || this.checking.has(id) || (s0?.open && s0.state !== 'idle')) throw new Error('Claude is still working on this task. Wait for it to finish, then Finish.');
         const files = t.directFiles ?? [];
         if (files.length) await g.commitFiles(this.root, A.commitMessage(this.root, t), files, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });
+        const outsideSaid = await this.finishOutside(t);
+        if (outsideSaid) this.d.notify('info', `"${t.title}": files outside the project ${outsideSaid}.`, id);
         try { A.appendProgress(this.root, t); } catch { /* progress is a convenience */ }
         this.stop(id);
         this.store.updateTask(id, { status: 'done', live: undefined, doneAt: Date.now() });
@@ -99,6 +119,20 @@ export const mergeMethods = {
       this.stop(id);
       // An earlier Merge got as far as the merge commit and then failed while removing the folder (git no longer knows it): only finish up.
       const already = await g.isMerged(this.root, t.branch, t.base) && !await g.isWorktree(t.worktree);
+      const outsideSaid = await this.finishOutside(t);
+      if (outsideSaid) this.d.notify('info', `"${t.title}": files outside the project ${outsideSaid}.`, id);
+      // Nothing for the base (Claude only answered, or only changed another repo): no merge commit, just finish up.
+      const nothing = !already && !(await g.git(t.worktree, ['status', '--porcelain']).catch(() => 'x')).trim()
+        && Number(await g.git(t.worktree, ['rev-list', '--count', `${t.base}..HEAD`]).catch(() => '1')) === 0;
+      if (nothing) {
+        await this.cleanup(t).catch(e => this.d.notify('warn', `Finished "${t.title}", but could not remove its folder (${e.message}). Delete ${t.worktree} by hand.`, id));
+        this.store.updateTask(id, { status: 'done', conflicts: undefined, worktree: undefined, live: undefined, doneAt: Date.now(), mergeWhenReady: undefined, resolveTries: undefined, noProjectChanges: undefined });
+        this.audit('finish', id, `no project changes${outsideSaid ? `; outside: ${outsideSaid}` : ''}`, auto ? 'justcode' : by);
+        this.d.notify('info', `Finished "${t.title}" (no project files changed).`, undefined, auto);
+        if (t.sprintId) await this.mergeSprint(t.sprintId).catch(e => this.d.notify('error', e.message));
+        this.pump();
+        return;
+      }
       if (!already) {
         const msg = A.commitMessage(this.root, t);
         await g.commitAll(t.worktree, msg, this.secretScan()).catch(e => { if (e instanceof SecretsFound) this.secretsBlocked(id, e); throw e; });

@@ -22,6 +22,7 @@ import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sess
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
 import * as C from './checks';
+import * as Out from './outside';
 import { Limits, isLimitError } from './limits';
 
 // One Runner per project: starts each task's Claude session in the task's own copy of the project (a git worktree on
@@ -421,8 +422,8 @@ export class Runner {
     s.on('rate', info => this.d.limits.update(info));
     s.on('running', () => {
       const cur = this.store.task(id);
-      if (cur?.status === 'review' && cur.where !== 'direct' && !cur.init) this.store.updateTask(id, { status: 'doing', live: true });
-      else if (cur && !cur.live) this.store.updateTask(id, { live: true });
+      if (cur?.status === 'review' && cur.where !== 'direct' && !cur.init) this.store.updateTask(id, { status: 'doing', live: true, noProjectChanges: undefined });
+      else if (cur && !cur.live) this.store.updateTask(id, { live: true, noProjectChanges: undefined });
     });
     s.on('turn', turn => void this.turnEnded(id, turn).catch(e => this.d.notify('error', e.message, id)));
     s.on('exit', error => {
@@ -553,6 +554,12 @@ export class Runner {
       if (committed && this.d.settings().codeMap !== false) void CodeMap.refresh(t.worktree);
     }
     if (t.sessionId) try { A.archiveTranscript(this.root, id, transcript(t.worktree ?? this.root, t.sessionId), t.sessionId); } catch { /* the archive is a convenience */ }
+    // Files Claude edited outside the project folder and the task's folder (a sibling repo): git here never sees them.
+    if (!t.init) {
+      const edited = this.sessions.get(id)?.takeEdited() ?? [];
+      const outside = await Out.outsideEdits(edited, [this.root, ...(t.worktree ? [t.worktree] : [])], t.outside).catch(() => t.outside ?? []);
+      if (outside.length || t.outside?.length) this.store.updateTask(id, { outside: outside.length ? outside : undefined });
+    }
     const reply = turn.text.trim().slice(-4000) || undefined;
     if (t.appFix) void App.start(this.root, 'after Claude\'s fix').catch(() => undefined);   // ▶ App shows whether the fix worked
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
@@ -561,6 +568,8 @@ export class Runner {
     if (!t.init && this.checkBudget(id)) return;
     this.emptyAt.delete(id);
     if (!committed && t.worktree && !(await this.hasWork(id))) this.emptyAt.add(id); // Claude only answered: nothing to review
+    // No project file changed: nothing for a later task to build on, so Run all does not wait for this one.
+    if (t.worktree && !t.init) this.store.updateTask(id, { noProjectChanges: this.emptyAt.has(id) || undefined });
     this.changed();
     this.pump();
     const cur = this.store.task(id);
