@@ -62,6 +62,13 @@ const EXERCISE = `async () => {
   } catch (e) { errs.push('late activity: ' + e.message); }
   for (const d of ['settings', 'sourcesDialog', 'artifactsDialog', 'report', 'guide', 'designDialog', 'moreMenu', 'agentMap', 'newSprint']) await run(d, () => { document.querySelector('#dlg').open && document.querySelector('#dlg').close(); return JC[d](); });
   await run('history', () => { document.querySelector('#dlg').close(); JC.historyDialog(); window.postMessage({ type: 'history', items: [] }, '*'); });
+  // A session opened from history shows its transcript when it arrives (not "Loading…" for ever).
+  try {
+    window.postMessage({ type: 'history', items: [{ kind: 'plan', text: 'plan x', time: Date.now(), sessions: ['sid-smoke'] }] }, '*'); await wait(100);
+    [...document.querySelectorAll('#dlg button')].find(b => b.textContent === 'Session').click(); await wait(50);
+    window.postMessage({ type: 'sessionLog', sessionId: 'sid-smoke', steps: [{ kind: 'text', text: 'session marker', time: new Date().toISOString() }] }, '*'); await wait(150);
+    if (!document.querySelector('#dlg').innerText.includes('session marker')) errs.push('history session stuck on Loading');
+  } catch (e) { errs.push('history session: ' + e.message); }
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });
   // @ files in the Plan box: the menu shows inside the dialog, on screen.
   try {

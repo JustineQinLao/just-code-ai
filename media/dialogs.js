@@ -14,6 +14,8 @@
     drawHistory();
   }
   function setHistory(items) { history = items; if (JC.$('#dlg').open && !sessionView) drawHistory(); }
+  // A session's transcript arrived: shown if that session is still the one open (sessionView lives here, not on JC).
+  function setSessionLog(id, steps) { if (sessionView?.id === id) { sessionView.steps = steps || []; drawHistory(); } }
   function drawHistory() {
     if (sessionView) {
       const { title, steps: list } = sessionView;
@@ -528,5 +530,5 @@
   }
 
 
-  Object.assign(window.JC, { history, historyFor, historyQuery, sessionView, historyDialog, drawHistory, setHistory, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, setupDialog, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, appDialog, cleanupDialog, designDialog, guide });
+  Object.assign(window.JC, { historyDialog, drawHistory, setHistory, setSessionLog, agentDetail, openAgent, agentTree, agentMap, toast, bridged, dialog, newSprint, openPlanner, planDialog, moreMenu, settings, setupDialog, pairingDialog, report, sourcesDialog, phoneSection, policySection, artifactsDialog, appDialog, cleanupDialog, designDialog, guide });
 })();

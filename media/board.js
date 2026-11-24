@@ -422,7 +422,7 @@
     }
     else if (m.type === 'completions') JC.completions(m);
     else if (m.type === 'history') JC.setHistory(m.items);
-    else if (m.type === 'sessionLog') { if (JC.sessionView?.id === m.sessionId) { JC.sessionView.steps = m.steps; JC.drawHistory(); } }
+    else if (m.type === 'sessionLog') JC.setSessionLog(m.sessionId, m.steps);
     else if (m.type === 'steps') { steps[m.id] = m.steps; if (m.id === open && tab === 'activity') JC.renderDrawer(); }
     else if (m.type === 'savedAgents') { agentsSaved[m.id] = m.nodes; if (m.id === open && tab === 'agents' && !agentView) JC.renderDrawer(); }
     else if (m.type === 'agentLog') { if (agentView?.task === m.id) { agentView.log = m; if (m.id === open && tab === 'agents') JC.renderDrawer(); } }
