@@ -403,6 +403,21 @@
     return el;
   }
   const pKeep = {}; // which proposals the user has unticked
+  let pWhere; // where the applied tasks run, once the user picks (else the planner's suggestion, p.where)
+  // The choice of where tasks run: on the branch you are on (no new branch), a sprint branch, or a branch per task.
+  function whereBox(p, named) {
+    const on = p.branch && p.branch !== 'HEAD' ? p.branch : 'the current branch';
+    const opts = [
+      ['current', `This branch (${on})`, 'In the project folder, one task at a time. No new branch or worktree; each task commits here when you finish it.'],
+      ['sprint', 'A sprint branch', `Tasks merge into ${named ? `the sprint branch of ${named}` : 'one sprint branch'}; it merges into ${on} when the last one is done.`],
+      ['task', 'A branch per task', `Each task runs in its own folder and branch and merges into ${on} by itself.`],
+    ];
+    const cur = pWhere || p.where || 'current';
+    return JC.h('fieldset', { class: 'planwhere' }, JC.h('legend', { class: 'small' }, 'Where should these tasks run?'),
+      opts.map(([v, label, hint]) => JC.h('label', { class: 'opt' },
+        JC.h('input', { type: 'radio', name: 'planwhere', value: v, checked: cur === v, onchange: () => { pWhere = v; renderPlanner(); } }),
+        JC.h('span', {}, JC.h('b', {}, label), JC.h('div', { class: 'small muted' }, hint)))));
+  }
   function renderPlanner() {
     const p = JC.S.planner;
     drawer.classList.add('on');
@@ -446,16 +461,20 @@
       // 'after N': positions among the proposed tasks (changes), skipping titles that are not in the list.
       const afterNums = c => (c.after || []).map(a => changes.findIndex(x => x.title === a) + 1).filter(n => n && n !== changes.indexOf(c) + 1);
       const apply = () => {
-        JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })) });
+        JC.post('applyProposals', { changes: changes.map(c => ({ ...c, apply: c.kind !== 'same' && pKeep[c.key] })), removes: removes.map(c => ({ id: c.id, apply: pKeep[c.key] })), where: pWhere || p.where || 'current' });
         for (const k in pKeep) delete pKeep[k];
+        pWhere = undefined;
       };
       const nTick = all.filter(c => c.kind !== 'same' && pKeep[c.key]).length;
       applyBtn.textContent = `Apply ${nTick} task${nTick === 1 ? '' : 's'}`;
       applyBtn.onclick = apply; applyBtn.disabled = !nTick; applyBtn.hidden = false;
+      const where = pWhere || p.where || 'current';
+      const named = changes.map(c => c.sprint).find(Boolean);
       panel.push(JC.h('div', { class: 'proppanel' },
+        whereBox(p, named),
         JC.h('div', { class: 'reflist' }, all.map(c => JC.h('label', { class: `refrow ${c.kind}` },
           c.kind === 'same' ? JC.h('span', { class: 'rspace' }) : JC.h('input', { type: 'checkbox', checked: pKeep[c.key], onchange: e => { pKeep[c.key] = e.target.checked; const n = all.filter(x => x.kind !== 'same' && pKeep[x.key]).length; applyBtn.textContent = `Apply ${n} task${n === 1 ? '' : 's'}`; applyBtn.disabled = !n; } }),
-          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : '', afterNums(c).length ? JC.h('span', { class: 'pill' }, `after ${afterNums(c).join(', ')}`) : ''),
+          JC.h('div', { class: 'rbody' }, JC.h('div', {}, JC.h('span', { class: `rtag ${c.kind}` }, { add: 'NEW', edit: 'EDIT', same: 'keep', remove: 'REMOVE', reopen: 'BACK TO TO DO', amend: 'CHANGE SENT' }[c.kind]), ' ', JC.h('b', {}, c.title), c.sprint && where === 'sprint' ? JC.h('span', { class: 'tag' }, ` ${c.sprint}`) : '', afterNums(c).length ? JC.h('span', { class: 'pill' }, `after ${afterNums(c).join(', ')}`) : ''),
             fileHint(c) ? JC.h('div', { class: 'small muted fhint' }, fileHint(c)) : '',
             c.kind === 'reopen' ? JC.h('div', { class: 'small warn' }, 'Done, but must change: goes back to To do and is built again on top of the merged work.') : '',
             c.kind === 'amend' ? JC.h('div', { class: 'small warn' }, 'Already started: the new text is saved and sent to its Claude as a message.') : '',

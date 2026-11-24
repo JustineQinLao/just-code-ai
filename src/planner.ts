@@ -17,7 +17,7 @@ import { SecretsFound, describeSecrets } from './secrets';
 import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript } from './claude';
-import { taskText } from './claude';
+import { taskText, PlanWhere } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -33,7 +33,19 @@ export const plannerMethods = {
     const s = this.planner;
     if (!s?.open && !this.plannerProposals) return undefined;
     return { run: s?.open ? s.state : 'idle', steps: s?.steps ?? [], proposals: this.plannerProposals, targets: this.plannerTargets, others: this.plannerOthers, context: s?.context ?? 0, model: s?.model, note: this.plannerNote, turnAt: this.plannerTurnAt, sprint: this.plannerSprint,
+      branch: this.plannerBranch, where: this.planWhere(),
       asks: s?.open ? [...s.asks.values()].filter(a => a.kind === 'question') : [] };
+  },
+
+  // Where the proposed tasks run, as the panel's picker starts: what Claude set from the request, else the Default
+  // where setting (direct: the current branch; branch: one branch per task; auto: a sprint when Claude named one).
+  planWhere(this: Runner): PlanWhere {
+    const p = this.plannerProposals ?? [];
+    const said = p.map(c => c.where).find(Boolean);
+    if (said) return said;
+    if (this.plannerSprint) return 'sprint';
+    const w = this.d.settings().defaultWhere;
+    return w === 'direct' ? 'current' : w === 'branch' ? 'task' : p.some(c => c.sprint) ? 'sprint' : 'current';
   },
 
   // A claude.ai link pasted in a sprint's task or plan prompt becomes one of that sprint's sources.
@@ -56,6 +68,8 @@ export const plannerMethods = {
     this.plannerOthers = others.map(t => t.id);
     this.plannerProposals = undefined;
     this.plannerNote = undefined;
+    this.plannerBranch = await g.currentBranch(this.root).catch(() => undefined);
+    await this.tidySprints().catch(() => undefined);   // finished sprints are not offered for reuse
     this.plannerTurnAt = Date.now();
     this.plannerSprint = sprint?.name;
     this.plannerPhase = 'Saving the claude.ai design locally first. This takes about 30 seconds…';
@@ -89,7 +103,7 @@ export const plannerMethods = {
     const planSources = A.sprintSources(A.loadSources(this.root), sid ? this.store.data.sprints.find(x => x.id === sid) : undefined);
     const arts = A.artifactsSection(this.root, planSources, x => this.store.task(x)?.title);
     await s.start((A.projectSection(this.root) ? `${A.projectSection(this.root)}\n\n` : '') + A.sourceLines(this.root, planSources) + (arts ? `${arts}\n\n` : '') + plannerFirst(tasks.map(t => ({ id: t.id, title: t.title, description: t.description })), instruction, sprints, sprint,
-      others.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status })), into && this.store.data.sprints.some(x => x.name === into && !x.closed) ? into : undefined) + mapNotes);
+      others.map(t => ({ id: t.id, title: t.title, description: t.description, status: t.status })), into && this.store.data.sprints.some(x => x.name === into && !x.closed) ? into : undefined, this.plannerBranch) + mapNotes);
     this.plannerMap = map.rule ? mapDir : undefined;
     this.changed();
   },
@@ -149,8 +163,12 @@ export const plannerMethods = {
   // Applies the proposals the user kept: edits, adds (in order), removes, reorder of the To do tasks.
   // Where a task lands: the sprint Claude named (created when the board has no open sprint of that name), else an
   // edited task keeps its sprint, and a fresh plan uses the active sprint (so the tasks appear where you work).
-  applyProposals(this: Runner, changes: (RefineResult & { kind: string; apply?: boolean })[], removes: { id: string; apply?: boolean }[]) {
-    const sprintId = this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean)
+  // where (the panel's picker): current = the tasks run in the project folder on its branch (no sprint, no new branch);
+  // task = each on its own branch, no sprint; sprint = the sprint rules above. Without it (older panels), as before.
+  applyProposals(this: Runner, changes: (RefineResult & { kind: string; apply?: boolean })[], removes: { id: string; apply?: boolean }[], where?: PlanWhere) {
+    const noSprint = where === 'current' || where === 'task';
+    const runWhere = where === 'current' ? { where: 'direct' as const } : where ? { where: 'branch' as const } : {};
+    const sprintId = noSprint ? undefined : this.plannerTargets.map(id => this.store.task(id)?.sprintId).find(Boolean)
       ?? (this.plannerTargets.length ? undefined : this.store.data.sprints.find(s => s.active && !s.closed)?.id);
     const orderIds: string[] = [];
     let added = 0, edited = 0, removed = 0, reopened = 0, sent = 0;
@@ -164,9 +182,14 @@ export const plannerMethods = {
         continue;
       }
       if (!c.apply) { if (c.ref) orderIds.push(c.ref); continue; }
-      const named = this.sprintFor(c.sprint);
-      if (c.ref) { this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined, ...(named ? { sprintId: named } : {}) }); orderIds.push(c.ref); edited++; }
-      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: named ?? (sprintId || undefined), mode: this.defaultMode }); orderIds.push(t.id); made.set(c, t.id); added++; }
+      const named = noSprint ? undefined : this.sprintFor(c.sprint);
+      if (c.ref) {
+        const was = this.store.task(c.ref);
+        // A To do task not started yet can still move: to the current branch (out of its sprint) or to its own branch.
+        const move = was && !was.worktree && was.status === 'todo' ? { ...runWhere, ...(noSprint ? { sprintId: undefined } : {}) } : {};
+        this.store.updateTask(c.ref, { title: c.title, description: c.description || undefined, ...(named ? { sprintId: named } : {}), ...move }); orderIds.push(c.ref); edited++;
+      }
+      else { const t = this.store.addTask({ title: c.title, description: c.description || undefined, sprintId: named ?? (sprintId || undefined), mode: this.defaultMode, ...runWhere }); orderIds.push(t.id); made.set(c, t.id); added++; }
     }
     for (const rm of removes) if (rm.apply) { void this.remove(rm.id); removed++; }
     // "after": titles of tasks this one waits for (from this list or the board), resolved once all exist.

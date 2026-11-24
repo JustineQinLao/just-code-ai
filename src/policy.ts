@@ -195,3 +195,24 @@ export function violations(p: Policy, tool: string, input: Record<string, unknow
   }
   return undefined;
 }
+
+// Containers a task may not stop: the user's own running app (and other projects') are not the task's to stop, and
+// nothing starts them again. A task may stop what it started: its own compose stack (named with the task id, or the
+// compose project of its task folder when it runs in one). Returns why, or undefined.
+export function stopsOthersContainers(cmd: string, taskId: string, inTaskFolder: boolean): string | undefined {
+  const parts = cmd.split(/&&|\|\||;|\||\n|\$\(|`/).map(s => s.trim().replace(/^\(+/, '')).filter(Boolean);
+  for (const part of parts) {
+    const own = part.includes(taskId);
+    if (/^(sudo\s+)?docker\s+(container\s+)?(stop|kill|rm|restart|pause)\b/.test(part) && !own)
+      return 'Do not stop, restart or remove containers: they belong to the user\'s running app or other projects, and nothing starts them again. ' +
+        'Use free ports for anything you start (or the task\'s own docker compose -p stack), and stop only what you started.';
+    const compose = /^(sudo\s+)?(docker\s+compose|docker-compose)\b(.*)$/.exec(part);
+    if (compose && /\s(down|stop|kill|rm|restart|pause)\b/.test(compose[3])) {
+      const named = /(?:\s-p\s+|\s--project-name[=\s]+)(\S+)/.exec(compose[3])?.[1];
+      if (named ? !named.includes(taskId) : !inTaskFolder)
+        return 'Do not stop or restart a Docker Compose stack you did not start: it is the user\'s running app. ' +
+          'Start your own with docker compose -p <a name with the task id> on free ports, and stop only that one.';
+    }
+  }
+  return undefined;
+}

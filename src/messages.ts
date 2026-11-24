@@ -142,11 +142,16 @@ export async function handle(m: any, remote = false) {
       if (!await confirm(`Archive ${list.length} ${what} task${list.length === 1 ? '' : 's'}? Nothing is deleted: ⋯ › Show archived tasks brings them back.`, 'Archive')) return;
       s.setQueue(s.queue.filter(id => !list.some(t => t.id === id)));
       for (const t of list) s.updateTask(t.id, { archived: true });
+      // An archived task no longer holds its sprint: the sprint merges once the rest is done (desktop only).
+      if (!remote) for (const id of new Set(list.map(t => t.sprintId).filter((x): x is string => !!x))) await r.finishSprint(id);
       return;
     }
-    case 'archive': r.stop(m.id); s.updateTask(m.id, { archived: !t?.archived }); return;
+    case 'archive':
+      r.stop(m.id); s.updateTask(m.id, { archived: !t?.archived });
+      if (!t?.archived && t?.sprintId && !remote) await r.finishSprint(t.sprintId);
+      return;
     case 'delete':
-      if (t && await confirm(`Delete "${t.title}"?${t.worktree ? ' Its branch and all its work are deleted too.' : ''}`, 'Delete')) await r.remove(m.id);
+      if (t && await confirm(`Delete "${t.title}"?${t.worktree ? ' Its folder is removed. Work that is not merged stays on its branch, which JustCode names after.' : ''}`, 'Delete')) await r.remove(m.id, !remote);
       return;
     case 'addSprint': s.addSprint(m.name, m.goal || undefined); return;
     case 'activateSprint': s.updateSprint(m.sprintId, { active: true }); return;
@@ -290,7 +295,7 @@ export async function handle(m: any, remote = false) {
     case 'plannerAnswer': r.plannerAnswer({ id: m.ask, choice: m.choice, message: m.message, answers: m.answers }); return;
     case 'plannerSay': try { await r.plannerSay(withImages(m.text, r.root, 'plan', m.images)); } catch (e: any) { vscode.window.showErrorMessage(e.message); } return;
     case 'stopPlanner': r.stopPlanner(); return;
-    case 'applyProposals': r.defaultMode = setting('defaultMode', 'auto'); r.applyProposals(m.changes, m.removes); return;
+    case 'applyProposals': r.defaultMode = setting('defaultMode', 'auto'); r.applyProposals(m.changes, m.removes, ['current', 'sprint', 'task'].includes(m.where) ? m.where : undefined); return;
     case 'pickFiles': {
       const files = await pickPaths(r.root, 'Attach', remote);
       if (files.length) { if (remote) hub.emit({ type: 'picked', files }); else emit({ type: 'picked', files }); }

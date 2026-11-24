@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { matches, alwaysChoice, parseRule, setBudget } from '../policy';
+import { stopsOthersContainers } from '../policy';
 import { webOptions, reviewPrompt, playwrightMcp, PLAYWRIGHT_TOOLS, agentLog, savedAgents, sessionSettings, usableCommands, sessionLog, parseVerdict, carryOver, claudeEnv, parseProposals, taskText, plannerFirst, installedPlugin, installedPlugins, artifactBrief, ARTIFACT_URL } from '../claude';
 import { Limits, isLimitError } from '../limits';
 import { Store, resolveWhere, splitTitle, runsApp } from '../store';
@@ -1873,4 +1874,97 @@ test('design diff: near copy is one element, and screenshots get a pixel score w
   assert.ok(fs.existsSync(path.join(root, 'diff.png')));
   assert.equal(pixelScore(a, longer), 50, 'rows only one side has count as different');
   assert.equal(pixelScore(a, png('e.png', 20, 10, 0)), 100, 'other widths are not comparable');
+});
+
+
+test('a plan applied to the current branch makes direct tasks with no sprint; per task, own branches with no sprint', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const old = store.addSprint('Restructure').id;
+  store.updateSprint(old, { active: true });
+  r.plannerOthers = []; r.plannerTargets = [];
+  const p = (title: string) => ({ title, kind: 'add', apply: true, sprint: 'Restructure' });
+  r.applyProposals([p('A'), p('B')], [], 'current');
+  for (const t of store.data.tasks) { assert.equal(t.where, 'direct'); assert.equal(t.sprintId, undefined, 'not put in the named or active sprint'); }
+  r.plannerTargets = [];
+  r.applyProposals([p('C')], [], 'task');
+  const c = store.data.tasks.find(t => t.title === 'C')!;
+  assert.equal(c.where, 'branch'); assert.equal(c.sprintId, undefined);
+  r.plannerTargets = [];
+  r.applyProposals([p('D')], [], 'sprint');
+  assert.equal(store.data.tasks.find(t => t.title === 'D')!.sprintId, old);
+  r.dispose();
+});
+
+test('the planner reads where from the request and is told the branch; the panel starts from it', () => {
+  const p = parseProposals('```tasks\n[{"title":"A","goal":"g","where":"current"},{"title":"B","goal":"g","where":"nope"}]\n```', new Set())!;
+  assert.equal(p[0].where, 'current'); assert.equal(p[1].where, undefined);
+  assert.match(plannerFirst([], 'fix it', [], undefined, [], undefined, 'qa/final-pass'), /The project folder is on branch qa\/final-pass/);
+  const { root } = leaseRepo();
+  const r = leaseRunner(new Store(root));
+  r.plannerProposals = p; assert.equal(r.planWhere(), 'current');
+  r.plannerProposals = [{ title: 'X', sprint: 'S1' }]; assert.equal(r.planWhere(), 'sprint', 'auto: a sprint when Claude named one');
+  r.plannerProposals = [{ title: 'X' }]; assert.equal(r.planWhere(), 'current');
+  r.dispose();
+});
+
+test('a merged sprint is closed; finished or hand-merged open sprints are closed by tidySprints', async () => {
+  const { root, sh } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  const merged = store.addSprint('Restructure'), branch = 'jc/sprint-restructure-1'; sh('branch', branch);
+  store.updateSprint(merged.id, { branch, target: 'main' });
+  const t = store.addTask({ title: 'x', mode: 'auto', sprintId: merged.id }); store.updateTask(t.id, { status: 'done' });
+  await r.mergeSprint(merged.id);
+  assert.equal(store.sprint(merged.id)!.closed, true);
+  // Merged by hand into the branch you are on, never by JustCode.
+  const hand = store.addSprint('Design fix'), hb = 'jc/sprint-design-1'; sh('branch', hb);
+  store.updateSprint(hand.id, { branch: hb, target: 'elsewhere', active: true });
+  const u = store.addTask({ title: 'y', mode: 'auto', sprintId: hand.id }); store.updateTask(u.id, { status: 'done' });
+  // Still open work: left alone.
+  const open = store.addSprint('Open'); store.addTask({ title: 'z', mode: 'auto', sprintId: open.id });
+  // Finished, branch already merged and gone.
+  const gone = store.addSprint('Gone'); const v = store.addTask({ title: 'w', mode: 'auto', sprintId: gone.id }); store.updateTask(v.id, { status: 'done' });
+  await r.tidySprints();
+  assert.equal(store.sprint(hand.id)!.closed, true); assert.equal(store.sprint(hand.id)!.branch, undefined);
+  assert.equal(await g.branchExists(root, hb), false, 'merged branch deleted');
+  assert.equal(store.sprint(gone.id)!.closed, true);
+  assert.ok(!store.sprint(open.id)!.closed);
+  assert.equal(r.sprintFor('Restructure') === merged.id, false, 'a closed sprint is never reused');
+  r.dispose();
+});
+
+test('deleting a task keeps a branch with unmerged work, and lets its sprint merge', async () => {
+  const { root, sh } = leaseRepo();
+  const store = new Store(root), notes: string[] = [];
+  const r = leaseRunner(store, notes);
+  const sp = store.addSprint('S1'), sb = 'jc/sprint-s1'; sh('branch', sb);
+  store.updateSprint(sp.id, { branch: sb, target: 'main' });
+  const wt = path.join(root, '.wt'); sh('worktree', 'add', '-q', wt, sb);
+  fs.writeFileSync(path.join(wt, 'a.txt'), 'sprint'); sh('-C', wt, 'commit', '-qam', 's'); sh('worktree', 'remove', '--force', wt);
+  const done = store.addTask({ title: 'done one', mode: 'auto', sprintId: sp.id }); store.updateTask(done.id, { status: 'done' });
+  const held = store.addTask({ title: 'held for review', mode: 'auto', sprintId: sp.id });
+  const tb = 'jc/held'; sh('branch', tb, sb);
+  const wt2 = path.join(root, '.wt2'); sh('worktree', 'add', '-q', wt2, tb);
+  fs.writeFileSync(path.join(wt2, 'b.txt'), 'work'); sh('-C', wt2, 'add', '-A'); sh('-C', wt2, 'commit', '-qm', 'w'); sh('worktree', 'remove', '--force', wt2);
+  store.updateTask(held.id, { status: 'review', branch: tb, base: sb });
+  await r.remove(held.id);
+  assert.equal(await g.branchExists(root, tb), true, 'unmerged work kept');
+  assert.ok(notes.some(n => /kept its branch jc\/held: it has 1 commit/.test(n)), notes.join('\n'));
+  for (let i = 0; i < 100 && store.sprint(sp.id)!.branch; i++) await new Promise(res => setTimeout(res, 20));
+  assert.equal(store.sprint(sp.id)!.closed, true, 'the sprint merged once its last open task was deleted');
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'sprint');
+  r.dispose();
+});
+
+test('a task may not stop containers it did not start', () => {
+  const id = 'ab12cd34';
+  assert.match(stopsOthersContainers('docker stop aqua-rush-final-backend-1 >/dev/null; npx playwright test', id, true) ?? '', /Do not stop/);
+  assert.match(stopsOthersContainers('cd x && docker compose down', id, false) ?? '', /Compose stack/, 'in the project folder: the user\'s stack');
+  assert.match(stopsOthersContainers('docker compose -p aqua-rush-final stop backend', id, true) ?? '', /Compose stack/);
+  assert.equal(stopsOthersContainers('docker compose down -v', id, true), undefined, 'its own task folder stack');
+  assert.equal(stopsOthersContainers(`docker compose -p jc-${id} down`, id, false), undefined);
+  assert.equal(stopsOthersContainers(`docker stop jc-${id}-web`, id, false), undefined);
+  assert.equal(stopsOthersContainers('docker ps; docker compose up -d --build; docker compose logs backend', id, false), undefined);
 });

@@ -69,6 +69,19 @@ const EXERCISE = `async () => {
     window.postMessage({ type: 'sessionLog', sessionId: 'sid-smoke', steps: [{ kind: 'text', text: 'session marker', time: new Date().toISOString() }] }, '*'); await wait(150);
     if (!document.querySelector('#dlg').innerText.includes('session marker')) errs.push('history session stuck on Loading');
   } catch (e) { errs.push('history session: ' + e.message); }
+  // The plan panel asks where the tasks run; the choice goes with Apply.
+  try {
+    JC.S.planner = { run: 'idle', steps: [], proposals: [{ title: 'Smoke task', sprint: 'Old sprint' }], targets: [], others: [], branch: 'qa/x', where: 'current' };
+    JC.renderPlanner(); await wait(50);
+    const box = document.querySelector('.planwhere');
+    if (!box || !box.innerText.includes('This branch (qa/x)')) errs.push('plan panel: no where picker');
+    if (document.querySelector('#drawer .refrow .tag')) errs.push('plan panel: sprint tag shown for the current branch');
+    box.querySelector('input[value=task]').click(); await wait(50);
+    [...document.querySelectorAll('#drawer button')].find(b => /^Apply/.test(b.textContent)).click(); await wait(50);
+    const m = posts.filter(x => x.type === 'applyProposals').pop();
+    if (m?.where !== 'task') errs.push('plan panel: Apply posted where ' + m?.where);
+    JC.S.planner = undefined; JC.closeTask();
+  } catch (e) { errs.push('plan where: ' + e.message); }
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });
   // @ files in the Plan box: the menu shows inside the dialog, on screen.
   try {

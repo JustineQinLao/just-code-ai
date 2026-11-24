@@ -518,7 +518,10 @@ export async function plan(goal: string, o: HeadlessOpts): Promise<PlannedTask[]
 // Refines existing To do tasks with an instruction: Claude reads the code read-only and returns the task list it
 // proposes. Each item keeps `ref` (an existing task's id) when it is that task reworded, or omits it for a new task.
 // An existing id in none of the items is proposed for removal. This covers edit, split, merge, reorder and add.
-export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string; after?: string[] }
+// where: current = in the project folder on its checked-out branch, one at a time, no new branch; sprint = a sprint branch
+// merged at the end; task = each task on its own branch, merged one by one.
+export type PlanWhere = 'current' | 'sprint' | 'task';
+export interface RefineResult { ref?: string; title: string; description?: string; sprint?: string; after?: string[]; where?: PlanWhere }
 export async function refine(tasks: { id: string; title: string; description?: string }[], instruction: string, o: HeadlessOpts): Promise<RefineResult[]> {
   const prompt = `These are the To do tasks on a board (id, title, details). Rework them following the instruction, using the codebase to make them accurate.\n\n` +
     `## Current tasks\n${tasks.map(t => `[${t.id}] ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` +
@@ -548,23 +551,23 @@ How to plan:
 1. If the goal is vague (no clear outcome, scope or way to check it), first ask 2-4 short multiple-choice questions with AskUserQuestion. Do not ask what the code already answers.
 2. Read only the code you need (Grep/Glob first). Name real files. If the superpowers plugin is loaded, use its brainstorming and writing-plans skills before proposing tasks.
 3. Make each task one change that can be built, reviewed and merged on its own, in build order. Prefer 3-8 tasks. Split anything bigger than about a day of work.
-4. Group tasks into sprints when there are more than about 5, each sprint with a one-line goal. Reuse the board's open sprint names when they fit.
+4. Where the tasks run is my choice, not yours. Set "where" on every item: "current" (in the project folder on the checked-out branch, one at a time, no new branch or worktree), "sprint" (a sprint branch merged when the sprint is done) or "task" (each task on its own branch). If I name the branch I am on, or say "this branch", "current branch", "no new branch" or "no worktree", use "current". If I did not say and there is more than one task, ask me with AskUserQuestion before proposing. Use sprints only with "sprint": group tasks into a sprint when there are more than about 5, each with a one-line goal, and reuse an open sprint only when it is the same piece of work (never a sprint that is already merged).
 5. Build order: foundations first (models, tokens, shared components, layout), features next, and tasks that verify or document the whole (captures, PDFs, e2e reports) last. A task never depends on a later one. If the project has a plan-tasks skill, follow it.
 6. When a source is a design (a saved design canvas folder with project/canvas.json, mockups, screenshots), open it before proposing UI tasks. Give each UI task the exact screen files it must match in "files" by absolute path (e.g. "<project root>/.justcode/sources/<id>/project/Staff-Floor.dc.html", or a screen's PNG and HTML from the copy's screens/screens.json when it has one: tasks run in folders without .justcode) and in "done" a check that the built screen has the same sections, labels, order and styling as that file, shown by a screenshot at the design's width.
 
 After every turn, end your message with the FULL proposed To do list as one JSON block:
 \`\`\`tasks
-[{"ref": "<existing task id, or omit for a new task>", "title": "short imperative title", "goal": "the outcome in one sentence", "files": ["path/likely/changed.ts"], "done": ["a check the reviewer can verify", "the test or command that must pass"], "sprint": "Sprint 1: <goal>"}]
+[{"ref": "<existing task id, or omit for a new task>", "title": "short imperative title", "goal": "the outcome in one sentence", "files": ["path/likely/changed.ts"], "done": ["a check the reviewer can verify", "the test or command that must pass"], "sprint": "Sprint 1: <goal>", "where": "current"}]
 \`\`\`
 Add "after": ["<title of an earlier task in this list or on the board>"] when a task cannot start before another is done (Run all waits for it); omit it otherwise.
-Every task needs a goal and 1-4 "done" items that are concrete and testable (not "works well"). "files" are your best guess. Omit "sprint" for backlog tasks.
+Every task needs a goal and 1-4 "done" items that are concrete and testable (not "works well"). "files" are your best guess. Omit "sprint" for backlog tasks and when "where" is not "sprint".
 Keep an existing task's id in "ref" when your item is that task reworded; omit "ref" for a new task; drop a task entirely to propose removing it. Always include the whole list, not only what changed. Keep the prose before the block short.
 Started and done tasks (listed separately, when there are any) are never removed. Check each against the request and the code: include one, with its id in "ref" and the updated text, only when it must change. A done one then goes back to To do and is built again on top of its merged work; a working or in-review one gets the change as a message. Leave out the ones that are fine.`;
 
 // The first message: the board's sprints, the To do tasks being edited (if any), and the user's request.
 // With `sprint`, the tasks are every not-started task of that sprint and the instruction applies to all of them.
 export function plannerFirst(tasks: { id: string; title: string; description?: string }[], instruction: string, sprints: { name: string; goal?: string }[] = [], sprint?: { name: string; goal?: string },
-  others: { id: string; title: string; description?: string; status: string }[] = [], into?: string) {
+  others: { id: string; title: string; description?: string; status: string }[] = [], into?: string, branch?: string) {
   const target = into && !sprint ? `## Target sprint\nI am planning in ${into}: set "sprint" to "${into}" on every new task. Do not create other sprints unless I ask for them.\n\n` : '';
   const sp = sprints.length ? `## Open sprints\n${sprints.map(s => `- ${s.name}${s.goal ? `: ${s.goal}` : ''}`).join('\n')}\n\n` : '';
   const scope = sprint ? `## Scope\nEdit all the tasks below: they are every not-started task of ${sprint.name}${sprint.goal ? ` (goal: ${sprint.goal})` : ''}. ` +
@@ -573,7 +576,8 @@ export function plannerFirst(tasks: { id: string; title: string; description?: s
   const state = (s: string) => ({ done: 'done, merged', review: 'in review', doing: 'working' } as Record<string, string>)[s] ?? s;
   const started = others.length ? `## Started and done tasks${sprint ? ` in ${sprint.name}` : ''}\nCheck each one; include it only if it must change (see the rules).\n` +
     `${others.map(t => `[${t.id}] (${state(t.status)}) ${t.title}${t.description ? `\n    ${t.description.replace(/\n/g, '\n    ')}` : ''}`).join('\n')}\n\n` : '';
-  return `${sp}${target}${list}${started}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
+  const on = branch ? `## Branch\nThe project folder is on branch ${branch}. "current" means tasks run there.\n\n` : '';
+  return `${on}${sp}${target}${list}${started}## What I want\n${instruction}\n\nRead what you need (or ask me first if the goal is unclear), then reply with your thoughts and the proposed task list.`;
 }
 
 // A task's details as stored on the board: the reviewer checks the work against "Done when".
@@ -597,6 +601,7 @@ export function parseProposals(text: string, taskIds: Set<string>): RefineResult
       description: taskText({ goal: typeof t.goal === 'string' ? t.goal : undefined, files: strs(t.files), done: strs(t.done), description: typeof t.description === 'string' ? t.description : undefined }),
       sprint: typeof t.sprint === 'string' && t.sprint.trim() ? t.sprint.trim() : undefined,
       ...(strs(t.after).length ? { after: strs(t.after) } : {}),
+      ...(['current', 'sprint', 'task'].includes(t.where) ? { where: t.where as PlanWhere } : {}),
     }));
   } catch { return; }
 }

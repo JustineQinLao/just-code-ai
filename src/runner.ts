@@ -44,6 +44,7 @@ export interface RunnerSettings {
   worktreeCopy: string[];
   idleMinutes: number;
   bypassAll?: boolean;   // justCode.bypassAll: every task runs with bypassPermissions
+  defaultWhere?: string; // justCode.defaultWhere: auto, direct or branch (the plan panel's starting choice)
   superpowers: boolean;     // load the installed superpowers plugin into task, planner and review sessions
   codeMap?: boolean;
   terseReplies?: boolean;   // the caveman plugin's reply rules in tasks and chats, when it is installed        // tasks and chats get the project's code map (Graphify), when it is installed
@@ -654,6 +655,7 @@ export class Runner {
   plannerNote?: string;  // last apply result, shown in the panel
   plannerTurnAt = 0;     // when Claude's current planning turn started (the panel's progress bar)
   plannerSprint?: string; // the sprint this chat edits, when started with ✦ Edit sprint
+  plannerBranch?: string; // the project folder's branch when the chat started ("current" in the plan panel)
 
 
   plannerPhase?: string;

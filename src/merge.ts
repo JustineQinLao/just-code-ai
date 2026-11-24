@@ -207,7 +207,8 @@ export const mergeMethods = {
       if (conflicts.length) return block(`${sp.branch} conflicts with ${sp.target} in: ${conflicts.join(', ')}. Merge it by hand (git merge ${sp.branch} on ${sp.target}), then Merge sprint.`);
       await g.deleteBranch(this.root, sp.branch).catch(() => undefined);
     }
-    this.store.updateSprint(id, { branch: undefined, target: undefined, blocked: undefined, blockedBy: undefined });
+    // Merged: the sprint is finished. Closed, so a later plan never puts new work in it (and never re-cuts its branch).
+    this.store.updateSprint(id, { branch: undefined, target: undefined, blocked: undefined, blockedBy: undefined, closed: true, active: false });
     this.d.notify('info', `${sp.name} is done: merged ${sp.branch} into ${sp.target}.`, undefined, true);
     // The sprint is in: free Docker of every task stack, then rebuild the project's app from the project folder when code changed.
     const live = this.store.data.tasks.filter(x => x.worktree && x.status !== 'done').map(x => x.worktree!);
@@ -290,21 +291,54 @@ export const mergeMethods = {
     });
   },
 
-  async cleanup(this: Runner, t: Task) {
+  async cleanup(this: Runner, t: Task, keepBranch = false) {
     this.stop(t.id);
     this.cancelReview(t.id);
     fs.rmSync(path.join(os.tmpdir(), 'justcode-reviews', t.id), { recursive: true, force: true });
     if (t.worktree) await g.removeWorktree(this.root, t.worktree);
-    if (t.branch) await g.deleteBranch(this.root, t.branch).catch(() => { /* never created */ });
+    if (t.branch && !keepBranch) await g.deleteBranch(this.root, t.branch).catch(() => { /* never created */ });
   },
 
-  async remove(this: Runner, id: string) {
+  // Commits on a task's branch that its base does not have yet (0 when there is no branch or nothing new).
+  async unmergedCommits(this: Runner, t: Task) {
+    if (!t.branch || !await g.branchExists(this.root, t.branch)) return 0;
+    const base = t.base && await g.branchExists(this.root, t.base) ? t.base : await g.currentBranch(this.root).catch(() => '');
+    if (!base) return 0;
+    return Number(await g.git(this.root, ['rev-list', '--count', `${base}..${t.branch}`]).catch(() => '0')) || 0;
+  },
+
+  // Deleting a task never throws away work that was not merged: its branch stays (and is named in a notice).
+  // When it was its sprint's last open task, the sprint can now merge.
+  async remove(this: Runner, id: string, mergeSprint = true) {
     const t = this.store.task(id);
     if (!t) return;
-    await this.serial(() => this.cleanup(t)).catch(e => this.d.notify('error', e.message));
+    const kept = t.status !== 'done' ? await this.unmergedCommits(t).catch(() => 0) : 0;
+    await this.serial(() => this.cleanup(t, kept > 0)).catch(e => this.d.notify('error', e.message));
+    if (kept) this.d.notify('warn', `Deleted "${t.title}", but kept its branch ${t.branch}: it has ${kept} commit${kept === 1 ? '' : 's'} that ${t.base ?? 'its base'} does not have. ` +
+      `Merge it by hand (git merge ${t.branch}) or delete it (git branch -D ${t.branch}).`, undefined, true);
     fs.rmSync(path.join(this.root, '.justcode', 'attachments', id), { recursive: true, force: true });
     A.removeTaskDir(this.root, id);
     try { R.unlinkTask(this.root, id); } catch { /* the registry is a convenience */ }
     this.store.deleteTask(id);
+    if (t.sprintId && mergeSprint) await this.finishSprint(t.sprintId);
+  },
+
+  // Sprints that are finished but still open: every task done (or archived) and the sprint branch merged, deleted,
+  // or merged by hand into its target or the branch you are on. Closed, so plans do not reuse them.
+  async tidySprints(this: Runner) {
+    const current = await g.currentBranch(this.root).catch(() => '');
+    for (const sp of this.store.data.sprints) {
+      if (sp.closed) continue;
+      const tasks = this.store.data.tasks.filter(x => x.sprintId === sp.id && !x.archived);
+      if (!tasks.length || tasks.some(x => x.status !== 'done')) continue;
+      if (sp.branch && await g.branchExists(this.root, sp.branch)) {
+        const into = [sp.target, current].filter((b): b is string => !!b && b !== 'HEAD' && b !== sp.branch);
+        let merged = false;
+        for (const b of into) if (await g.branchExists(this.root, b) && await g.isMerged(this.root, sp.branch, b)) { merged = true; break; }
+        if (!merged) continue;   // its work is not in yet: Merge sprint does that
+        await g.git(this.root, ['branch', '-d', sp.branch]).catch(() => undefined);
+      }
+      this.store.updateSprint(sp.id, { branch: undefined, target: undefined, blocked: undefined, blockedBy: undefined, closed: true, active: false });
+    }
   },
 };
