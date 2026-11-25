@@ -132,8 +132,9 @@ function where(root: string, s: Source, cli?: string) {
       return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `Its reference, made by 🎨 Fix to match, is ${scr}/: screens.json lists every screen per width: its .css (the design's own CSS rules for that screen: copy these values, never estimate them from the image), ` +
         `its .html (the markup: same structure, order and copy), its .json (measured fonts, sizes, colors and boxes), its PNG (only for a look), and the app URL that gives the same state. ` +
-        `Every state of a screen that a click opens (a modal, panel, picked option) has its own files, named <screen>~<control label>-<width>; states.json lists them with the label to click, ` +
-        `plus what the other controls do (kind overlay: a menu or sheet; toast: a short message; go: it leads to another screen). Build those states and behaviours too, with the same control labels. ` +
+        `Every state that clicks open (a modal and its steps, a panel, a picked option, a menu or sheet: up to 3 clicks deep) has its own files, named <screen>~<label>[~<label>…]-<width>; ` +
+        `states.json lists each with its steps (the labels to click, and the values typed into fields first), plus the other behaviours (toast: a short message; go: it leads to another screen). ` +
+        `Build those states and behaviours too, with the same control and field labels, so the same clicks reach them in the app. ` +
         `Build the screens your task covers from that code; only the data comes from the app. ` +
         `The app running at the project's link serves the project folder, not your task folder: to measure your change, start your folder's frontend detached on a free port (pointing at the running backend), and stop it after. ` +
         `Sign-in per role is already written: copy the "setup" of the matching group in ${jc(root, 'design', 'app-jobs.json')} (change only the app address to yours). ` +

@@ -25,6 +25,7 @@ import { ensureCert, PhoneCert } from './phonecert';
 import { Device, DeviceStore, startPhoneServer, canPhoneMerge, phoneDetail, phoneSteps, phoneMoveError, phoneProjectOk, phoneProjects, phoneLinkUrl, qrSvg, issuePairingCode } from './phone';
 import type * as http from 'http';
 import { startMobileServer, MobileServer } from './server';
+import { newerInstalled } from './version';
 import { hub, phoneDevices, lanIps, loadPhoneToken, newToken, syncPhone } from './phonehost';
 import { BYPASS_TEXT, bin, bypassAllOn, cfg, commandCache, confirm, confirmFor, emit, ensureBypassAll, env, limits, open, overrides, pick, push, q, roots, runner, runnerFor, runners, saved, savingTerms, setCurrent, setting, st } from './host';
 import { fix, recheck } from './setupflow';
@@ -685,6 +686,13 @@ export async function designFromProject(r: Runner) {
 // 🎨 Design → Fix to match: one task compares every screen of a saved design with the running app, writes
 // .justcode/design/audit.md and ends with the fix tasks, which JustCode adds as a sprint and runs.
 export async function fixDesign(r: Runner, sourceId?: string) {
+  // Fix to match runs JustCode's own steps: an old copy still loaded would run the old ones without a word.
+  const newer = newerInstalled(st.ctx.extensionPath, st.ctx.extension.packageJSON.version);
+  if (newer) {
+    const c = await vscode.window.showWarningMessage(`JustCode ${newer} is installed, but this window still runs ${st.ctx.extension.packageJSON.version}. Reload the window first, so Fix to match uses the new steps.`, { modal: true }, 'Reload window');
+    if (c === 'Reload window') void vscode.commands.executeCommand('workbench.action.reloadWindow');
+    return;
+  }
   const running = r.store.data.tasks.find(t => t.init === 'fixdesign' && !t.archived && t.status !== 'done');
   if (running) return open(running.id);
   // The last audit's fixes still running: a new audit would add the same tasks again.

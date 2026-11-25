@@ -13,24 +13,41 @@ import { parseMeasure, diffItems, Diff, usableSample, MEASURE_V } from './design
 // Each group starts signed out (cookies and storage cleared), runs its setup once, then its shots in order.
 // Writes each png, json (the measure) and, beside the json, its .css (the CSS rules the page uses).
 
-// actions: clicks done after the page loads, by the control's visible label or aria-label, to reach a state (a modal
-// open, a tab picked). A label the page has no control for is reported (the json gets "missing"), not guessed.
-export interface Shot { url: string; width: number; png: string; json: string; actions?: { click: string }[] }
+// actions: steps done after the page loads to reach a state (a modal open, a step of it, a menu item): each types the
+// given values into the fields with those labels (the values the design shows), then clicks the control with that
+// visible label or aria-label. A label the page has no control for is reported (the json gets "missing"), not guessed.
+export interface Fill { label: string; value: string }
+export interface Step { click: string; fill?: Fill[] }
+export interface Shot { url: string; width: number; png: string; json: string; actions?: Step[] }
 // extract: code run once that returns [{ name, html }] (e.g. every screen of a gallery as a standalone page); each is
 // written to <dir>/<name>.html before the group's shots, so splitting a design is one command too.
 // open + page (optional) let JustCode explore each screen in the live design: open(page, name) shows that screen and
 // returns the CSS selector of its root; page(page, selector) returns the standalone HTML of what that root shows now.
-// Every control in the root is clicked in turn; each new state (a modal, a picked option, a variant) is saved as
-// <dir>/<id>~<label>-<width>.html with a shot at the same width, and all of it is listed in <dir>/states.json.
+// Controls are clicked up to EXPLORE_DEPTH deep (a modal's steps, a menu's items, also menus added outside the root);
+// each new state is saved as <dir>/<id>~<label>[~<label>…]-<width>.html with a shot at the same width, and all of it is
+// listed in <dir>/states.json. A gallery screen that is the same as an explored state of another screen is merged
+// into it (kind "same"): compared and fixed once.
 export interface Extract { code: string; dir: string; open?: string; page?: string }
 // states (app groups): the design's states.json. Each shot whose name has states gets one more shot per state: the same
-// url with the state's click, so the app is compared in the same state as the design.
+// url with the state's steps, so the app is compared in the same state as the design.
 export interface Group { setup?: string; extract?: Extract; states?: string; shots: Shot[] }
-// One explored state. kind: state (the screen changed in place: a modal, panel, picked option), overlay (new content
-// outside the screen root, e.g. a menu or sheet on the body), toast (a short message), go (it leads to another screen).
-export interface State { name: string; base: string; label: string; kind: 'state' | 'overlay' | 'toast' | 'go'; added?: string[]; removed?: string[]; to?: string }
-export const EXPLORE_MAX = 30;   // controls tried per screen
-
+// One explored state. kind: state (the screen changed in place: a modal, panel, step, picked option), overlay (new
+// content outside the screen root: a menu or sheet), toast (a short message), go (it leads to another screen), same
+// (a gallery screen that is this state: name is the gallery screen, to the state it equals).
+export interface State { name: string; base: string; label: string; steps?: Step[]; kind: 'state' | 'overlay' | 'toast' | 'go' | 'same'; added?: string[]; removed?: string[]; to?: string }
+export const shown = (st: State) => st.kind === 'state' || st.kind === 'overlay';   // has its own page and shots
+export const EXPLORE_DEPTH = 3;      // clicks deep
+export const EXPLORE_STATES = 40;    // states kept per screen
+// Gallery pages are cut out of a device frame: their root is often height:100% of it. Without the frame the root
+// shrinks to its content (a tab bar floats up, blank space below), so each page is put back in a frame of the
+// device's height (the viewport shots use); a longer page still grows, as the shot undoes inner scrolling.
+export const frameHeight = (width: number) => width < 800 ? 844 : 900;
+export function framePage(html: string, width: number) {
+  if (/data-jc-frame/.test(html) || !/<body[^>]*>/i.test(html)) return html;
+  const css = `<style>[data-jc-frame]>*:only-child{height:100%}</style>`;
+  const head = /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${css}</head>`) : html.replace(/(<body[^>]*>)/i, `${css}$1`);
+  return head.replace(/(<body[^>]*>)/i, `$1<div data-jc-frame style="width:${width}px;height:${frameHeight(width)}px">`).replace(/<\/body>/i, '</div></body>');
+}
 // Where a design's reference lives (screens.json, each screen and state's html/css/json/png): beside the board, never
 // inside the saved copy, which a re-save replaces whole. A design folder outside .justcode keeps its own screens/.
 export function screensOf(copy: string) {
@@ -56,75 +73,108 @@ export function parseJobs(text: string): Jobs {
   return { groups };
 }
 
-// The page-side helpers both explore and replay use: the clickable controls inside a root (visible, enabled), each
-// with its label, and the root's text. Plain JS in a string (it runs in the Playwright MCP).
-const FIND = String.raw`const CLICK = 'button, a[href], [role=button], [role=tab], [role=menuitem], [role=radio], [role=checkbox], [role=option], [role=switch], [onclick], [data-act], [data-go], summary, input[type=radio], input[type=checkbox], select';
-  const lines = t => (t || '').split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
-  const read = sel => page.evaluate(([sel, CLICK]) => {
+// The page-side helpers both explore and replay use (plain JS in strings; they run in the Playwright MCP). PICK finds,
+// for the open screen root, the content added outside it since the screen opened (menus, sheets: "over"), the
+// clickable controls in both (visible, enabled, innermost) and the filled text fields with their labels.
+const PICK = String.raw`(sel, CLICK) => {
     const root = document.querySelector(sel);
     if (!root) return null;
     const vis = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && !e.disabled; };
-    const label = e => (e.getAttribute('aria-label') || e.getAttribute('title') || (e.innerText || '').split('\n').map(x => x.trim()).find(Boolean) || e.value || e.getAttribute('placeholder') || '').replace(/\s+/g, ' ').trim().slice(0, 60);
-    const all = [...root.querySelectorAll(CLICK)].filter(vis).filter((e, i, a) => !a.some(o => o !== e && e.contains(o)));
-    return { text: root.innerText, body: document.body.innerText, controls: all.map((e, i) => ({ i, label: label(e), go: e.getAttribute('data-go') || '' })) };
-  }, [sel, CLICK]);
-  const clickAt = (sel, i) => page.evaluate(([sel, CLICK, i]) => {
-    const root = document.querySelector(sel);
-    if (!root) return false;
-    const vis = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && !e.disabled; };
-    const e = [...root.querySelectorAll(CLICK)].filter(vis).filter((e, i, a) => !a.some(o => o !== e && e.contains(o)))[i];
-    if (!e) return false;
-    e.click();
-    return true;
-  }, [sel, CLICK, i]);
+    const txt = e => (e.innerText || e.textContent || '').split('\n').map(x => x.trim()).find(Boolean) || '';
+    const over = [...document.body.querySelectorAll('*:not([data-jc-old])')].filter(e => !root.contains(e) && !e.contains(root) && !/^(SCRIPT|STYLE|LINK)$/.test(e.tagName) && (e.parentElement === document.body || (e.parentElement && e.parentElement.hasAttribute('data-jc-old'))) && vis(e));
+    const scopes = [root].concat(over);
+    const ctl = scopes.flatMap(s => (s !== root && s.matches(CLICK) ? [s] : []).concat([...s.querySelectorAll(CLICK)])).filter(vis).filter((e, i, a) => a.indexOf(e) === i && !a.some(o => o !== e && e.contains(o)));
+    const fieldLabel = e => { const f = e.id && document.querySelector('label[for="' + e.id + '"]'); const l = e.getAttribute('aria-label') || (f ? txt(f) : '') || (e.closest('label') ? txt(e.closest('label')) : '') || e.getAttribute('placeholder') || (e.previousElementSibling ? txt(e.previousElementSibling) : '') || e.name || ''; return l.replace(/\s+/g, ' ').trim().slice(0, 60); };
+    const fields = scopes.flatMap(s => [...s.querySelectorAll('input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not([type=file]), textarea')]).filter(vis).map(e => ({ label: fieldLabel(e), value: e.value })).filter(f => f.label && f.value);
+    const label = e => (e.getAttribute('aria-label') || e.getAttribute('title') || txt(e) || e.value || e.getAttribute('placeholder') || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    return { root, over, ctl, fields, label };
+  }`;
+const FIND = String.raw`const CLICK = 'button, a[href], [role=button], [role=tab], [role=menuitem], [role=radio], [role=checkbox], [role=option], [role=switch], [onclick], [data-act], [data-go], summary, input[type=radio], input[type=checkbox], select';
+  const PICK = ` + '`' + PICK.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`' + String.raw`;
+  const inPage = (fn, args) => page.evaluate('(' + fn + ')(...' + JSON.stringify(args) + ')');
+  const lines = t => (t || '').split('\n').map(x => x.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const mark = sel => page.evaluate(sel => { const root = document.querySelector(sel); for (const e of document.body.querySelectorAll('*')) if (!root || (!root.contains(e) && !e.contains(root))) e.setAttribute('data-jc-old', ''); }, sel);
+  const READ = '(sel, CLICK) => { const p = (' + PICK + ')(sel, CLICK); if (!p) return null; return { text: p.root.innerText, over: p.over.map(e => e.innerText).join("\\n"), overHtml: p.over.map(e => e.outerHTML).join(""), body: document.body.innerText, fields: p.fields, controls: p.ctl.map((e, i) => ({ i, label: p.label(e), go: e.getAttribute("data-go") || "" })) }; }';
+  const CLICK_AT = '(sel, CLICK, i) => { const p = (' + PICK + ')(sel, CLICK); const e = p && p.ctl[i]; if (!e) return false; e.click(); return true; }';
+  const read = sel => inPage(READ, [sel, CLICK]);
+  const clickAt = (sel, i) => inPage(CLICK_AT, [sel, CLICK, i]);
   const settle = () => page.waitForTimeout(250);
-  const opened = async n => { const sel = await open(page, n); await settle(); if (typeof sel !== 'string' || !sel) throw new Error('open() must return the screen root selector'); return sel; };`;
-
-// Explores one screen: every control clicked from a freshly opened screen, the change classified. Returns State-like
-// rows (the html of each in-place state included, for the caller to write).
-export const exploreCode = (open: string, snap: string, name: string, max = EXPLORE_MAX) => (String.raw`async (page) => {
-  const open = (__OPEN__), snap = (__SNAP__), NAME = __NAME__, MAX = __MAX__;
-  ` + FIND + String.raw`
-  const sel = await opened(NAME), first = await read(sel);
-  if (!first) throw new Error('no element matches ' + sel);
-  const out = [], seen = new Set();
-  for (const c of first.controls.slice(0, MAX)) {
-    if (!c.label || seen.has(c.label)) continue;
-    seen.add(c.label);
-    if (c.go) { out.push({ label: c.label, kind: 'go', to: c.go }); continue; }
-    const s = await opened(NAME), before = await read(s);
-    if (!before || !await clickAt(s, c.i)) continue;
-    await settle();
-    const after = await read(s);
-    if (!after) { out.push({ label: c.label, kind: 'go' }); continue; }
-    const a = lines(after.text), b = lines(before.text), bs = new Set(b), as = new Set(a);
-    const added = a.filter(x => !bs.has(x)), removed = b.filter(x => !as.has(x));
-    const both = a.filter(x => bs.has(x)).length, jac = both / Math.max(1, new Set([...a, ...b]).size);
-    if (jac < 0.35) { out.push({ label: c.label, kind: 'go', to: a[0] || '' }); continue; }
-    if (!added.length && !removed.length) {
-      const bb = new Set(lines(before.body)), extra = lines(after.body).filter(x => !bb.has(x));
-      if (extra.length) out.push({ label: c.label, kind: extra.length > 2 ? 'overlay' : 'toast', added: extra.slice(0, 12) });
-      continue;
+  const opened = async n => { const sel = await open(page, n); await settle(); if (typeof sel !== 'string' || !sel) throw new Error('open() must return the screen root selector'); await mark(sel); return sel; };
+  const reach = async (n, path) => {
+    const sel = await opened(n);
+    for (const label of path) {
+      const r = await read(sel), c = r && r.controls.find(x => x.label === label);
+      if (!c || !await clickAt(sel, c.i)) return null;
+      await settle();
     }
-    out.push({ label: c.label, kind: 'state', added: added.slice(0, 12), removed: removed.slice(0, 12), html: await snap(page, s) });
-  }
-  return out;
-}`).replace('__OPEN__', open).replace('__SNAP__', snap).replace('__NAME__', JSON.stringify(name)).replace('__MAX__', String(max));
+    return sel;
+  };
+  const html = async (sel, r) => { const h = await snap(page, sel); return r && r.overHtml ? h.replace(/<\/body>/i, r.overHtml + '</body>') : h; };`;
 
-// The same state at another width: open that screen, click the control with this label, return the html (or null).
-export const replayCode = (open: string, snap: string, name: string, label: string) => (String.raw`async (page) => {
-  const open = (__OPEN__), snap = (__SNAP__), NAME = __NAME__, LABEL = __LABEL__;
+// Explores one screen, up to DEPTH clicks deep: from each state, the controls new in it are clicked in turn (a
+// modal's steps, a menu's items). Each change is classified; a state already reached another way is skipped.
+export const exploreCode = (open: string, snap: string, name: string, depth = EXPLORE_DEPTH, max = EXPLORE_STATES) => (String.raw`async (page) => {
+  const open = (__OPEN__), snap = (__SNAP__), NAME = __NAME__, DEPTH = __DEPTH__, MAX = __MAX__;
   ` + FIND + String.raw`
-  const s = await opened(NAME), r = await read(s);
-  const c = r && r.controls.find(x => x.label === LABEL);
-  if (!c || !await clickAt(s, c.i)) return null;
-  await settle();
-  return await snap(page, s);
-}`).replace('__OPEN__', open).replace('__SNAP__', snap).replace('__NAME__', JSON.stringify(name)).replace('__LABEL__', JSON.stringify(label));
+  const out = [], seen = new Set();
+  const sig = r => lines(r.text).join('|') + '##' + lines(r.over).join('|');
+  const walk = async (path, fills, level, known) => {
+    const s0 = await reach(NAME, path);
+    if (!s0) return;
+    const cur = await read(s0);
+    if (!cur) return;
+    seen.add(sig(cur));
+    const tried = new Set(known);
+    for (const c of cur.controls) {
+      if (out.filter(x => x.kind === 'state' || x.kind === 'overlay').length >= MAX) return;
+      if (!c.label || tried.has(c.label)) continue;
+      tried.add(c.label);
+      const step = path.concat([c.label]);
+      if (c.go) { out.push({ path: step, fills, kind: 'go', to: c.go }); continue; }
+      const s = await reach(NAME, path);
+      if (!s) return;
+      const before = await read(s), b0 = before && before.controls.find(x => x.label === c.label);
+      if (!b0 || !await clickAt(s, b0.i)) continue;
+      await settle();
+      const after = await read(s);
+      const stepFills = fills.concat([before.fields]);
+      if (!after) { out.push({ path: step, fills: stepFills, kind: 'go' }); continue; }
+      const a = lines(after.text), b = lines(before.text), as = new Set(a), bs = new Set(b);
+      const oa = lines(after.over), ob = lines(before.over), obs = new Set(ob), oas = new Set(oa);
+      const both = a.filter(x => bs.has(x)).length, jac = both / Math.max(1, new Set(a.concat(b)).size);
+      if (jac < 0.35) { out.push({ path: step, fills: stepFills, kind: 'go', to: a[0] || '' }); continue; }
+      const added = a.filter(x => !bs.has(x)).concat(oa.filter(x => !obs.has(x))), removed = b.filter(x => !as.has(x)).concat(ob.filter(x => !oas.has(x)));
+      if (!added.length && !removed.length) {
+        const bb = new Set(lines(before.body)), extra = lines(after.body).filter(x => !bb.has(x));
+        if (extra.length) out.push({ path: step, fills: stepFills, kind: 'toast', added: extra.slice(0, 6) });
+        continue;
+      }
+      const k = sig(after);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const inPlace = a.join('|') !== b.join('|');
+      // New content outside the screen with nothing to click and a line or two: a toast, not a menu or sheet.
+      if (!inPlace && after.controls.length <= before.controls.length && added.length <= 2) { out.push({ path: step, fills: stepFills, kind: 'toast', added }); continue; }
+      out.push({ path: step, fills: stepFills, kind: inPlace ? 'state' : 'overlay', added: added.slice(0, 12), removed: removed.slice(0, 12), html: await html(s, after) });
+      if (level + 1 < DEPTH) await walk(step, stepFills, level + 1, new Set(before.controls.map(x => x.label)));
+    }
+  };
+  await walk([], [], 0, new Set());
+  return out;
+}`).replace('__OPEN__', () => open).replace('__SNAP__', () => snap).replace('__NAME__', JSON.stringify(name)).replace('__DEPTH__', String(depth)).replace('__MAX__', String(max));
+
+// The same state at another width: open that screen, click the path's labels, return the html (or null).
+export const replayCode = (open: string, snap: string, name: string, path: string[]) => (String.raw`async (page) => {
+  const open = (__OPEN__), snap = (__SNAP__), NAME = __NAME__, PATH = __PATH__;
+  ` + FIND + String.raw`
+  const s = await reach(NAME, PATH);
+  if (!s) return null;
+  return await html(s, await read(s));
+}`).replace('__OPEN__', () => open).replace('__SNAP__', () => snap).replace('__NAME__', JSON.stringify(name)).replace('__PATH__', () => JSON.stringify(path));
 
 // SHOT_CODE with its placeholders filled.
 export const shotCode = (s: Shot) => SHOT_CODE.replace("'URL'", JSON.stringify(s.url)).replace('WIDTH', String(Math.round(s.width))).replace("'PNG'", JSON.stringify(s.png))
-  .replace('ACTIONS', JSON.stringify((s.actions ?? []).map(a => a.click).filter(x => typeof x === 'string' && x)));
+  .replace('ACTIONS', () => JSON.stringify((s.actions ?? []).filter(a => typeof a?.click === 'string' && a.click)));
 
 class Mcp {
   private p: ReturnType<typeof spawn>;
@@ -157,8 +207,8 @@ class Mcp {
     this.p.stdin!.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   }
   // A tool's text, or an Error with the tool's own message.
-  async call(name: string, args: Record<string, unknown>) {
-    const j = await this.rpc('tools/call', { name, arguments: args });
+  async call(name: string, args: Record<string, unknown>, ms = 120_000) {
+    const j = await this.rpc('tools/call', { name, arguments: args }, ms);
     const text = String(j.result?.content?.[0]?.text ?? j.error?.message ?? '');
     if (j.error || j.result?.isError || /^### Error/m.test(text)) throw new Error(text.replace(/^### Error\s*/m, '').split('\n').slice(0, 3).join(' ').slice(0, 300));
     return text;
@@ -173,12 +223,23 @@ export function resultOf(text: string): unknown {
   return JSON.parse(m[1].trim());
 }
 
+// Words of a page's visible text (tags, styles and scripts dropped), for telling whether two pages show the same.
+const words = (html: string) => new Set(html.replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').toLowerCase().split(/[^\p{L}\p{N}₱$%#.,:-]+/u).filter(w => w.length > 1));
+export function sameText(a: string, b: string) {
+  const A = words(a), B = words(b);
+  if (A.size < 5 || B.size < 5) return false;
+  let both = 0; for (const w of A) if (B.has(w)) both++;
+  return both / (A.size + B.size - both) >= 0.9;
+}
+
 // Explores every extracted screen of a design (see Extract): resumable, since states.json is written after each screen
 // and a screen already in it is skipped, so a run cut off by a timeout goes on where it stopped when run again.
+// Then gallery screens equal to an explored state of another screen are merged into it (kind same).
 async function explore(mcp: Mcp, x: Extract, names: string[], log: (line: string) => void, failed: string[]) {
   const file = path.join(x.dir, 'states.json');
   let all: State[] = [];
   try { all = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* first run */ }
+  all = all.filter(st => st.kind !== 'same');
   const done = new Set(all.map(st => st.base));
   const save = () => fs.writeFileSync(file, JSON.stringify(all, null, 1));
   const byId = new Map<string, string[]>();
@@ -189,46 +250,60 @@ async function explore(mcp: Mcp, x: Extract, names: string[], log: (line: string
     if (widths.every(n => done.has(n))) continue;
     const [first, ...others] = widths;
     let rows: any[];
-    try { rows = resultOf(await mcp.call('browser_run_code_unsafe', { code: exploreCode(x.open!, x.page!, first) })) as any[]; }
+    try { rows = resultOf(await mcp.call('browser_run_code_unsafe', { code: exploreCode(x.open!, x.page!, first) }, 900_000)) as any[]; }
     catch (e: any) { failed.push(`explore ${first}: ${e.message}`); log(`explore ${first} failed: ${e.message}`); continue; }
     const used = new Set<string>();
-    const nameFor = (label: string) => { let k = slug(label), n = 2; while (used.has(k)) k = `${slug(label)}-${n++}`; used.add(k); return k; };
+    const nameFor = (p: string[]) => { const base = p.map(slug).join('~'); let k = base, n = 2; while (used.has(k)) k = `${base}-${n++}`; used.add(k); return k; };
     const keep: State[] = [];
     for (const r of Array.isArray(rows) ? rows : []) {
-      if (!r || typeof r.label !== 'string') continue;
-      const k = nameFor(r.label), w = split(first)[1];
-      const st: State = { name: `${id}~${k}-${w}`, base: first, label: r.label, kind: r.kind, ...(r.added?.length ? { added: r.added } : {}), ...(r.removed?.length ? { removed: r.removed } : {}), ...(r.to ? { to: r.to } : {}) };
-      if (r.kind === 'state' && typeof r.html === 'string') fs.writeFileSync(path.join(x.dir, `${st.name}.html`), r.html);
+      if (!r || !Array.isArray(r.path) || !r.path.length) continue;
+      const k = nameFor(r.path), w = split(first)[1];
+      const steps: Step[] = r.path.map((label: string, j: number) => {
+        const f: Fill[] = (Array.isArray(r.fills?.[j]) ? r.fills[j] : []).filter((x: any) => x && typeof x.label === 'string' && typeof x.value === 'string');
+        return f.length ? { click: label, fill: f } : { click: label };
+      });
+      const st: State = { name: `${id}~${k}-${w}`, base: first, label: r.path[r.path.length - 1], steps, kind: r.kind, ...(r.added?.length ? { added: r.added } : {}), ...(r.removed?.length ? { removed: r.removed } : {}), ...(r.to ? { to: r.to } : {}) };
+      if (shown(st) && typeof r.html === 'string') fs.writeFileSync(path.join(x.dir, `${st.name}.html`), framePage(r.html, Number(w) || 390));
       keep.push(st);
-      // The same state at the other widths, reached by the same label.
-      if (r.kind === 'state') for (const o of others) {
+      // The same state at the other widths, reached by the same clicks.
+      if (shown(st)) for (const o of others) {
         try {
-          const html = resultOf(await mcp.call('browser_run_code_unsafe', { code: replayCode(x.open!, x.page!, o, r.label) }));
-          if (typeof html === 'string') { const sn = `${id}~${k}-${split(o)[1]}`; fs.writeFileSync(path.join(x.dir, `${sn}.html`), html); keep.push({ ...st, name: sn, base: o }); }
-        } catch (e: any) { failed.push(`replay ${o} "${r.label}": ${e.message}`); }
+          const h = resultOf(await mcp.call('browser_run_code_unsafe', { code: replayCode(x.open!, x.page!, o, r.path) }, 300_000));
+          if (typeof h === 'string') { const sn = `${id}~${k}-${split(o)[1]}`; fs.writeFileSync(path.join(x.dir, `${sn}.html`), framePage(h, Number(split(o)[1]) || 1440)); keep.push({ ...st, name: sn, base: o }); }
+        } catch (e: any) { failed.push(`replay ${o} ${r.path.join(' › ')}: ${e.message}`); }
       }
     }
-    // A screen with nothing to click still counts as explored (its base row has no states).
+    // A screen with nothing to click still counts as explored.
     all = all.filter(st => !widths.includes(st.base)).concat(keep.length ? keep : widths.map(b => ({ name: b, base: b, label: '', kind: 'go' as const })));
     save();
-    const n = keep.filter(st => st.kind === 'state').length;
-    log(`explored ${i}/${byId.size} ${id}: ${keep.length} control${keep.length === 1 ? '' : 's'}, ${n} state${n === 1 ? '' : 's'}`);
+    const n = keep.filter(shown).length;
+    log(`explored ${i}/${byId.size} ${id}: ${keep.length} behaviour${keep.length === 1 ? '' : 's'}, ${n} state${n === 1 ? '' : 's'} (up to ${EXPLORE_DEPTH} clicks deep)`);
   }
-  return all.filter(st => st.label);
+  // A gallery screen drawn as its own page but equal to a state of another screen (a modal shown open): merged.
+  const read = (n: string) => { try { return fs.readFileSync(path.join(x.dir, `${n}.html`), 'utf8'); } catch { return ''; } };
+  for (const n of names) {
+    const [id, w] = split(n), own = read(n);
+    const twin = all.find(st => shown(st) && st.base.endsWith(`-${w}`) && split(st.base)[0] !== id && sameText(own, read(st.name)));
+    if (twin) { all.push({ name: n, base: n, label: '', kind: 'same', to: twin.name }); log(`${n} is the state ${twin.name}: compared once, as that state`); }
+  }
+  save();
+  return all;
 }
 
-// The app shots for the design's states: each shot of a base screen (png name = state.base) once more per in-place
-// state, with that state's click. Exported for tests.
+// The app shots for the design's states: each shot of a base screen (png name = state.base) once more per shown
+// state, with that state's steps. Exported for tests.
 export function stateShots(shots: Shot[], states: State[]): Shot[] {
   const out: Shot[] = [];
   for (const sh of shots) {
     const base = path.basename(sh.png).replace(/\.png$/i, '');
-    for (const st of states) if (st.kind === 'state' && st.base === base)
-      out.push({ ...sh, png: path.join(path.dirname(sh.png), `${st.name}.png`), json: path.join(path.dirname(sh.json), `${st.name}.json`), actions: [...(sh.actions ?? []), { click: st.label }] });
+    for (const st of states) if (shown(st) && st.base === base)
+      out.push({ ...sh, png: path.join(path.dirname(sh.png), `${st.name}.png`), json: path.join(path.dirname(sh.json), `${st.name}.json`), actions: [...(sh.actions ?? []), ...(st.steps ?? [{ click: st.label }])] });
   }
   return out;
 }
-export const loadStates = (file: string): State[] => { try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((x: any) => x && typeof x.label === 'string' && x.label) : []; } catch { return []; } };
+// Gallery screens merged into a state (kind same): not compared on their own.
+export const mergedScreens = (states: State[]) => new Set(states.filter(st => st.kind === 'same').map(st => st.name));
+export const loadStates = (file: string): State[] => { try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((x: any) => x && typeof x.name === 'string' && (x.label || x.kind === 'same')) : []; } catch { return []; } };
 
 export async function capture(jobs: Jobs, log: (line: string) => void = console.log) {
   for (const g of jobs.groups) if (g.states) g.shots = [...(g.shots ?? []), ...stateShots(g.shots ?? [], loadStates(g.states))];
@@ -248,20 +323,25 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
           const pages = resultOf(text);
           if (!Array.isArray(pages)) throw new Error('extract code must return [{ name, html }]');
           fs.mkdirSync(g.extract.dir, { recursive: true });
-          for (const pg of pages) if (pg && typeof pg.name === 'string' && typeof pg.html === 'string' && /^[\w.-]+$/.test(pg.name)) { fs.writeFileSync(path.join(g.extract.dir, `${pg.name}.html`), pg.html); names.push(pg.name); }
+          for (const pg of pages) if (pg && typeof pg.name === 'string' && typeof pg.html === 'string' && /^[\w.-]+$/.test(pg.name)) { fs.writeFileSync(path.join(g.extract.dir, `${pg.name}.html`), framePage(pg.html, Number(split(pg.name)[1]) || 390)); names.push(pg.name); }
           log(`extracted ${names.length} page${names.length === 1 ? '' : 's'} into ${g.extract.dir}`);
         } catch (e: any) { failed.push(`extract: ${e.message}`); log(`extract failed: ${e.message}`); }
         if (g.extract.open && g.extract.page && names.length) {
           const states = await explore(mcp, g.extract, names, log, failed);
-          // Each in-place state is shot like its screen: same width, beside it.
+          // Gallery screens merged into a state are not shot on their own (their old files go too).
+          const merged = mergedScreens(states);
+          const isMerged = (x: Shot) => merged.has(path.basename(x.png).replace(/\.png$/i, ''));
+          for (const x of (g.shots ?? []).filter(isMerged)) for (const f of [x.png, x.json, x.json.replace(/\.json$/i, '.css')]) fs.rmSync(f, { force: true });
+          g.shots = (g.shots ?? []).filter(x => !isMerged(x));
+          // Each state is shot like its screen: same width, beside it.
           const extra: Shot[] = [];
-          for (const st of states.filter(x => x.kind === 'state')) {
+          for (const st of states.filter(shown)) {
             const sh = (g.shots ?? []).find(x => path.basename(x.png).replace(/\.png$/i, '') === st.base);
             if (sh && fs.existsSync(path.join(g.extract.dir, `${st.name}.html`)))
               extra.push({ url: `file://${path.join(g.extract.dir, `${st.name}.html`)}`, width: sh.width, png: path.join(path.dirname(sh.png), `${st.name}.png`), json: path.join(path.dirname(sh.json), `${st.name}.json`) });
           }
           g.shots = [...(g.shots ?? []), ...extra];
-          log(`${states.filter(x => x.kind === 'state').length} states to shoot; ${states.filter(x => x.kind !== 'state').length} other behaviours (menus, toasts, links) in states.json`);
+          log(`${states.filter(shown).length} states to shoot; ${states.filter(x => x.kind === 'toast' || x.kind === 'go').length} other behaviours (toasts, links) and ${merged.size} merged screens in states.json`);
         }
       }
       if (!g.shots?.length) continue;
@@ -320,7 +400,8 @@ export interface Shared { rule: string; screens: string[]; examples: string[] }
 export function diffAll(designDir: string, appDir: string, outDir: string, sample: string[] = []) {
   fs.mkdirSync(outDir, { recursive: true });
   const rows: DiffRow[] = [], rules = new Map<string, Set<string>>(), texts = new Map<string, Set<string>>();
-  for (const f of fs.readdirSync(designDir).filter(f => f.endsWith('.json') && !/^(screens|jobs|app-jobs|sample|states)\.json$/.test(f)).sort()) {
+  const merged = mergedScreens(loadStates(path.join(designDir, 'states.json')));
+  for (const f of fs.readdirSync(designDir).filter(f => f.endsWith('.json') && !/^(screens|jobs|app-jobs|sample|states)\.json$/.test(f) && !merged.has(f.replace(/\.json$/, ''))).sort()) {
     const app = path.join(appDir, f);
     if (!fs.existsSync(app)) continue;
     let d: Diff[];
@@ -363,11 +444,11 @@ function writeCompare(designDir: string, appDir: string, outDir: string, rows: D
   const sections = byName.map(r => {
     const lines = (() => { try { return fs.readFileSync(path.join(outDir, `${r.name}.diff.txt`), 'utf8').trim().split('\n').slice(0, 40); } catch { return []; } })();
     const st = states.find(x => x.name === r.name);
-    const acts = r.name.includes('~') ? [] : states.filter(x => x.base === r.name && x.kind !== 'state');
+    const acts = r.name.includes('~') ? [] : states.filter(x => x.base === r.name && (x.kind === 'toast' || x.kind === 'go'));
     return `<section id="${esc(r.name)}"><h2>${esc(r.name)} <small>${r.n} difference${r.n === 1 ? '' : 's'}${r.px !== undefined ? ` · ${r.px}% pixels` : ''}</small></h2>` +
-      (st ? `<p class="how">Reached by clicking “${esc(st.label)}”</p>` : '') +
+      (st ? `<p class="how">Reached by ${(st.steps ?? [{ click: st.label }]).map(x => `${x.fill?.length ? `typing ${x.fill.map(f => `“${esc(f.value)}”`).join(', ')}, then ` : ''}clicking “${esc(x.click)}”`).join(' › ')}</p>` : '') +
       `<div class="row"><figure><figcaption>Design</figcaption>${img(path.join(designDir, `${r.name}.png`))}</figure><figure><figcaption>App</figcaption>${img(path.join(appDir, `${r.name}.png`))}</figure><figure><figcaption>Different (red)</figcaption>${img(path.join(outDir, `${r.name}.diff.png`))}</figure></div>` +
-      (acts.length ? `<ul class="acts">${acts.map(a => `<li>“${esc(a.label)}” ${a.kind === 'go' ? `goes to ${esc(a.to || 'another screen')}` : `shows ${a.kind === 'toast' ? 'the message' : 'a menu or sheet:'} ${esc((a.added ?? []).slice(0, 4).join(' · '))}`}</li>`).join('')}</ul>` : '') +
+      (acts.length ? `<ul class="acts">${acts.map(a => `<li>“${esc(a.label)}” ${a.kind === 'go' ? `goes to ${esc(a.to || 'another screen')}` : `shows the message ${esc((a.added ?? []).slice(0, 4).join(' · '))}`}</li>`).join('')}</ul>` : '') +
       `<pre>${esc(lines.join('\n'))}</pre></section>`;
   }).join('\n');
   const nav = byName.map(r => `<a href="#${esc(r.name)}">${esc(r.name)} <b>${r.n}</b></a>`).join('');
@@ -411,7 +492,7 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
   }
   const missing = (file: string) => { try { return parseMeasure(fs.readFileSync(file, 'utf8')).missing; } catch { return undefined; } };
   const left = [...new Set(rows.filter(r => r.n > 0).map(r => baseOf(r.name)))];
-  const nStates = (id: string) => new Set(states.filter(st => st.kind === 'state' && baseOf(st.name) === id).map(st => screenOf(st.name))).size;
+  const nStates = (id: string) => new Set(states.filter(st => shown(st) && baseOf(st.name) === id).map(st => screenOf(st.name))).size;
   const byArea = new Map<string, string[][]>();
   for (const id of left) {
     const area = id.split('-')[0];
@@ -428,15 +509,15 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
     const extra = part.reduce((n, id) => n + nStates(id), 0);
     const done: string[] = [];
     for (const id of part) {
-      for (const st of states.filter(x => baseOf(x.name) === id && x.kind === 'state' && x.name.endsWith('-390'))) {
+      for (const st of states.filter(x => baseOf(x.name) === id && shown(x) && x.name.endsWith('-390'))) {
         const m = missing(path.join(auditDir, `${st.name}.json`));
-        if (m) done.push(`${id}: add the control "${st.label}"; in the design it opens ${path.join(shotsDir, `${st.name}.html`)}${st.added?.length ? ` (showing ${st.added.slice(0, 3).map(x => `"${x}"`).join(', ')})` : ''}`);
+        if (m) done.push(`${id}: add the control "${m}"${(st.steps?.length ?? 1) > 1 ? ` (reached by ${(st.steps ?? []).map(x => `"${x.click}"`).join(' › ')})` : ''}; in the design it opens ${path.join(shotsDir, `${st.name}.html`)}${st.added?.length ? ` (showing ${st.added.slice(0, 3).map(x => `"${x}"`).join(', ')})` : ''}`);
       }
       const named = rows.filter(r => baseOf(r.name) === id && r.n > 0);
       const px = named.filter(r => !r.name.includes('~') && r.px !== undefined).map(r => `${r.px}% at ${r.name.slice(id.length + 1)}`);
       done.push(`every line in ${path.join(auditDir, `${id}[~state]-<width>.diff.txt`)} is fixed (${named.length} file${named.length === 1 ? '' : 's'}: the screen${named.some(r => r.name.includes('~')) ? ' and its states' : ''}), except sample data${px.length ? `; pixels differing go down from ${px.join(', ')}` : ''}`);
-      const acts = states.filter(x => baseOf(x.base) === id && x.base.endsWith('-390') && x.kind !== 'state');
-      if (acts.length) done.push(`${id} behaves as in the design: ${acts.slice(0, 8).map(a => a.kind === 'go' ? `"${a.label}" goes to ${a.to || 'another screen'}` : `"${a.label}" shows ${a.kind === 'toast' ? 'the message' : 'a menu or sheet with'} ${(a.added ?? []).slice(0, 2).map(x => `"${x}"`).join(', ')}`).join('; ')}`);
+      const acts = states.filter(x => baseOf(x.base) === id && x.base.endsWith('-390') && (x.kind === 'toast' || x.kind === 'go'));
+      if (acts.length) done.push(`${id} behaves as in the design: ${acts.slice(0, 8).map(a => a.kind === 'go' ? `"${a.label}" goes to ${a.to || 'another screen'}` : `${(a.steps ?? [{ click: a.label }]).map(x => `"${x.click}"`).join(' › ')} shows the message ${(a.added ?? []).slice(0, 2).map(x => `"${x}"`).join(', ')}`).join('; ')}`);
     }
     out.push({ title: `Design fix: ${names.join(', ')}${extra ? ` (+${extra} state${extra === 1 ? '' : 's'})` : ''}`.slice(0, 90),
       goal: `Make ${part.map(id => `${id}${info(id)?.url ? ` (${info(id)!.url})` : ''}`).join(', ')} and ${extra ? 'every state of it (modals, panels, picked options)' : 'it'} match the design at every width.`,

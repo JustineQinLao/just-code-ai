@@ -154,7 +154,15 @@ export const SHOT_CODE = `async (page) => {
   const url = 'URL', width = WIDTH, png = 'PNG', actions = ACTIONS;
   await page.setViewportSize({ width, height: width < 800 ? 844 : 900 });
   await page.goto(url, { waitUntil: 'load' });
-  for (const label of actions) {
+  for (const { click: label, fill } of actions) {
+    // The values the design shows in this step's fields (a name to confirm, an amount): by label, else by placeholder,
+    // else the empty text fields in order.
+    for (const [i, f] of (fill || []).entries()) {
+      let box = page.getByLabel(f.label, { exact: true });
+      if (!await box.count()) box = page.getByPlaceholder(f.label, { exact: true });
+      if (!await box.count()) box = page.locator('input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not([type=file]):visible, textarea:visible').nth(i);
+      if (await box.count()) await box.first().fill(f.value, { timeout: 3000 }).catch(() => {});
+    }
     let hit = null;
     for (const role of ['button', 'link', 'tab', 'menuitem', 'radio', 'checkbox', 'option', 'switch']) {
       const l = page.getByRole(role, { name: label, exact: true });
@@ -239,10 +247,13 @@ and scrolls inside it, so its images come out at random sizes and cut off below 
   steppers move through stages. Give the extract two more functions, split out of your extract code:
   "open": \`async (page, name) => { ...show that screen (same name as extract returns, width included) in the gallery... ; return '<CSS selector of the screen root>' }\`
   and "page": \`async (page, selector) => '<the same standalone html as extract builds, from what that root shows now>'\`.
-  design-capture then clicks every control of every screen itself, saves each new state as
-  \`<id>~<control label>-<width>.html\` (shot and measured like a screen) and lists every behaviour in \`${scr}/states.json\`
-  (state, overlay, toast, go). Try open + page on one screen first. If design-capture stops at the timeout, run it again:
-  exploring resumes where it stopped.
+  design-capture then clicks every control of every screen itself, up to 3 clicks deep (a modal's steps, a menu's
+  items, also menus and sheets added outside the screen root), typing the values the design shows into fields a step
+  needs. Each new state is saved as \`<id>~<label>[~<label>…]-<width>.html\` (shot and measured like a screen), every
+  behaviour is listed in \`${scr}/states.json\` (state, overlay, toast, go), and a gallery screen that equals a state
+  of another screen (a modal drawn open as its own screen) is merged into it. JustCode puts each page back in a frame
+  of the device's height, so a tab bar stays at the bottom. Try open + page on one screen first. If design-capture
+  stops at the timeout, run it again: exploring resumes where it stopped.
 - Note each state's context: how the user got there (e.g. login opened from a branch QR) and the app URL that gives the
   same state (e.g. \`/login?branch=<slug>\`), so the app is compared in the same state.
 

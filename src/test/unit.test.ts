@@ -1779,7 +1779,7 @@ test('fix to match: a design with screens/ is described in the brief, and the re
   const task = { id: 't1', title: 'Match the login screen', description: `Files: ${path.join(ref, 'c-login-390.png')}`, mode: 'auto', status: 'todo', created: 0 } as any;
   const brief = A.writeBrief(root, task, [src]);
   assert.match(brief, /screens\.json lists every screen/);
-  assert.match(brief, /<screen>~<control label>-<width>; states\.json lists them/);
+  assert.match(brief, /<screen>~<label>\[~<label>…\]-<width>; states\.json lists each with its steps/);
   assert.match(brief, /"states": "[^"]*design\/ref\/d1\/states\.json"/);
   assert.match(reviewPrompt(task, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
   assert.doesNotMatch(reviewPrompt({ ...task, description: 'Files: a.ts' }, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
@@ -1802,7 +1802,7 @@ test('design diff: measured from code, matched by text, within a few pixels', ()
   assert.deepEqual(diffMeasures({ items: [item('svg', { size: 16 })] }, { items: [item('svg', { size: 13 })] }), [], 'unlabelled icons are not paired by order');
   assert.equal(parseMeasure(JSON.stringify(JSON.stringify(design))).items.length, 3, 'a result saved as a JSON string');
   // The browser code is embedded in prompts: it must be valid JavaScript with its placeholders.
-  assert.doesNotThrow(() => new Function(`return (${SHOT_CODE.replace("'URL'", "'u'").replace('WIDTH', '390').replace("'PNG'", "'p'").replace('ACTIONS', '["Pay"]')})`));
+  assert.doesNotThrow(() => new Function(`return (${SHOT_CODE.replace("'URL'", "'u'").replace('WIDTH', '390').replace("'PNG'", "'p'").replace('ACTIONS', '[{"click":"Pay","fill":[{"label":"Name","value":"x"}]}]')})`));
   assert.doesNotThrow(() => new Function(`return (${MEASURE_FN})`));
 });
 
@@ -1977,13 +1977,14 @@ test('a task may not stop containers it did not start', () => {
 import { exploreCode, replayCode, stateShots, screensOf, State } from '../designcapture';
 test('design states: explore and replay code is valid JS, app shots click the same label, the reference lives outside the copy', () => {
   const open = 'async (page, name) => "#root"', snap = 'async (page, sel) => "<html></html>"';
-  for (const code of [exploreCode(open, snap, 'c-pay-390'), replayCode(open, snap, 'c-pay-1440', 'GCash')]) {
+  for (const code of [exploreCode(open, snap, 'c-pay-390'), replayCode(open, snap, 'c-pay-1440', ['Pay', 'GCash'])]) {
     assert.doesNotMatch(code, /__(OPEN|SNAP|NAME|LABEL|MAX)__/);
     assert.doesNotThrow(() => new Function(`return (${code})`));
   }
   const states: State[] = [{ name: 'c-pay~gcash-390', base: 'c-pay-390', label: 'GCash', kind: 'state' }, { name: 'c-pay~more-390', base: 'c-pay-390', label: 'More', kind: 'overlay' }];
   const extra = stateShots([{ url: 'http://app/order/new', width: 390, png: '/a/c-pay-390.png', json: '/a/c-pay-390.json' }], states);
-  assert.deepEqual(extra, [{ url: 'http://app/order/new', width: 390, png: '/a/c-pay~gcash-390.png', json: '/a/c-pay~gcash-390.json', actions: [{ click: 'GCash' }] }]);
+  assert.deepEqual(extra, [{ url: 'http://app/order/new', width: 390, png: '/a/c-pay~gcash-390.png', json: '/a/c-pay~gcash-390.json', actions: [{ click: 'GCash' }] },
+    { url: 'http://app/order/new', width: 390, png: '/a/c-pay~more-390.png', json: '/a/c-pay~more-390.json', actions: [{ click: 'More' }] }], 'menus and sheets are shot too');
   assert.equal(screensOf('/p/.justcode/sources/abc'), '/p/.justcode/design/ref/abc');
   assert.equal(screensOf('/designs/mine'), '/designs/mine/screens');
 });
@@ -2008,4 +2009,31 @@ test('design fix tasks: a screen goes with its states; a control the app lacks a
   assert.ok(pay.done.some(d => /"Copy number" shows the message "Number copied"/.test(d)));
   assert.ok(tasks.some(t => t.done.some(d => /"Order water" goes to c-pay/.test(d))));
   assert.ok(!tasks.some(t => /~/.test(t.title)), 'states never become their own screens');
+});
+
+
+import { framePage, sameText } from '../designcapture';
+import { newerInstalled } from '../version';
+test('design pages keep the device height; a gallery screen equal to a state is the same page; a newer install is found', () => {
+  const f = framePage('<html><head></head><body style="margin:0"><div class="scr">x</div></body></html>', 390);
+  assert.match(f, /<body style="margin:0"><div data-jc-frame style="width:390px;height:844px"><div class="scr">x<\/div><\/div><\/body>/);
+  assert.match(f, /\[data-jc-frame\]>\*:only-child\{height:100%\}<\/style><\/head>/);
+  assert.equal(framePage(f, 390), f, 'framed once');
+  assert.match(framePage('<body><p>y</p></body>', 1440), /height:900px/);
+  const page = (extra: string) => `<html><body><h1>How will you pay?</h1><p>Total ₱75 GCash Pay the driver Place order Confirm order Your name</p>${extra}</body></html>`;
+  assert.ok(sameText(page(''), page('<button>Confirm</button>')));
+  assert.ok(!sameText(page(''), '<body><h1>Home</h1><p>Welcome back Order water Copy number More</p></body>'));
+  const dir = tmp();
+  for (const d of ['justine.just-code-2.20.4', 'justine.just-code-2.21.1', 'justine.just-code-2.21.0', 'other.ext-9.0.0']) fs.mkdirSync(path.join(dir, d));
+  assert.equal(newerInstalled(path.join(dir, 'justine.just-code-2.21.0'), '2.21.0'), '2.21.1');
+  assert.equal(newerInstalled(path.join(dir, 'justine.just-code-2.21.1'), '2.21.1'), undefined);
+});
+
+test('a state several clicks deep is shot in the app with every step, typing the design values first', () => {
+  const st: State = { name: 'c-pay~place-order~confirm-390', base: 'c-pay-390', label: 'Confirm', kind: 'state',
+    steps: [{ click: 'Place order' }, { click: 'Confirm', fill: [{ label: 'Your name', value: 'Maria Santos' }] }] };
+  const [sh] = stateShots([{ url: 'http://app/order', width: 390, png: '/a/c-pay-390.png', json: '/a/c-pay-390.json' }], [st, { name: 'c-pay~copy-390', base: 'c-pay-390', label: 'Copy', kind: 'toast' }]);
+  assert.deepEqual(sh.actions, st.steps);
+  assert.match(shotCode(sh), /"fill":\[\{"label":"Your name","value":"Maria Santos"\}\]/);
+  assert.doesNotThrow(() => new Function(`return (${shotCode(sh)})`));
 });
