@@ -232,6 +232,28 @@ export function sameText(a: string, b: string) {
   return both / (A.size + B.size - both) >= 0.9;
 }
 
+// Gallery screens that are really a state of another screen (a modal or step drawn open as its own screen): merged into
+// that state. Only an in-place state (never a menu or sheet over the page, never reached through a step that goes back)
+// that adds content, all of it on the gallery screen, with the same text overall. A screen other states start from, or one already merged into, is never merged
+// (no two screens merged into each other).
+// A step that only goes back (closes a modal, cancels): what it reaches is another screen's own state, not a new one.
+const BACK = /^(cancel|back|‹ ?back|close|×|✕|x|done|dismiss|not now|no|keep it|go back)$/i;
+export function mergeTwins(names: string[], states: State[], html: (name: string) => string): State[] {
+  const out: State[] = [], gone = new Set<string>(), targets = new Set<string>();
+  const lineIn = (page: string, line: string) => page.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').includes(line.replace(/\s+/g, ' '));
+  for (const n of names) {
+    const [id, w] = split(n), own = html(n);
+    if (!own || targets.has(n)) continue;
+    const twin = states.find(st => st.kind === 'state' && (st.added?.length ?? 0) > 0 && st.base.endsWith(`-${w}`) && split(st.base)[0] !== id
+      && !(st.steps ?? [{ click: st.label }]).some(x => BACK.test(x.click.trim()))
+      && !gone.has(st.base) && st.added!.every(l => lineIn(own, l)) && sameText(own, html(st.name)));
+    if (!twin) continue;
+    out.push({ name: n, base: n, label: '', kind: 'same', to: twin.name });
+    gone.add(n); targets.add(twin.base);
+  }
+  return out;
+}
+
 // Explores every extracted screen of a design (see Extract): resumable, since states.json is written after each screen
 // and a screen already in it is skipped, so a run cut off by a timeout goes on where it stopped when run again.
 // Then gallery screens equal to an explored state of another screen are merged into it (kind same).
@@ -279,12 +301,8 @@ async function explore(mcp: Mcp, x: Extract, names: string[], log: (line: string
     const n = keep.filter(shown).length;
     log(`explored ${i}/${byId.size} ${id}: ${keep.length} behaviour${keep.length === 1 ? '' : 's'}, ${n} state${n === 1 ? '' : 's'} (up to ${EXPLORE_DEPTH} clicks deep)`);
   }
-  // A gallery screen drawn as its own page but equal to a state of another screen (a modal shown open): merged.
-  const read = (n: string) => { try { return fs.readFileSync(path.join(x.dir, `${n}.html`), 'utf8'); } catch { return ''; } };
-  for (const n of names) {
-    const [id, w] = split(n), own = read(n);
-    const twin = all.find(st => shown(st) && st.base.endsWith(`-${w}`) && split(st.base)[0] !== id && sameText(own, read(st.name)));
-    if (twin) { all.push({ name: n, base: n, label: '', kind: 'same', to: twin.name }); log(`${n} is the state ${twin.name}: compared once, as that state`); }
+  for (const m of mergeTwins(names, all, n => { try { return fs.readFileSync(path.join(x.dir, `${n}.html`), 'utf8'); } catch { return ''; } })) {
+    all.push(m); log(`${m.name} is the state ${m.to}: compared once, as that state`);
   }
   save();
   return all;

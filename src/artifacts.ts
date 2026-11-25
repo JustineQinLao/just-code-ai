@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { screensOf } from './designcapture';
+import { screensOf, loadStates, mergedScreens } from './designcapture';
 import { Task } from './store';
 import * as R from './registry';
 import { SHOT_VERSION, arg } from './skill';
@@ -278,7 +278,10 @@ export function screenShotProblems(copy: string) {
   try { j = JSON.parse(fs.readFileSync(path.join(screensOf(copy), 'screens.json'), 'utf8')); } catch { return [`${screensOf(copy)}/screens.json is missing or not JSON`]; }
   const out: string[] = [];
   if (j.capture !== SHOT_VERSION) out.push(`screens.json was not made with the current screenshot recipe (capture ${SHOT_VERSION})`);
+  // Gallery screens merged into a state of another screen have no images of their own, by design.
+  const merged = mergedScreens(loadStates(path.join(screensOf(copy), 'states.json')));
   for (const sc of Array.isArray(j.screens) ? j.screens : []) for (const [w, f] of Object.entries(sc?.png ?? {})) {
+    if (merged.has(`${sc.id}-${w}`)) continue;
     const z = typeof f === 'string' ? pngSize(f) : undefined;
     if (!z) out.push(`${sc.id}: ${w} image missing`);
     else if (z.w !== Number(w) || z.h < 600) out.push(`${path.basename(f as string)}: ${z.w}×${z.h}, expected ${w} wide and at least 600 high`);
@@ -288,6 +291,7 @@ export function screenShotProblems(copy: string) {
 
 // How many design screenshots screens.json lists (screens × widths), and how many screens the audit compared (.diff.txt).
 export function screenShotCount(copy: string) {
-  try { return (JSON.parse(fs.readFileSync(path.join(screensOf(copy), 'screens.json'), 'utf8')).screens ?? []).reduce((n: number, s: any) => n + Object.keys(s?.png ?? {}).length, 0); } catch { return 0; }
+  const merged = mergedScreens(loadStates(path.join(screensOf(copy), 'states.json')));
+  try { return (JSON.parse(fs.readFileSync(path.join(screensOf(copy), 'screens.json'), 'utf8')).screens ?? []).reduce((n: number, s: any) => n + Object.keys(s?.png ?? {}).filter(w => !merged.has(`${s.id}-${w}`)).length, 0); } catch { return 0; }
 }
 export const auditDiffCount = (root: string) => { try { return fs.readdirSync(jc(root, 'design', 'audit')).filter(f => f.endsWith('.diff.txt')).length; } catch { return 0; } };

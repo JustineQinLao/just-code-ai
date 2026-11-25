@@ -2068,3 +2068,23 @@ test('a long design capture resumes: current design shots are kept, app shots ar
   assert.equal(backgroundDesignRun({ command: 'node cli.js design-capture jobs.json' }), undefined);
   assert.equal(backgroundDesignRun({ command: 'docker compose up -d', run_in_background: true }), undefined);
 });
+
+import { mergeTwins } from '../designcapture';
+test('gallery screens merge into a state only when they are that state: no menus, no back steps, no cycles', () => {
+  const words = 'Bukal Water Station At risk of leaving 1 branch 3 users joined Mar 2026 Orders Logins Unsettled problems Health score';
+  const pages: Record<string, string> = {
+    'a-detail-view-390': `<body><h1>Business detail</h1><p>${words}</p><button>Pause business</button><button>Close business</button></body>`,
+    'a-detail-pause-390': `<body><h1>Business detail</h1><p>${words}</p><h2>Pause Bukal Water Station?</h2><button>Cancel</button></body>`,
+    'a-detail-view~pause-business-390': `<body><h1>Business detail</h1><p>${words}</p><h2>Pause Bukal Water Station?</h2><button>Cancel</button></body>`,
+    'a-detail-pause~cancel-390': `<body><h1>Business detail</h1><p>${words}</p><button>Pause business</button><button>Close business</button></body>`,
+    'c-root-guest-390': `<body><h1>Fresh water, delivered</h1><p>${words}</p><button>Log in</button></body>`,
+    'c-root-signed~account-menu-390': `<body><h1>Fresh water, delivered</h1><p>${words}</p><button>Log out</button></body>`,
+  };
+  const states: State[] = [
+    { name: 'a-detail-view~pause-business-390', base: 'a-detail-view-390', label: 'Pause business', kind: 'state', added: ['Pause Bukal Water Station?'], steps: [{ click: 'Pause business' }] },
+    { name: 'a-detail-pause~cancel-390', base: 'a-detail-pause-390', label: 'Cancel', kind: 'state', added: ['Pause business'], steps: [{ click: 'Cancel' }] },
+    { name: 'c-root-signed~account-menu-390', base: 'c-root-signed-390', label: 'Account menu', kind: 'overlay', added: ['Log out'] },
+  ];
+  const m = mergeTwins(['a-detail-view-390', 'a-detail-pause-390', 'c-root-guest-390'], states, n => pages[n] ?? '');
+  assert.deepEqual(m.map(x => [x.name, x.to]), [['a-detail-pause-390', 'a-detail-view~pause-business-390']]);
+});
