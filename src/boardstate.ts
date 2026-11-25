@@ -61,6 +61,7 @@ export function post() {
     settings: { ...s, notifications: setting('notifications', 'actionable'), defaultMode: setting('defaultMode', 'auto'), defaultWhere: setting('defaultWhere', 'auto'), bypassAll: bypassAllOn(), plannerModel: setting('plannerModel', 'opus'), apiKey: !!st.apiKey },
     planner: r.plannerLive(),
     designStatus: r.designStatus,   // Fix to match measuring: its live line, or undefined
+    designCompare: fs.existsSync(path.join(r.root, '.justcode', 'design', 'audit', 'compare.html')),   // 🎨 Design → Open comparison
     plannerPhase: r.plannerPhase,
     guideSeen: st.ctx.globalState.get('guideSeen', false),
     all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({

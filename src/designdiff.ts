@@ -4,7 +4,8 @@
 
 export interface Box { x: number; w: number; pad: string; radius: string; bg: string; border: string }
 export interface Item { text: string; cls?: string; x: number; w: number; h: number; font: string; size: number; weight: string; color: string; align: string; bg: string; radius: string; box: Box | null }
-export interface Measure { v?: number; width?: number; items: Item[]; css?: string }
+// missing: the label of a control the page did not have, so the state could not be reached (nothing was measured).
+export interface Measure { v?: number; width?: number; items: Item[]; css?: string; missing?: string }
 // Measures without v (or an older one) lack element classes: a design measured that way is measured again.
 export const MEASURE_V = 2;
 // line: what to show; rule: the same difference without the text it was found on (with the element's classes), so the

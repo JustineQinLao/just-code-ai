@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { screensOf } from './designcapture';
 import { Task } from './store';
 import * as R from './registry';
 import { SHOT_VERSION, arg } from './skill';
@@ -84,8 +85,9 @@ export const projectSection = (root: string) => fs.existsSync(projectFile(root))
 
 // UI-ish work (or an artifact page) follows the project's DESIGN.md when one exists.
 const UI_WORDS = /\b(ui|ux|frontend|front-end|css|html|page|screen|layout|landing|dashboard|button|modal|dialog|form|component|style|styling|theme|navbar|sidebar|webview|responsive|visual)s?\b/i;
-// A design screen file a task must match: a saved design's screens/ (🎨 Fix to match) or a canvas's project/ files.
-export const DESIGN_FILE = /\.justcode[\\/]sources[\\/][^\s,]+[\\/](?:screens[\\/][^\s,]+\.(?:png|html|css|json)|project[\\/][^\s,]+\.dc\.html)/;
+// A design screen file a task must match: a design reference (.justcode/design/ref, 🎨 Fix to match; screens/ in older
+// copies) or a canvas's project/ files.
+export const DESIGN_FILE = /\.justcode[\\/](?:sources[\\/][^\s,]+[\\/](?:screens[\\/][^\s,]+\.(?:png|html|css|json)|project[\\/][^\s,]+\.dc\.html)|design[\\/]ref[\\/][^\s,]+\.(?:png|html|css|json))/;
 export const isUiTask = (t: Task) => t.output === 'artifact' || t.init === 'fixdesign' || !!t.designFix || UI_WORDS.test(`${t.title}\n${t.description ?? ''}`) || DESIGN_FILE.test(t.description ?? '');
 const designSection = (root: string, t: Task) => isUiTask(t) && fs.existsSync(designMdFile(root))
   ? `## Design system\nFollow ${designMdFile(root)} as the style spec (colors, type, spacing, components) for any UI you build or change.` : '';
@@ -125,18 +127,20 @@ export const linkedSources = (all: Source[], text: string) => {
 // The source's location as Claude can open it: project files by their path in the task's copy, outside files absolute.
 function where(root: string, s: Source, cli?: string) {
   if (hasCopy(root, s)) {
-    const dir = sourceCopy(root, s.id), canvas = path.join(dir, 'project', 'canvas.json');
-    if (fs.existsSync(path.join(dir, 'screens', 'screens.json')))
+    const dir = sourceCopy(root, s.id), canvas = path.join(dir, 'project', 'canvas.json'), scr = screensOf(dir);
+    if (fs.existsSync(path.join(scr, 'screens.json')))
       return `${dir}/ (saved copy of the design ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
-        `screens/screens.json lists every screen per width: its .css (the design's own CSS rules for that screen: copy these values, never estimate them from the image), ` +
+        `Its reference, made by 🎨 Fix to match, is ${scr}/: screens.json lists every screen per width: its .css (the design's own CSS rules for that screen: copy these values, never estimate them from the image), ` +
         `its .html (the markup: same structure, order and copy), its .json (measured fonts, sizes, colors and boxes), its PNG (only for a look), and the app URL that gives the same state. ` +
+        `Every state of a screen that a click opens (a modal, panel, picked option) has its own files, named <screen>~<control label>-<width>; states.json lists them with the label to click, ` +
+        `plus what the other controls do (kind overlay: a menu or sheet; toast: a short message; go: it leads to another screen). Build those states and behaviours too, with the same control labels. ` +
         `Build the screens your task covers from that code; only the data comes from the app. ` +
         `The app running at the project's link serves the project folder, not your task folder: to measure your change, start your folder's frontend detached on a free port (pointing at the running backend), and stop it after. ` +
         `Sign-in per role is already written: copy the "setup" of the matching group in ${jc(root, 'design', 'app-jobs.json')} (change only the app address to yours). ` +
         `Then check them in ONE command: write a jobs file in the Screenshots folder ` +
         `({"groups": [{"setup": "<async (page) => {...} signing in as the screen's role>", "shots": [{"url": "<app url of the state>", "width": 390, "png": "<Screenshots folder>/<name>.png", "json": "<Screenshots folder>/<name>.json"}]}]}, ` +
-        `one shot per screen and width, <name> = the design file's name, e.g. c-login-390), run node ${arg(cli ?? '<cli.js>')} design-capture <jobs file> (Bash, timeout 600000), ` +
-        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${dir}/screens <Screenshots folder> <Screenshots folder> --sample ${arg(jc(root, 'design', 'sample.json'))}. Fix what the <name>.diff.txt files report until only sample data differs. Each starts with the share of pixels that differ; <name>.diff.png shows where in red: look at it for what numbers cannot say (an icon, an order, a missing block). Never redefine a design class in a page or component: fix it once in the shared styles.`;
+        `one shot per screen and width, <name> = the design file's name, e.g. c-login-390, and "states": "${scr}/states.json" in the group so each state is shot too, by clicking its label), run node ${arg(cli ?? '<cli.js>')} design-capture <jobs file> (Bash, timeout 600000), ` +
+        `then node ${arg(cli ?? '<cli.js>')} design-diff --all ${scr} <Screenshots folder> <Screenshots folder> --sample ${arg(jc(root, 'design', 'sample.json'))}. Fix what the <name>.diff.txt files report until only sample data differs. Each starts with the share of pixels that differ; <name>.diff.png shows where in red: look at it for what numbers cannot say (an icon, an order, a missing block). Never redefine a design class in a page or component: fix it once in the shared styles.`;
     return fs.existsSync(canvas)
       ? `${dir}/ (saved copy of the design canvas ${s.ref}; that link needs a claude.ai sign-in, so use this folder). ` +
         `project/canvas.json lists every screen (boards: file name and title); each project/<name>.dc.html is that screen's exact markup, copy and classes, styled by the .css files beside it. ` +
@@ -266,11 +270,11 @@ export function pngSize(file: string) {
   } catch { return undefined; }
 }
 
-// Checks a design copy's screens/ made by 🎨 Fix to match: the recipe version, and each PNG exactly its width wide and
+// Checks a design's reference (screensOf) made by 🎨 Fix to match: the recipe version, and each PNG exactly its width wide and
 // tall enough to be a whole screen. Returns what is wrong (empty when all is well).
 export function screenShotProblems(copy: string) {
   let j: any;
-  try { j = JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')); } catch { return ['screens/screens.json is missing or not JSON']; }
+  try { j = JSON.parse(fs.readFileSync(path.join(screensOf(copy), 'screens.json'), 'utf8')); } catch { return [`${screensOf(copy)}/screens.json is missing or not JSON`]; }
   const out: string[] = [];
   if (j.capture !== SHOT_VERSION) out.push(`screens.json was not made with the current screenshot recipe (capture ${SHOT_VERSION})`);
   for (const sc of Array.isArray(j.screens) ? j.screens : []) for (const [w, f] of Object.entries(sc?.png ?? {})) {
@@ -283,6 +287,6 @@ export function screenShotProblems(copy: string) {
 
 // How many design screenshots screens.json lists (screens × widths), and how many screens the audit compared (.diff.txt).
 export function screenShotCount(copy: string) {
-  try { return (JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')).screens ?? []).reduce((n: number, s: any) => n + Object.keys(s?.png ?? {}).length, 0); } catch { return 0; }
+  try { return (JSON.parse(fs.readFileSync(path.join(screensOf(copy), 'screens.json'), 'utf8')).screens ?? []).reduce((n: number, s: any) => n + Object.keys(s?.png ?? {}).length, 0); } catch { return 0; }
 }
 export const auditDiffCount = (root: string) => { try { return fs.readdirSync(jc(root, 'design', 'audit')).filter(f => f.endsWith('.diff.txt')).length; } catch { return 0; } };

@@ -1,3 +1,4 @@
+import { screensOf } from './designcapture';
 import { mobileMessage, bypassGate, canEnableBypassAll, DialogHub, makePhoneBoard, confirmBypassFor, remoteConfirm, remoteInput, remotePaths, validLink } from './bridge';
 import * as vscode from 'vscode';
 import * as fs from 'fs';
@@ -151,6 +152,14 @@ export function saveArtifactSourceNow(root: string, src: A.Source): Promise<bool
     clearInterval(timer); clearTimeout(reveal); sub.dispose(); savingTerms.delete(src.id); askingTerms.delete(src.id);
     const got = ready();
     if (got) {
+      // The design reference (🎨 Fix to match) lives outside the copy. When the saved design changed, its screens.json
+      // goes, so the next Fix to match builds the reference again; the same design keeps it.
+      const sum = (d: string) => { try { return createHash('sha1').update(fs.readdirSync(d).filter(f => !f.startsWith('.')).sort().map(f => { try { return fs.readFileSync(path.join(d, f)); } catch { return ''; } }).join('\0')).digest('hex'); } catch { return ''; } };
+      const before = sum(dir), after = sum(tmp), refJson = path.join(screensOf(dir), 'screens.json');
+      if (before && before !== after && fs.existsSync(refJson)) {
+        fs.rmSync(refJson, { force: true });
+        void vscode.window.showInformationMessage(`The design ${src.ref} changed since its reference was built. 🎨 Design → Fix to match builds it again.`);
+      }
       fs.rmSync(dir, { recursive: true, force: true });
       fs.rmSync(`${dir}.html`, { force: true }); // the single-page copy older versions saved
       fs.renameSync(tmp, dir);

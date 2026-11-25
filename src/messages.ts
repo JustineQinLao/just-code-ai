@@ -264,6 +264,11 @@ export async function handle(m: any, remote = false) {
     case 'sendChecks': await r.sendChecks(m.id); return;
     // A command a question asked you to run, run where the task works (its folder, else the project folder), in a
     // terminal you can type into (sudo asks for your password there). Desktop only: the phone page never runs commands.
+    case 'designCompare': {
+      const f = path.join(r.root, '.justcode', 'design', 'audit', 'compare.html');
+      if (!remote && fs.existsSync(f)) void vscode.env.openExternal(vscode.Uri.file(f));
+      return;
+    }
     case 'runCommand': {
       const cmd = String(m.command ?? '').trim();
       if (remote || !cmd || cmd.length > 400 || /\n/.test(cmd)) return;

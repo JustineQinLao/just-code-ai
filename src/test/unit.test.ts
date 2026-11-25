@@ -1771,12 +1771,16 @@ test('code map for planner and reviewer: changed names from a diff; outline only
 
 test('fix to match: a design with screens/ is described in the brief, and the review checks the screenshots against it', () => {
   const root = tmp(), copy = A.sourceCopy(root, 'd1');
-  fs.mkdirSync(path.join(copy, 'screens'), { recursive: true });
+  const ref = path.join(root, '.justcode', 'design', 'ref', 'd1');
+  fs.mkdirSync(ref, { recursive: true }); fs.mkdirSync(copy, { recursive: true });
   fs.writeFileSync(path.join(copy, 'index.html'), '<html></html>');
-  fs.writeFileSync(path.join(copy, 'screens', 'screens.json'), '{"screens":[]}');
+  fs.writeFileSync(path.join(ref, 'screens.json'), '{"screens":[]}');
   const src: A.Source = { id: 'd1', kind: 'url', ref: 'https://claude.ai/artifact/Abc' };
-  const task = { id: 't1', title: 'Match the login screen', description: `Files: ${path.join(copy, 'screens', 'c-login-390.png')}`, mode: 'auto', status: 'todo', created: 0 } as any;
-  assert.match(A.writeBrief(root, task, [src]), /screens\/screens\.json lists every screen/);
+  const task = { id: 't1', title: 'Match the login screen', description: `Files: ${path.join(ref, 'c-login-390.png')}`, mode: 'auto', status: 'todo', created: 0 } as any;
+  const brief = A.writeBrief(root, task, [src]);
+  assert.match(brief, /screens\.json lists every screen/);
+  assert.match(brief, /<screen>~<control label>-<width>; states\.json lists them/);
+  assert.match(brief, /"states": "[^"]*design\/ref\/d1\/states\.json"/);
   assert.match(reviewPrompt(task, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
   assert.doesNotMatch(reviewPrompt({ ...task, description: 'Files: a.ts' }, 'main', 'd', { shots: '/s', web: true }), /# Design match/);
 });
@@ -1798,7 +1802,7 @@ test('design diff: measured from code, matched by text, within a few pixels', ()
   assert.deepEqual(diffMeasures({ items: [item('svg', { size: 16 })] }, { items: [item('svg', { size: 13 })] }), [], 'unlabelled icons are not paired by order');
   assert.equal(parseMeasure(JSON.stringify(JSON.stringify(design))).items.length, 3, 'a result saved as a JSON string');
   // The browser code is embedded in prompts: it must be valid JavaScript with its placeholders.
-  assert.doesNotThrow(() => new Function(`return (${SHOT_CODE.replace("'URL'", "'u'").replace('WIDTH', '390').replace("'PNG'", "'p'")})`));
+  assert.doesNotThrow(() => new Function(`return (${SHOT_CODE.replace("'URL'", "'u'").replace('WIDTH', '390').replace("'PNG'", "'p'").replace('ACTIONS', '["Pay"]')})`));
   assert.doesNotThrow(() => new Function(`return (${MEASURE_FN})`));
 });
 
@@ -1818,6 +1822,7 @@ test('design capture: one jobs file for every screen, run_code results read back
   fs.writeFileSync(path.join(d, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
   fs.writeFileSync(path.join(a, 'y-390.json'), JSON.stringify({ items: [it('Same', 16)] }));
   assert.deepEqual(diffAll(d, a, a).rows.map(r => ({ name: r.name, n: r.n })), [{ name: 'x-390', n: 1 }, { name: 'y-390', n: 0 }]);
+  assert.match(fs.readFileSync(path.join(a, 'compare.html'), 'utf8'), /<h2>x-390 <small>1 difference/, 'a side-by-side page of every pair');
   assert.match(fs.readFileSync(path.join(a, 'x-390.diff.txt'), 'utf8'), /"Hi" size: design 16, app 15/);
 });
 
@@ -1967,4 +1972,40 @@ test('a task may not stop containers it did not start', () => {
   assert.equal(stopsOthersContainers(`docker compose -p jc-${id} down`, id, false), undefined);
   assert.equal(stopsOthersContainers(`docker stop jc-${id}-web`, id, false), undefined);
   assert.equal(stopsOthersContainers('docker ps; docker compose up -d --build; docker compose logs backend', id, false), undefined);
+});
+
+import { exploreCode, replayCode, stateShots, screensOf, State } from '../designcapture';
+test('design states: explore and replay code is valid JS, app shots click the same label, the reference lives outside the copy', () => {
+  const open = 'async (page, name) => "#root"', snap = 'async (page, sel) => "<html></html>"';
+  for (const code of [exploreCode(open, snap, 'c-pay-390'), replayCode(open, snap, 'c-pay-1440', 'GCash')]) {
+    assert.doesNotMatch(code, /__(OPEN|SNAP|NAME|LABEL|MAX)__/);
+    assert.doesNotThrow(() => new Function(`return (${code})`));
+  }
+  const states: State[] = [{ name: 'c-pay~gcash-390', base: 'c-pay-390', label: 'GCash', kind: 'state' }, { name: 'c-pay~more-390', base: 'c-pay-390', label: 'More', kind: 'overlay' }];
+  const extra = stateShots([{ url: 'http://app/order/new', width: 390, png: '/a/c-pay-390.png', json: '/a/c-pay-390.json' }], states);
+  assert.deepEqual(extra, [{ url: 'http://app/order/new', width: 390, png: '/a/c-pay~gcash-390.png', json: '/a/c-pay~gcash-390.json', actions: [{ click: 'GCash' }] }]);
+  assert.equal(screensOf('/p/.justcode/sources/abc'), '/p/.justcode/design/ref/abc');
+  assert.equal(screensOf('/designs/mine'), '/designs/mine/screens');
+});
+
+test('design fix tasks: a screen goes with its states; a control the app lacks and the design\'s behaviours are checks', () => {
+  const root = tmp(), copy = path.join(root, '.justcode', 'sources', 'd1'), ref = screensOf(copy), audit = path.join(root, '.justcode', 'design', 'audit');
+  fs.mkdirSync(ref, { recursive: true }); fs.mkdirSync(audit, { recursive: true });
+  for (const f of ['c-pay-390', 'c-pay~gcash-390', 'c-pay~place-order-390', 'c-home-390']) { fs.writeFileSync(path.join(ref, `${f}.html`), ''); fs.writeFileSync(path.join(ref, `${f}.css`), ''); }
+  fs.writeFileSync(path.join(ref, 'states.json'), JSON.stringify([
+    { name: 'c-pay~gcash-390', base: 'c-pay-390', label: 'GCash', kind: 'state', added: ['Upload your screenshot next'] },
+    { name: 'c-pay~place-order-390', base: 'c-pay-390', label: 'Place order', kind: 'state', added: ['Order placed'] },
+    { name: 'c-pay~copy-390', base: 'c-pay-390', label: 'Copy number', kind: 'toast', added: ['Number copied'] },
+    { name: 'c-home~order-390', base: 'c-home-390', label: 'Order water', kind: 'go', to: 'c-pay' },
+  ]));
+  fs.writeFileSync(path.join(audit, 'c-pay~gcash-390.json'), JSON.stringify({ v: 2, items: [], missing: 'GCash' }));
+  const rows = [{ name: 'c-pay-390', n: 3, px: 4 }, { name: 'c-pay~gcash-390', n: 1 }, { name: 'c-pay~place-order-390', n: 2, px: 5 }, { name: 'c-home-390', n: 1, px: 1 }];
+  const tasks = planRound(copy, audit, rows, []);
+  const pay = tasks.find(t => t.title.includes('c-pay'))!;
+  assert.match(pay.title, /\(\+2 states\)/);
+  assert.ok(pay.files.some(f => f.endsWith('c-pay~place-order-390.html')) && pay.files.every(f => !f.endsWith('.json')), pay.files.join('\n'));
+  assert.ok(pay.done.some(d => /add the control "GCash"; in the design it opens .*c-pay~gcash-390\.html \(showing "Upload your screenshot next"\)/.test(d)), pay.done.join('\n'));
+  assert.ok(pay.done.some(d => /"Copy number" shows the message "Number copied"/.test(d)));
+  assert.ok(tasks.some(t => t.done.some(d => /"Order water" goes to c-pay/.test(d))));
+  assert.ok(!tasks.some(t => /~/.test(t.title)), 'states never become their own screens');
 });

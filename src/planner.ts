@@ -219,7 +219,7 @@ export const plannerMethods = {
     if (!src) return 'The design source for this task is gone. Say so in one line and stop.';
     const copy = A.hasCopy(this.root, src) ? A.sourceCopy(this.root, src.id) : src.kind === 'url' ? undefined : src.ref;
     if (!copy) return `The design ${src.ref} has no saved copy. Say in one line that the user must press Save copy on it under 📎 Sources, then stop.`;
-    return `# Fix the UI to match the design\n\n${fixDesignSteps(copy, src.ref, this.root, this.d.cli || undefined)}`;
+    return `# Fix the UI to match the design\n\n${fixDesignSteps(copy, src.ref, this.root, this.d.cli || undefined, DC.screensOf(copy))}`;
   },
 
   // The audit's result becomes round 1 of the fix: the shared-style tasks it proposed (or, with none, the per-screen
@@ -245,7 +245,7 @@ export const plannerMethods = {
     }
     if (!copy || !src) { this.d.notify('info', 'Fix to match: the design source is gone. See the task card.', id); return 0; }
     // A new audit replaces the last one's fixes that have not started yet.
-    for (const t of this.store.data.tasks.filter(t => t.status === 'todo' && !t.branch && !t.archived && (t.designFix || (A.DESIGN_FILE.test(t.description ?? '') && (t.description ?? '').includes(copy)))))
+    for (const t of this.store.data.tasks.filter(t => t.status === 'todo' && !t.branch && !t.archived && (t.designFix || (A.DESIGN_FILE.test(t.description ?? '') && [copy, DC.screensOf(copy)].some(d => (t.description ?? '').includes(d))))))
       void this.remove(t.id);
     DF.save(this.root, { sourceId: src.id, copy, round: 1 });
     const planned = p.length ? p.map(c => ({ title: c.title, description: c.description, after: c.after }))
@@ -274,11 +274,11 @@ export const plannerMethods = {
   // Plans from the latest measures in .justcode/design/audit (recaptured first when asked): shared rules, else screens.
   designPlan(this: Runner, copy: string, _fresh: boolean) {
     const auditDir = path.join(this.root, '.justcode', 'design', 'audit');
-    const { rows, shared, avgPx } = DC.diffAll(path.join(copy, 'screens'), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
+    const { rows, shared, avgPx } = DC.diffAll(DC.screensOf(copy), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
     this.designPx = avgPx;
     this.designScreensPx = Object.fromEntries(rows.filter(r => r.px !== undefined).map(r => [r.name, r.px!]));
     let screens: { id: string; title?: string; url?: string }[] = [];
-    try { screens = JSON.parse(fs.readFileSync(path.join(copy, 'screens', 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
+    try { screens = JSON.parse(fs.readFileSync(path.join(DC.screensOf(copy), 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
     this.designLines = rows.reduce((n, r) => n + r.n, 0);   // the measured total, for "is the fix still making progress"
     return DC.planRound(copy, auditDir, rows, shared, screens);
   },
