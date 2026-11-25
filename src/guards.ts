@@ -10,7 +10,7 @@ import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
 import * as Audit from './audit';
 import { SecretsFound, describeSecrets } from './secrets';
-import { loadPolicy, violations, toolArg, stopsOthersContainers } from './policy';
+import { loadPolicy, violations, toolArg, stopsOthersContainers, backgroundDesignRun } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
@@ -119,7 +119,8 @@ export const guardMethods = {
   guard(this: Runner, taskId: string | undefined, cwd: string) {
     return (tool: string, input: Record<string, unknown>) => {
       const why = violations(loadPolicy(this.root).policy, tool, input, cwd)
-        ?? (taskId && tool === 'Bash' && typeof input.command === 'string' ? stopsOthersContainers(input.command, taskId, path.resolve(cwd) !== path.resolve(this.root)) : undefined);
+        ?? (taskId && tool === 'Bash' && typeof input.command === 'string' ? stopsOthersContainers(input.command, taskId, path.resolve(cwd) !== path.resolve(this.root)) : undefined)
+        ?? (tool === 'Bash' ? backgroundDesignRun(input) : undefined);
       if (why) this.audit('policy.deny', taskId, `${tool} ${toolArg(input)}: ${why}`, 'policy');
       return why;
     };

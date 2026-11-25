@@ -231,17 +231,17 @@ export const plannerMethods = {
     const audit = this.store.task(id), src = A.loadSources(this.root).find(s => audit?.sources?.includes(s.id));
     const copy = src && (A.hasCopy(this.root, src) ? A.sourceCopy(this.root, src.id) : src.kind === 'folder' ? src.ref : undefined);
     const bad = copy ? A.screenShotProblems(copy) : [];
-    if (bad.length) {
-      this.d.notify('error', `Fix to match: the design screenshots are not usable, so no fix tasks were added (${bad.length} problem${bad.length === 1 ? '' : 's'}: ${bad.slice(0, 3).join('; ')}). Delete ${copy}/screens and run it again.`, id);
+    // Stopped before it finished (a run cut off, a capture left in the background): not done, the card says so.
+    const unfinished = (why: string) => {
+      this.store.updateTask(id, { status: 'review', error: `The audit stopped before finishing: ${why} No fix tasks were added. Press Follow-up task ("finish the audit: run design-capture again in the foreground, it resumes"), or run Fix to match again.` });
+      this.d.notify('error', `Fix to match stopped before finishing: ${why}`, id);
       return 0;
-    }
+    };
+    if (bad.length) return unfinished(`the design reference is not complete (${bad.length} problem${bad.length === 1 ? '' : 's'}: ${bad.slice(0, 3).join('; ')}).`);
     // An audit that compared only a few screens would plan fixes for those alone: say so instead.
     if (copy) {
       const shots = A.screenShotCount(copy), diffs = A.auditDiffCount(this.root);
-      if (shots && diffs * 2 < shots) {
-        this.d.notify('error', `Fix to match: the audit compared ${diffs} of ${shots} design screens, so no fix tasks were added. Use Follow-up task on it ("compare every screen with design-capture"), or run Fix to match again.`, id);
-        return 0;
-      }
+      if (shots && diffs * 2 < shots) return unfinished(`it compared ${diffs} of ${shots} design screens with the app.`);
     }
     if (!copy || !src) { this.d.notify('info', 'Fix to match: the design source is gone. See the task card.', id); return 0; }
     // A new audit replaces the last one's fixes that have not started yet.

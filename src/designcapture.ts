@@ -263,13 +263,13 @@ async function explore(mcp: Mcp, x: Extract, names: string[], log: (line: string
         return f.length ? { click: label, fill: f } : { click: label };
       });
       const st: State = { name: `${id}~${k}-${w}`, base: first, label: r.path[r.path.length - 1], steps, kind: r.kind, ...(r.added?.length ? { added: r.added } : {}), ...(r.removed?.length ? { removed: r.removed } : {}), ...(r.to ? { to: r.to } : {}) };
-      if (shown(st) && typeof r.html === 'string') fs.writeFileSync(path.join(x.dir, `${st.name}.html`), framePage(r.html, Number(w) || 390));
+      if (shown(st) && typeof r.html === 'string') writeIfChanged(path.join(x.dir, `${st.name}.html`), framePage(r.html, Number(w) || 390));
       keep.push(st);
       // The same state at the other widths, reached by the same clicks.
       if (shown(st)) for (const o of others) {
         try {
           const h = resultOf(await mcp.call('browser_run_code_unsafe', { code: replayCode(x.open!, x.page!, o, r.path) }, 300_000));
-          if (typeof h === 'string') { const sn = `${id}~${k}-${split(o)[1]}`; fs.writeFileSync(path.join(x.dir, `${sn}.html`), framePage(h, Number(split(o)[1]) || 1440)); keep.push({ ...st, name: sn, base: o }); }
+          if (typeof h === 'string') { const sn = `${id}~${k}-${split(o)[1]}`; writeIfChanged(path.join(x.dir, `${sn}.html`), framePage(h, Number(split(o)[1]) || 1440)); keep.push({ ...st, name: sn, base: o }); }
         } catch (e: any) { failed.push(`replay ${o} ${r.path.join(' › ')}: ${e.message}`); }
       }
     }
@@ -306,6 +306,21 @@ export const mergedScreens = (states: State[]) => new Set(states.filter(st => st
 export const loadStates = (file: string): State[] => { try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((x: any) => x && typeof x.name === 'string' && (x.label || x.kind === 'same')) : []; } catch { return []; } };
 
 // A screenshot of one colour (or two, for anti-aliasing at an edge): the page showed nothing.
+// A design page written again with the same content keeps its date, so its shot counts as current (see shotIsCurrent).
+function writeIfChanged(file: string, text: string) {
+  try { if (fs.readFileSync(file, 'utf8') === text) return; } catch { /* new */ }
+  fs.writeFileSync(file, text);
+}
+// A design shot (a file:// page) whose png and measure are newer than the page and whose image is not blank: a rerun
+// skips it, so a long design is captured over several runs. App shots (http) are always taken fresh.
+export function shotIsCurrent(sh: Shot) {
+  if (!/^file:\/\//.test(sh.url) || sh.actions?.length) return false;
+  try {
+    const page = fs.statSync(decodeURIComponent(sh.url.replace(/^file:\/\//, ''))).mtimeMs;
+    return fs.statSync(sh.png).mtimeMs >= page && fs.statSync(sh.json).mtimeMs >= page && !blankPng(sh.png);
+  } catch { return false; }
+}
+
 export function blankPng(file: string) {
   try {
     const p = PNG.sync.read(fs.readFileSync(file)), seen = new Set<number>();
@@ -321,7 +336,7 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
   fs.mkdirSync(outDir, { recursive: true });
   const mcp = new Mcp(outDir);
   const failed: string[] = [];
-  let done = 0;
+  let done = 0, kept = 0;
   try {
     await mcp.start();
     for (const g of jobs.groups) {
@@ -332,7 +347,7 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
           const pages = resultOf(text);
           if (!Array.isArray(pages)) throw new Error('extract code must return [{ name, html }]');
           fs.mkdirSync(g.extract.dir, { recursive: true });
-          for (const pg of pages) if (pg && typeof pg.name === 'string' && typeof pg.html === 'string' && /^[\w.-]+$/.test(pg.name)) { fs.writeFileSync(path.join(g.extract.dir, `${pg.name}.html`), framePage(pg.html, Number(split(pg.name)[1]) || 390)); names.push(pg.name); }
+          for (const pg of pages) if (pg && typeof pg.name === 'string' && typeof pg.html === 'string' && /^[\w.-]+$/.test(pg.name)) { writeIfChanged(path.join(g.extract.dir, `${pg.name}.html`), framePage(pg.html, Number(split(pg.name)[1]) || 390)); names.push(pg.name); }
           log(`extracted ${names.length} page${names.length === 1 ? '' : 's'} into ${g.extract.dir}`);
         } catch (e: any) { failed.push(`extract: ${e.message}`); log(`extract failed: ${e.message}`); }
         if (g.extract.open && g.extract.page && names.length) {
@@ -360,6 +375,7 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
         if (g.setup) log(`setup: ${(await mcp.call('browser_run_code_unsafe', { code: g.setup })).split('\n')[1] ?? 'ok'}`);
       } catch (e: any) { for (const sh of g.shots) failed.push(`${sh.png}: setup failed: ${e.message}`); log(`setup failed: ${e.message}`); continue; }
       for (const sh of g.shots) {
+        if (shotIsCurrent(sh)) { kept++; log(`${++done}/${all().length} ${path.basename(sh.png)} (kept: already shot from this page)`); continue; }
         try {
           const text = await mcp.call('browser_run_code_unsafe', { code: shotCode(sh) });
           let said = ''; try { said = String(resultOf(text) ?? ''); } catch { /* a reply without a result: shot taken */ }
@@ -389,6 +405,7 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
       }
     }
   } finally { mcp.stop(); }
+  if (kept) log(`${kept} design shot${kept === 1 ? '' : 's'} kept from an earlier run (their page has not changed since)`);
   return { done, failed };
 }
 

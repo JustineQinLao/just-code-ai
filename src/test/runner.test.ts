@@ -131,6 +131,8 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   r.cancelQueue();
   screens(500, 575);   // the gallery's scaled frame, cut at the fold
   assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'bad design images add no tasks');
+  assert.equal(store.task(audit.id)!.status, 'review', 'an audit that stopped early is not done');
+  assert.match(store.task(audit.id)!.error ?? '', /stopped before finishing/);
   assert.match(A.screenShotProblems(copy)[0], /500×575, expected 390 wide/);
   screens(390, 1800);
   assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'an audit that compared no screen adds no tasks');

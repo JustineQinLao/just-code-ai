@@ -2048,3 +2048,23 @@ test('a blank screenshot (the app had not drawn) is told apart from a real one',
   assert.equal(blankPng(path.join(dir, 'page.png')), false);
   assert.equal(blankPng(path.join(dir, 'missing.png')), false);
 });
+
+import { shotIsCurrent } from '../designcapture';
+import { backgroundDesignRun } from '../policy';
+test('a long design capture resumes: current design shots are kept, app shots are always new; it never runs in the background', () => {
+  const dir = tmp(), { PNG } = require('pngjs');
+  const page = path.join(dir, 'c-login-390.html'), png = path.join(dir, 'c-login-390.png'), json = path.join(dir, 'c-login-390.json');
+  const img = new PNG({ width: 40, height: 40 }); for (let i = 0; i < img.data.length; i += 4) { img.data[i] = (i * 7) % 256; img.data[i + 1] = (i * 3) % 256; img.data[i + 2] = (i * 11) % 256; img.data[i + 3] = 255; }
+  fs.writeFileSync(page, '<html></html>');
+  const old = new Date(Date.now() - 60_000); fs.utimesSync(page, old, old);
+  fs.writeFileSync(png, PNG.sync.write(img)); fs.writeFileSync(json, '{"items":[]}');
+  const sh = { url: `file://${page}`, width: 390, png, json };
+  assert.equal(shotIsCurrent(sh), true);
+  assert.equal(shotIsCurrent({ ...sh, url: 'http://localhost:4200/login' }), false, 'app shots are always new');
+  assert.equal(shotIsCurrent({ ...sh, actions: [{ click: 'Pay' }] }), false);
+  fs.utimesSync(page, new Date(), new Date(Date.now() + 5000));
+  assert.equal(shotIsCurrent(sh), false, 'the page changed since');
+  assert.match(backgroundDesignRun({ command: 'node cli.js design-capture jobs.json', run_in_background: true }) ?? '', /foreground/);
+  assert.equal(backgroundDesignRun({ command: 'node cli.js design-capture jobs.json' }), undefined);
+  assert.equal(backgroundDesignRun({ command: 'docker compose up -d', run_in_background: true }), undefined);
+});

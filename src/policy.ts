@@ -216,3 +216,11 @@ export function stopsOthersContainers(cmd: string, taskId: string, inTaskFolder:
   }
   return undefined;
 }
+
+// design-capture and design-diff run in the foreground: a turn that ends while one runs in the background ends the
+// task, and the capture dies with its session. Rerunning resumes, so a long design is several foreground runs.
+export function backgroundDesignRun(input: Record<string, unknown>): string | undefined {
+  if (input.run_in_background === true && typeof input.command === 'string' && /\bdesign-(capture|diff)\b/.test(input.command))
+    return 'Run design-capture and design-diff in the foreground (no run_in_background), with timeout 600000. If it stops at the timeout, run the same command again: it resumes where it stopped. A capture left in the background dies when your turn ends.';
+  return undefined;
+}

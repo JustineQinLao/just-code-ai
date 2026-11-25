@@ -237,8 +237,9 @@ detached and add dev sample data through the app's own commands.
 
 If \`${scr}/screens.json\` exists and has \`"capture": ${SHOT_VERSION}\`, use it and go to step 2. Else (re)make it.
 
-Every screenshot and measure runs through ONE command, \`node ${arg(cli)} design-capture <jobs.json>\` (Bash, with
-timeout 600000), never one tool call per screen. It drives a headless Playwright browser, and for each shot saves the PNG
+Every screenshot and measure runs through ONE command, \`node ${arg(cli)} design-capture <jobs.json>\` (Bash, in the
+foreground with timeout 600000, never run_in_background: your turn ending stops it), never one tool call per screen.
+If it stops at the timeout, run the same command again: it resumes (explored screens and current design shots are kept). It drives a headless Playwright browser, and for each shot saves the PNG
 (exact width, full height, inner scroll areas and scaling undone), the .json measure (every visible text and control
 with its computed font, size, weight, color and box) and the .css (the CSS rules the page uses at that width). jobs.json:
 \`{"groups": [{"setup": "<optional: async (page) => {...} run first, e.g. sign in>", "extract": {"code": "<optional: async (page) => [{name, html}]>", "dir": "<abs folder>", "open": "<optional: async (page, name) => root selector>", "page": "<optional: async (page, selector) => html>"}, "states": "<optional: states.json>", "shots": [{"url", "width", "png", "json", "actions": [{"click": "<label>"}]}]}]}\`
