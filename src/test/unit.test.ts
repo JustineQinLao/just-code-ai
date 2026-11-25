@@ -1842,8 +1842,10 @@ test('fix to match rounds: sample data is not a difference, a rule on many scree
   assert.equal(r1.shared[0].screens.length, 7);
   assert.doesNotMatch(fs.readFileSync(path.join(audit, 'c-a-390.diff.txt'), 'utf8'), /Maria|Juan/, 'sample data is not missing or extra');
   const p1 = planRound(copy, audit, r1.rows, r1.shared);
-  assert.equal(p1.length, 1, 'shared rules first, as one task');
+  assert.equal(p1[0].title, 'Design fix: shared styles', 'shared rules first, as one task');
   assert.match(p1[0].done.join('\n'), /\.muted size: design 14, app 13 @390 is fixed \(was on 7 screens, e\.g\. "Title" on c-a/);
+  assert.ok(p1.length > 1 && p1.slice(1).every(x => x.after?.[0] === 'Design fix: shared styles'), 'the screens are planned too, after the shared task');
+  assert.deepEqual(planRound(copy, audit, r1.rows, r1.shared, [], p1[0].rules).map(x => x.title).filter(x => /shared/.test(x)), [], 'a rule a shared task already tried is left to the screens');
   // After the shared fix merged and the app was measured again: only per-screen differences are left.
   for (const id of ids) fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it('Title', 14), it(`only ${id}`, id === 's-a' ? 16 : 15, 'x')] }));
   const r2 = diffAll(shots, audit, audit, ['Maria Santos']);
@@ -1852,6 +1854,19 @@ test('fix to match rounds: sample data is not a difference, a rule on many scree
   assert.ok(p2[0].files.includes(path.join(shots, 'c-a-390.css')));
   assert.match(p2[0].goal, /c-a \(\/\)/);
   assert.equal(screenOf('c-root-guest-1440'), 'c-root-guest');
+});
+
+test('fix to match: text the app lacks or adds is not a shared style, and states are not more screens', () => {
+  const root = tmp(), shots = path.join(root, 'screens'), audit = path.join(root, 'audit');
+  fs.mkdirSync(shots); fs.mkdirSync(audit);
+  const it = (text: string, size = 14) => ({ text, cls: 'muted', x: 0, w: 10, h: 10, font: 'F', size, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
+  for (const n of ['c-a-390', 'c-a~menu-390', 'c-a~more-390', 'c-b-390', 'c-b~menu-390']) {
+    fs.writeFileSync(path.join(shots, `${n}.json`), JSON.stringify({ items: [it('Title')] }));
+    fs.writeFileSync(path.join(audit, `${n}.json`), JSON.stringify({ items: [it('Title', 13), it('Switch role')] }));
+  }
+  const r = diffAll(shots, audit, audit);
+  assert.deepEqual(r.shared, [], 'on 2 screens (5 with states), and "Switch role" is content');
+  assert.match(fs.readFileSync(path.join(audit, 'c-a~menu-390.diff.txt'), 'utf8'), /extra in app: "Switch role"/, 'still a difference of the screen');
 });
 
 import { isSample, usableSample } from '../designdiff';

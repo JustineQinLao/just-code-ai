@@ -248,8 +248,10 @@ export const plannerMethods = {
     for (const t of this.store.data.tasks.filter(t => t.status === 'todo' && !t.branch && !t.archived && (t.designFix || (A.DESIGN_FILE.test(t.description ?? '') && [copy, DC.screensOf(copy)].some(d => (t.description ?? '').includes(d))))))
       void this.remove(t.id);
     DF.save(this.root, { sourceId: src.id, copy, round: 1 });
+    const plan = p.length ? [] : this.designPlan(copy, false);
+    if (plan.some(x => x.rules)) DF.save(this.root, { sourceId: src.id, copy, round: 1, sharedTried: plan.flatMap(x => x.rules ?? []) });
     const planned = p.length ? p.map(c => ({ title: c.title, description: c.description, after: c.after }))
-      : this.designPlan(copy, false).map(x => ({ title: x.title, description: taskText(x), after: undefined as string[] | undefined }));
+      : plan.map(x => ({ title: x.title, description: taskText(x), after: x.after }));
     if (!planned.length) { DF.save(this.root, { sourceId: src.id, copy, round: 1, done: true }); this.d.notify('info', 'Fix to match: every screen matches the design.', id); return 0; }
     return this.addRound(planned, 1, id);
   },
@@ -280,7 +282,7 @@ export const plannerMethods = {
     let screens: { id: string; title?: string; url?: string }[] = [];
     try { screens = JSON.parse(fs.readFileSync(path.join(DC.screensOf(copy), 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
     this.designLines = rows.reduce((n, r) => n + r.n, 0);   // the measured total, for "is the fix still making progress"
-    return DC.planRound(copy, auditDir, rows, shared, screens);
+    return DC.planRound(copy, auditDir, rows, shared, screens, DF.load(this.root)?.sharedTried ?? []);
   },
 
   // After the last fix task of a round merges: rebuild-aware wait for the app, measure every screen again with the
@@ -323,7 +325,7 @@ export const plannerMethods = {
     // Screens a round made worse (2+ points more pixels differing): named, so a regression is seen, not averaged away.
     const worse = Object.entries(screensPx).filter(([n, v]) => st.screensPx?.[n] !== undefined && v >= st.screensPx[n] + 2).map(([n, v]) => `${n} ${st.screensPx![n]}→${v}%`);
     if (worse.length) this.d.notify('warn', `Fix to match: the last round made ${worse.length} screen${worse.length === 1 ? '' : 's'} look less like the design: ${worse.slice(0, 6).join(', ')}${worse.length > 6 ? ', …' : ''}. See .justcode/design/audit/<name>.diff.png.`);
-    const saved = { ...st, lines, px, screensPx, stale };
+    const saved = { ...st, lines, px, screensPx, stale, sharedTried: [...new Set([...(st.sharedTried ?? []), ...planned.flatMap(x => x.rules ?? [])])] };
     if (!manual && stale >= DF.STALE_ROUNDS) {
       DF.save(this.root, { ...saved, done: true });
       this.d.notify('warn', `Fix to match: ${DF.STALE_ROUNDS} rounds without getting closer to the design (${px !== undefined ? `${px}% pixels differ on average` : `${lines} differences left`}), so it stopped. See .justcode/design/audit; Measure again to go on.`);
@@ -332,7 +334,7 @@ export const plannerMethods = {
     const round = manual ? st.round : st.round + 1;
     DF.save(this.root, { ...saved, round, done: false });
     if (px !== undefined) this.d.notify('info', `Fix to match: ${px}% of pixels differ from the design on average${st.px !== undefined ? ` (was ${st.px}%)` : ''}.`);
-    this.addRound(planned.map(x => ({ title: x.title, description: taskText(x) })), round);
+    this.addRound(planned.map(x => ({ title: x.title, description: taskText(x), after: x.after })), round);
   },
 
   // "Sprint 2: Search" → the open sprint named "Sprint 2", created with goal "Search" when there is none.

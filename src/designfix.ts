@@ -6,7 +6,7 @@ import * as path from 'path';
 // differences (lines) fall; STALE_ROUNDS rounds without fewer differences, or MAX_ROUNDS in all, end it.
 export const MAX_ROUNDS = 8;
 export const STALE_ROUNDS = 2;
-export interface FixState { sourceId: string; copy: string; round: number; done?: boolean; lines?: number; px?: number; screensPx?: Record<string, number>; stale?: number }
+export interface FixState { sourceId: string; copy: string; round: number; done?: boolean; lines?: number; px?: number; screensPx?: Record<string, number>; stale?: number; sharedTried?: string[] }
 const file = (root: string) => path.join(root, '.justcode', 'design', 'fix.json');
 export function load(root: string): FixState | undefined {
   try { const v = JSON.parse(fs.readFileSync(file(root), 'utf8')); return v && typeof v.copy === 'string' ? v : undefined; } catch { return undefined; }

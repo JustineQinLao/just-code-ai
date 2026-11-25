@@ -430,7 +430,10 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
 // `design-diff --all <designDir> <appDir> <outDir>`: every <name>.json in both folders compared, one <name>.diff.txt each
 // in outDir, a one-line-per-screen summary (most differences first), and the shared differences: the same rule (class,
 // property and values) differing on SHARED_MIN or more screens, which one CSS change fixes everywhere (shared.txt).
+// Screens are counted by base screen (a screen's states are not more screens), and only style rules are shared: text or
+// a control the app lacks or adds is content, fixed on its own screens (one CSS change cannot fix it).
 export const SHARED_MIN = 3;
+export const styleRule = (rule: string) => !/^(missing control|missing in app|extra in app)\b/.test(rule);
 export interface DiffRow { name: string; n: number; px?: number }
 
 // pixelmatch (the library Playwright's toHaveScreenshot uses), ESM, loaded once. threshold 0.1 is its own default;
@@ -471,7 +474,8 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
     for (const x0 of d) if (x0.rule) {
       const x = { ...x0, rule: width ? `${x0.rule} @${width}` : x0.rule };
       if (!rules.has(x.rule)) { rules.set(x.rule, new Set()); texts.set(x.rule, new Set()); }
-      rules.get(x.rule)!.add(screen);
+      if (!styleRule(x.rule)) continue;
+      rules.get(x.rule)!.add(baseOf(name));
       if (x.text && texts.get(x.rule)!.size < 3) texts.get(x.rule)!.add(`"${x.text.slice(0, 40)}" on ${screen}`);
     }
     const dp = path.join(designDir, `${name}.png`), ap = path.join(appDir, `${name}.png`);
@@ -525,26 +529,30 @@ export function loadSample(file: string): string[] {
   try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? usableSample(v.filter((x): x is string => typeof x === 'string')) : []; } catch { return []; }
 }
 
-// The next round of fix tasks, planned from the measures alone (no Claude): when a rule differs on several screens,
-// one task for those rules first (one CSS change each, and the next round re-measures); otherwise screens that still
-// differ, each with its states (modals, panels, picked options: "<id>~<label>"), grouped by area (the id's first
+// The next round of fix tasks, planned from the measures alone (no Claude): when a style rule differs on several
+// screens, one task for those rules (one CSS change each) that the screen tasks wait for; a rule a shared task already
+// tried (tried) is left to the screens. Then the screens that still differ, each with its states (modals, panels, picked options: "<id>~<label>"), grouped by area (the id's first
 // part: role or section), at most PER_TASK screens a task, and a screen with many states on its own. Controls the
 // app lacks and the design's other behaviours (menus, toasts, links to other screens, from states.json) are checks.
 export const PER_TASK = 5;
-export interface Planned { title: string; goal: string; files: string[]; done: string[] }
+export interface Planned { title: string; goal: string; files: string[]; done: string[]; after?: string[]; rules?: string[] }
+export const SHARED_TITLE = 'Design fix: shared styles';
 export const baseOf = (name: string) => screenOf(name).split('~')[0];
-export function planRound(copy: string, auditDir: string, rows: DiffRow[], shared: Shared[], screens: { id: string; title?: string; url?: string }[] = []): Planned[] {
+export function planRound(copy: string, auditDir: string, rows: DiffRow[], shared: Shared[], screens: { id: string; title?: string; url?: string }[] = [], tried: string[] = []): Planned[] {
   const shotsDir = screensOf(copy);
   const states = loadStates(path.join(shotsDir, 'states.json'));
   const refs = (id: string) => fs.existsSync(shotsDir) ? fs.readdirSync(shotsDir).filter(f => /\.(css|html|json)$/.test(f) && f !== 'states.json' && f !== 'screens.json' && baseOf(f.replace(/\.(css|html|json)$/, '')) === id).sort().map(f => path.join(shotsDir, f)) : [];
-  if (shared.length) {
-    const top = shared.slice(0, 15), examples = [...new Set(top.flatMap(x => x.screens))].slice(0, 3);
-    return [{ title: 'Design fix: shared styles', goal: `Fix the ${top.length} style rule${top.length === 1 ? '' : 's'} that differ from the design on several screens at once, in the shared styles (one change each, not per page).`,
+  const out: Planned[] = [];
+  const fresh = shared.filter(x => styleRule(x.rule) && !tried.includes(x.rule));
+  if (fresh.length) {
+    const top = fresh.slice(0, 15), examples = [...new Set(top.flatMap(x => x.screens))].slice(0, 3);
+    out.push({ title: SHARED_TITLE, rules: top.map(x => x.rule), goal: `Fix the ${top.length} style rule${top.length === 1 ? '' : 's'} that differ from the design on several screens at once, in the shared styles (one change each, not per page).`,
       files: [...examples.flatMap(refs).filter(f => f.endsWith('.css')), path.join(auditDir, 'shared.txt')],
       done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens, e.g. ${x.examples.join('; ')})`),
         'each fix is made once in the shared styles or component, and no page or component file overrides those design classes locally any more (grep the class names)',
-        'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] }];
+        'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] });
   }
+  const after = out.length ? [SHARED_TITLE] : undefined;
   const missing = (file: string) => { try { return parseMeasure(fs.readFileSync(file, 'utf8')).missing; } catch { return undefined; } };
   const left = [...new Set(rows.filter(r => r.n > 0).map(r => baseOf(r.name)))];
   const nStates = (id: string) => new Set(states.filter(st => shown(st) && baseOf(st.name) === id).map(st => screenOf(st.name))).size;
@@ -557,7 +565,6 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
     else if (last && last.length < PER_TASK && !(last.length === 1 && nStates(last[0]) > 3)) last.push(id);
     else groups.push([id]);
   }
-  const out: Planned[] = [];
   const info = (id: string) => screens.find(s => s.id === id || id.startsWith(`${s.id}-`));
   for (const part of [...byArea.values()].flat()) {
     const names = part.map(id => info(id)?.title ?? id);
@@ -577,7 +584,7 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
     out.push({ title: `Design fix: ${names.join(', ')}${extra ? ` (+${extra} state${extra === 1 ? '' : 's'})` : ''}`.slice(0, 90),
       goal: `Make ${part.map(id => `${id}${info(id)?.url ? ` (${info(id)!.url})` : ''}`).join(', ')} and ${extra ? 'every state of it (modals, panels, picked options)' : 'it'} match the design at every width.`,
       files: part.flatMap(refs).filter(f => !f.endsWith('.json')),   // the html and css; the measures are in the diff files
-      done: [...done, 'the design-diff of these screens and states shows only sample data', 'tests for the changed code pass'] });
+      done: [...done, 'the design-diff of these screens and states shows only sample data', 'tests for the changed code pass'], after });
   }
   return out;
 }
