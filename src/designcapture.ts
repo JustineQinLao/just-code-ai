@@ -305,6 +305,15 @@ export function stateShots(shots: Shot[], states: State[]): Shot[] {
 export const mergedScreens = (states: State[]) => new Set(states.filter(st => st.kind === 'same').map(st => st.name));
 export const loadStates = (file: string): State[] => { try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? v.filter((x: any) => x && typeof x.name === 'string' && (x.label || x.kind === 'same')) : []; } catch { return []; } };
 
+// A screenshot of one colour (or two, for anti-aliasing at an edge): the page showed nothing.
+export function blankPng(file: string) {
+  try {
+    const p = PNG.sync.read(fs.readFileSync(file)), seen = new Set<number>();
+    for (let i = 0; i < p.data.length; i += 4 * 37) { seen.add((p.data[i] << 16) | (p.data[i + 1] << 8) | p.data[i + 2]); if (seen.size > 3) return false; }
+    return true;
+  } catch { return false; }
+}
+
 export async function capture(jobs: Jobs, log: (line: string) => void = console.log) {
   for (const g of jobs.groups) if (g.states) g.shots = [...(g.shots ?? []), ...stateShots(g.shots ?? [], loadStates(g.states))];
   const all = () => jobs.groups.flatMap(g => g.shots ?? []);
@@ -361,7 +370,18 @@ export async function capture(jobs: Jobs, log: (line: string) => void = console.
             log(`${++done}/${all().length} ${path.basename(sh.png)}: no control "${said.slice(8)}"`);
             continue;
           }
+          // A blank image (the page had not drawn yet) is never compared: shot again once, else reported.
+          if (blankPng(sh.png)) {
+            await mcp.call('browser_run_code_unsafe', { code: `async (page) => { await page.waitForTimeout(2000); return 'waited'; }` });
+            await mcp.call('browser_run_code_unsafe', { code: shotCode(sh) });
+          }
           await mcp.call('browser_evaluate', { function: MEASURE_FN, filename: sh.json });
+          if (blankPng(sh.png)) {
+            fs.rmSync(sh.png, { force: true });
+            failed.push(`${sh.png}: the page was blank when shot (nothing drawn); measured, but no image or pixel score`);
+            log(`${++done}/${all().length} ${path.basename(sh.png)}: blank page, no image`);
+            continue;
+          }
           const m = parseMeasure(fs.readFileSync(sh.json, 'utf8'));
           fs.writeFileSync(sh.json.replace(/\.json$/i, '') + '.css', (m.css ?? '') + '\n');
           log(`${++done}/${all().length} ${path.basename(sh.png)} (${m.items.length} items)`);

@@ -2037,3 +2037,14 @@ test('a state several clicks deep is shot in the app with every step, typing the
   assert.match(shotCode(sh), /"fill":\[\{"label":"Your name","value":"Maria Santos"\}\]/);
   assert.doesNotThrow(() => new Function(`return (${shotCode(sh)})`));
 });
+
+import { blankPng } from '../designcapture';
+test('a blank screenshot (the app had not drawn) is told apart from a real one', () => {
+  const dir = tmp(), { PNG } = require('pngjs');
+  const png = (fill: (x: number, y: number) => number[]) => { const p = new PNG({ width: 40, height: 40 }); for (let y = 0; y < 40; y++) for (let x = 0; x < 40; x++) { const [r, g, b] = fill(x, y), i = (y * 40 + x) * 4; p.data[i] = r; p.data[i + 1] = g; p.data[i + 2] = b; p.data[i + 3] = 255; } return PNG.sync.write(p); };
+  fs.writeFileSync(path.join(dir, 'blank.png'), png(() => [233, 241, 243]));
+  fs.writeFileSync(path.join(dir, 'page.png'), png((x, y) => y < 10 ? [255, 255, 255] : x % 7 < 2 ? [20, 20, 20] : y % 5 ? [233, 241, 243] : [200, 30, 30]));
+  assert.equal(blankPng(path.join(dir, 'blank.png')), true);
+  assert.equal(blankPng(path.join(dir, 'page.png')), false);
+  assert.equal(blankPng(path.join(dir, 'missing.png')), false);
+});

@@ -154,6 +154,17 @@ export const SHOT_CODE = `async (page) => {
   const url = 'URL', width = WIDTH, png = 'PNG', actions = ACTIONS;
   await page.setViewportSize({ width, height: width < 800 ? 844 : 900 });
   await page.goto(url, { waitUntil: 'load' });
+  // A single-page app draws after load (after it starts and its first API calls): wait until the page shows text
+  // and that text has stopped changing for half a second (at most 10 s), so the image and the measure match.
+  const drawn = async () => {
+    let last = '', same = 0;
+    for (const end = Date.now() + 10000; Date.now() < end; await page.waitForTimeout(250)) {
+      const t = await page.evaluate(() => (document.body && document.body.innerText || '').trim()).catch(() => '');
+      if (t && t === last) { if (++same >= 2) return; } else same = 0;
+      last = t;
+    }
+  };
+  await drawn();
   for (const { click: label, fill } of actions) {
     // The values the design shows in this step's fields (a name to confirm, an amount): by label, else by placeholder,
     // else the empty text fields in order.
@@ -171,7 +182,8 @@ export const SHOT_CODE = `async (page) => {
     if (!hit) { const l = page.getByText(label, { exact: true }); if (await l.count()) hit = l.first(); }
     if (!hit) return 'missing:' + label;
     await hit.click({ timeout: 5000 });
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(150);
+    await drawn();
   }
   await page.evaluate(async () => {
     await document.fonts.ready;
