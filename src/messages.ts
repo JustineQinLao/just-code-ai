@@ -262,6 +262,17 @@ export async function handle(m: any, remote = false) {
       return;
     }
     case 'sendChecks': await r.sendChecks(m.id); return;
+    // A command a question asked you to run, run where the task works (its folder, else the project folder), in a
+    // terminal you can type into (sudo asks for your password there). Desktop only: the phone page never runs commands.
+    case 'runCommand': {
+      const cmd = String(m.command ?? '').trim();
+      if (remote || !cmd || cmd.length > 400 || /\n/.test(cmd)) return;
+      const cwd = t?.worktree && fs.existsSync(t.worktree) ? t.worktree : r.root;
+      const term = vscode.window.createTerminal({ name: `⌨ ${(t?.title ?? 'JustCode').slice(0, 40)}`, cwd, env: { CLAUDECODE: null, CLAUDE_CODE_ENTRYPOINT: null, ANTHROPIC_API_KEY: null } });
+      term.show();
+      term.sendText(cmd);
+      return;
+    }
     case 'copy': if (remote) hub.emit({ type: 'copy', text: String(m.text ?? '') }); else { await vscode.env.clipboard.writeText(String(m.text ?? '')); say('Copied.'); } return;
     case 'discard':
       if (t && t.where === 'direct' && !t.init) {

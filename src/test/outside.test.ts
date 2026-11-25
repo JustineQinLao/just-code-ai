@@ -72,3 +72,11 @@ test('card: files changed only outside the project offer Finish, not "no changes
   assert.match(n.text, /outside this project: deploy\/README\.md/);
   assert.ok(n.actions.some((a: any) => a[0] === '✓ Finish'));
 });
+
+
+test('commands a question asks you to run: backtick spans, else the text after "run …:"', () => {
+  assert.deepEqual(status.commandsIn('Now run this in your terminal from the repo root: scripts/hosts.sh add agos linaw. It asks for your sudo password there.'), ['scripts/hosts.sh add agos linaw']);
+  assert.deepEqual(status.commandsIn('Run `./cert-gen.sh --install-ca` then `sudo scripts/hosts.sh add agos`. Use the `main` branch.'), ['./cert-gen.sh --install-ca', 'sudo scripts/hosts.sh add agos']);
+  assert.deepEqual(status.commandsIn('Which branch should I use?'), []);
+  assert.deepEqual(status.commandsIn('Should I run the tests: yes or no?'), []);
+});

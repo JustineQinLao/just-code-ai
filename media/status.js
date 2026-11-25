@@ -137,6 +137,19 @@
     if (t.review) return t.review.state === 'pass' ? 4 : 3;
     return t.checks?.state === 'fail' || /check/i.test(t.phase || '') ? 2 : t.checks?.state === 'pass' ? 3 : 2;
   }
-  const api = { LANES, STEPS, stepOf, lane, nextStep, roundLimit, elapsed };
+  // Shell commands a question asks you to run: `code` spans that look like a command, else the text after
+  // "run …:" up to the end of the sentence (Claude does not always use backticks).
+  const CMD = /^(sudo |\.{1,2}\/|~\/|\/|[\w.-]+\/[\w.-]|(npm|npx|pnpm|yarn|node|python3?|pip3?|docker|docker-compose|git|brew|curl|cd|make|bash|sh|chmod|security|openssl|adb|gh|export|kubectl)\b)/;
+  function commandsIn(text) {
+    const out = [];
+    const add = c => { c = (c || '').trim().replace(/[.;,]+$/, ''); if (c && CMD.test(c) && c.length <= 400 && !out.includes(c)) out.push(c); };
+    for (const m of String(text || '').matchAll(/`([^`\n]+)`/g)) add(m[1]);
+    if (!out.length) {
+      const m = /\brun\b[^:\n]{0,80}:\s*(.+?)(?:\.\s|\.$|\n|$)/i.exec(String(text || ''));
+      if (m) add(m[1]);
+    }
+    return out;
+  }
+  const api = { LANES, STEPS, stepOf, lane, nextStep, roundLimit, elapsed, commandsIn };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.JCStatus = api;
 })(typeof window !== 'undefined' ? window : this);

@@ -82,6 +82,18 @@ const EXERCISE = `async () => {
     if (m?.where !== 'task') errs.push('plan panel: Apply posted where ' + m?.where);
     JC.S.planner = undefined; JC.closeTask();
   } catch (e) { errs.push('plan where: ' + e.message); }
+  // A question asking you to run a command shows it with Copy and Run in terminal.
+  try {
+    const host = JC.h('div', {});
+    host.append(JC.questionBox({ id: 'qcmd' }, { id: 'a1', questions: [{ header: 'Add hosts', question: 'Now run this in your terminal from the repo root: scripts/hosts.sh add agos linaw. Answer done.', options: [{ label: 'done' }] }] }));
+    document.body.append(host);
+    const row = host.querySelector('.cmdrow');
+    if (!row || row.querySelector('code').textContent !== 'scripts/hosts.sh add agos linaw') errs.push('question command: no command row');
+    [...row.querySelectorAll('button')].find(b => b.textContent === 'Run in terminal').click();
+    const m = posts.filter(x => x.type === 'runCommand').pop();
+    if (m?.command !== 'scripts/hosts.sh add agos linaw' || m.id !== 'qcmd') errs.push('question command: Run posted ' + JSON.stringify(m));
+    host.remove();
+  } catch (e) { errs.push('question command: ' + e.message); }
   await run('planDialog', () => { document.querySelector('#dlg').close(); JC.planDialog([]); });
   // @ files in the Plan box: the menu shows inside the dialog, on screen.
   try {

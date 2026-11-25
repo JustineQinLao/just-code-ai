@@ -147,6 +147,7 @@ To wait for something, check once, then check again in a later command, so the u
 Exception: when the task itself asks you to run, start or serve the app (so the user can open it), start it detached so your turn can end
 (e.g. docker compose up -d --build, or a background process with its output in a log file), wait until it answers, then give the frontend and backend URLs (from the .env the build uses: its host and port variables) and any logins, and leave it running.
 A UI task that must screenshot its built screen (a design to match, or a screenshot in "Done when") may also start the app detached the same way, take the screenshots, then stop what it started.
+A step only the user can do (sudo, a password, trusting a certificate): ask with AskUserQuestion and put the exact command alone in backticks, e.g. \`scripts/hosts.sh add agos\`. The board shows it with Copy and Run in terminal. Never ask for a password in chat; verify the result yourself after they answer.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
 When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
 If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;

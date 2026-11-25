@@ -42,13 +42,23 @@
     function send() { JC.post('answer', { id: t.id, ask: a.id, choice: 'deny', message: `Revise the plan: ${note.querySelector('input').value || 'keep planning'}` }); }
   }
 
+  // A command the question asks you to run: copy it, or run it in a terminal in the task's folder (where sudo can ask
+  // for your password). Not offered on the phone page.
+  function cmdRows(t, text) {
+    const cmds = (window.JCStatus?.commandsIn || (() => []))(text);
+    if (!cmds.length) return '';
+    return JC.h('div', { class: 'cmds' }, cmds.map(c => JC.h('div', { class: 'cmdrow' }, JC.h('code', {}, c),
+      JC.btn('Copy', () => JC.post('copy', { text: c }), 'ghost small'),
+      JC.REMOTE ? '' : JC.btn('Run in terminal', () => JC.post('runCommand', { id: t.id, command: c }), 'small', 'Opens a terminal in the task\'s folder and runs it there'))));
+  }
   function questionBox(t, a) {
     const reply = x => t.id === '__planner' ? JC.post('plannerAnswer', x) : JC.post('answer', { id: t.id, ...x });
     const picked = a.questions.map(() => new Set());
     const other = a.questions.map(() => '');
     const box = JC.h('div', { class: 'ask', onclick: e => e.stopPropagation() },
       a.questions.map((q, i) => JC.h('div', { class: 'q' },
-        JC.h('div', {}, q.header ? JC.h('span', { class: 'tag' }, q.header) : '', ' ', JC.h('b', {}, q.question)),
+        JC.h('div', {}, q.header ? JC.h('span', { class: 'tag' }, q.header) : '', ' ', JC.h('b', {}, ...JC.rich(q.question))),
+        cmdRows(t, q.question),
         JC.h('div', { class: 'opts' }, q.options.map(o => JC.h('label', { class: `opt${/\(recommended\)/i.test(o.label) ? ' rec' : ''}` },
           JC.h('input', { type: q.multiSelect ? 'checkbox' : 'radio', name: `${a.id}-${i}`, onchange: e => {
             if (!q.multiSelect) { picked[i].clear(); other[i] = ''; const oi = e.target.closest('.q').querySelector('input.other'); if (oi) oi.value = ''; }

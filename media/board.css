@@ -531,3 +531,7 @@ b.app-failed { color: var(--err); }
 .warnnote { color: var(--needs, #b7791f); margin-top: 2px; }
 .applinks li.main a { font-weight: 600; }
 .cardnote { font-size: 12px; color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); border-radius: 6px; padding: 4px 8px; margin-top: 6px; }
+
+.cmds { display: grid; gap: 6px; margin: 8px 0 4px; }
+.cmdrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cmdrow code { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; padding: 6px 8px; border-radius: 6px; background: var(--code-bg, rgba(127,127,127,.15)); font-family: var(--vscode-editor-font-family, monospace); user-select: all; }
