@@ -256,8 +256,10 @@ export const plannerMethods = {
     return this.addRound(planned, 1, id);
   },
 
-  // Adds one round of fix tasks (branch tasks on the checked-out branch, marked designFix) in order and queues them.
-  addRound(this: Runner, planned: { title: string; description?: string; after?: string[] }[], round: number, from?: string) {
+  // Adds one round of fix tasks (branch tasks on the checked-out branch, marked designFix) in order, and queues them when
+  // start (the first round, from the audit the user ran). A later round, planned by measuring again on its own, waits in
+  // To do for Run all: each round costs as much as the first, so the user decides whether the last one was worth it.
+  addRound(this: Runner, planned: { title: string; description?: string; after?: string[] }[], round: number, from?: string, start = true, note = '') {
     const ids = new Map<string, string>();
     for (const c of planned) {
       const t = this.store.addTask({ title: c.title, description: c.description || undefined, mode: this.defaultMode, where: 'branch', designFix: round });
@@ -268,13 +270,15 @@ export const plannerMethods = {
       const me = ids.get(c.title.trim().toLowerCase());
       if (me && deps.length) this.store.updateTask(me, { dependsOn: [...new Set(deps.filter(d => d !== me))] });
     }
-    this.runAll([...ids.values()]);
-    this.d.notify('info', `Fix to match, round ${round}: added ${ids.size} fix task${ids.size === 1 ? '' : 's'} (in All tasks / Backlog: they merge into your current branch) and started them. When they merge, JustCode measures again and plans what is left.`, from);
+    if (start) this.runAll([...ids.values()]);
+    this.d.notify('info', `Fix to match, round ${round}: added ${ids.size} fix task${ids.size === 1 ? '' : 's'} (in All tasks / Backlog: they merge into your current branch)${start ? ' and started them. When they merge, JustCode measures again and plans what is left.' : '. They have not started: press ▶ Run all to run this round, or archive them to stop here.'}${note}`, from);
     return ids.size;
   },
 
   // Plans from the latest measures in .justcode/design/audit (recaptured first when asked): shared rules, else screens.
-  designPlan(this: Runner, copy: string, _fresh: boolean) {
+  // prev: each screen's pixel score before the last round. A screen the last round did not bring 1 point closer at any
+  // width is not planned again (another task would cost as much and likely do as little); it is named in designStuck.
+  designPlan(this: Runner, copy: string, _fresh: boolean, prev: Record<string, number> = {}) {
     const auditDir = path.join(this.root, '.justcode', 'design', 'audit');
     const { rows, shared, avgPx } = DC.diffAll(DC.screensOf(copy), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
     this.designPx = avgPx;
@@ -282,7 +286,10 @@ export const plannerMethods = {
     let screens: { id: string; title?: string; url?: string }[] = [];
     try { screens = JSON.parse(fs.readFileSync(path.join(DC.screensOf(copy), 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
     this.designLines = rows.reduce((n, r) => n + r.n, 0);   // the measured total, for "is the fix still making progress"
-    return DC.planRound(copy, auditDir, rows, shared, screens, DF.load(this.root)?.sharedTried ?? []);
+    const byBase = new Map<string, { now: number; was?: number }[]>();
+    for (const r of rows) if (r.px !== undefined) { const b = DC.baseOf(r.name); if (!byBase.has(b)) byBase.set(b, []); byBase.get(b)!.push({ now: r.px, was: prev[r.name] }); }
+    this.designStuck = [...byBase].filter(([, v]) => v.every(x => x.was !== undefined && x.now > x.was - 1)).map(([b]) => b);
+    return DC.planRound(copy, auditDir, rows.filter(r => !this.designStuck!.includes(DC.baseOf(r.name))), shared, screens, DF.load(this.root)?.sharedTried ?? []);
   },
 
   // After the last fix task of a round merges: rebuild-aware wait for the app, measure every screen again with the
@@ -313,9 +320,10 @@ export const plannerMethods = {
     progress('App: starting the browser…');
     const r = await DC.capture(DC.parseJobs(fs.readFileSync(jobsFile, 'utf8')), l => progress(`App: ${l}`)).catch((e: Error) => ({ done: 0, failed: [e.message] }));
     if (!r.done) { this.d.notify('error', `Fix to match: could not measure the app again (${r.failed[0] ?? 'nothing captured'}). Is it running?`); return; }
-    const planned = this.designPlan(st.copy, true);
+    const planned = this.designPlan(st.copy, true, st.screensPx ?? {});
+    const stuck = this.designStuck ?? [];
     progress('Comparing…');
-    if (!planned.length) { DF.save(this.root, { ...st, done: true }); this.d.notify('info', `Fix to match: every measured screen now matches the design (round ${st.round}).`); return; }
+    if (!planned.length) { DF.save(this.root, { ...st, done: true }); this.d.notify('info', stuck.length ? `Fix to match: stopped. The ${stuck.length} screen${stuck.length === 1 ? '' : 's'} still differing did not get closer in the last round (${stuck.slice(0, 8).join(', ')}${stuck.length > 8 ? ', …' : ''}); see .justcode/design/audit/compare.html.` : `Fix to match: every measured screen now matches the design (round ${st.round}).`); return; }
     // Go on while the measured differences keep falling; stop after STALE_ROUNDS rounds without progress (fixes that do
     // not land would otherwise repeat). Measure again always plans.
     // Progress is the average pixel score (what you see) when there is one, else the count of measured differences.
@@ -334,7 +342,8 @@ export const plannerMethods = {
     const round = manual ? st.round : st.round + 1;
     DF.save(this.root, { ...saved, round, done: false });
     if (px !== undefined) this.d.notify('info', `Fix to match: ${px}% of pixels differ from the design on average${st.px !== undefined ? ` (was ${st.px}%)` : ''}.`);
-    this.addRound(planned.map(x => ({ title: x.title, description: taskText(x), after: x.after })), round);
+    this.addRound(planned.map(x => ({ title: x.title, description: taskText(x), after: x.after })), round, undefined, false,
+      stuck.length ? ` Left out ${stuck.length} screen${stuck.length === 1 ? '' : 's'} the last round did not bring closer: ${stuck.slice(0, 8).join(', ')}${stuck.length > 8 ? ', …' : ''} (see .justcode/design/audit/compare.html).` : '');
   },
 
   // "Sprint 2: Search" → the open sprint named "Sprint 2", created with goal "Search" when there is none.

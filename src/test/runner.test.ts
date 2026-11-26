@@ -154,3 +154,28 @@ test('fix to match a design: the audit task gets the design copy, and its task l
   r.cancelQueue();
   r.dispose();
 });
+
+test('fix to match: a later round is not started, and a screen the last round did not bring closer is left out', () => {
+  const { root } = repo();
+  const seen: string[] = [];
+  const { store, r } = runner(root, seen);
+  const copy = path.join(root, '.justcode', 'sources', 'd1'), refDir = path.join(root, '.justcode', 'design', 'ref', 'd1'), audit = path.join(root, '.justcode', 'design', 'audit');
+  fs.mkdirSync(copy, { recursive: true }); fs.mkdirSync(refDir, { recursive: true }); fs.mkdirSync(audit, { recursive: true });
+  const it = (text: string, size: number) => ({ text, cls: 'muted', x: 0, w: 10, h: 10, font: 'F', size, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
+  const png = (red: number) => { const p = new (require('pngjs').PNG)({ width: 10, height: 10 }); for (let i = 0; i < 400; i += 4) { const on = i / 4 < red; p.data[i] = on ? 255 : 0; p.data[i + 3] = 255; } return require('pngjs').PNG.sync.write(p); };
+  for (const id of ['c-a', 'c-b']) {
+    fs.writeFileSync(path.join(refDir, `${id}-390.json`), JSON.stringify({ items: [it(`t ${id}`, 14)] }));
+    fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it(`t ${id}`, 13)] }));
+    fs.writeFileSync(path.join(refDir, `${id}-390.png`), png(0));
+    fs.writeFileSync(path.join(audit, `${id}-390.png`), png(30));
+  }
+  // c-a was 30% before the last round and is still 30%; c-b was 60%.
+  const planned = r.designPlan(copy, true, { 'c-a-390': 30, 'c-b-390': 60 });
+  assert.deepEqual(r.designStuck, ['c-a']);
+  assert.deepEqual(planned.map(x => x.title), ['Design fix: c-b']);
+  r.addRound(planned.map(x => ({ title: x.title })), 2, undefined, false);
+  const t = store.data.tasks.find(x => x.title === 'Design fix: c-b')!;
+  assert.equal(t.status, 'todo'); assert.ok(!store.queue.includes(t.id), 'waits for Run all');
+  assert.match(seen.join('\n'), /have not started: press ▶ Run all/);
+  r.dispose();
+});

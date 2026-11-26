@@ -672,7 +672,8 @@ export class Runner {
   designStatus?: string;   // Fix to match measuring: what it is on now (shown on the board), undefined when idle
   designLines?: number;    // Fix to match: the total of measured differences at the last plan
   designPx?: number;       // Fix to match: average % of pixels differing at the last plan
-  designScreensPx?: Record<string, number>;  // set by the extension from justCode.defaultMode
+  designScreensPx?: Record<string, number>;
+  designStuck?: string[];  // Fix to match: screens the last round did not bring closer (not planned again)  // set by the extension from justCode.defaultMode
 
 
   dispose() {
