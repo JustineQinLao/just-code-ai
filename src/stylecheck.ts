@@ -69,21 +69,60 @@ export function appTokens(root: string, max = 3000) {
 }
 const norm = (v: string) => v.toLowerCase().replace(/\s+/g, ' ').replace(/\s*,\s*/g, ',').trim();
 
+// What the design's own rules for a class set, at one width: a class's other looks (the size of a .muted text, the
+// weight of a .tnum) come from where it is used, so they are no fix to that class. From the screens' .css files.
+const CSS_PROP: Record<string, Prop> = { 'font-size': 'size', 'font-weight': 'weight', color: 'color', background: 'bg', 'background-color': 'bg', 'border-radius': 'radius', 'font-family': 'font' };
+export function declaredProps(css: string) {
+  const out: { classes: string[]; props: Set<Prop> }[] = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const props = new Set<Prop>();
+    for (const d of m[2].split(';')) { const k = d.split(':')[0].trim().toLowerCase(); if (CSS_PROP[k]) props.add(CSS_PROP[k]); if (k === 'font') { props.add('size'); props.add('font'); props.add('weight'); } }
+    if (!props.size) continue;
+    for (const sel of m[1].split(',')) {
+      const last = sel.trim().split(/[\s>+~]+/).pop() ?? '';
+      if (/[:[]/.test(last)) continue;   // a state or attribute: not the plain class
+      const classes = [...last.matchAll(/\.([\w-]+)/g)].map(x => x[1]);
+      if (classes.length) out.push({ classes, props });
+    }
+  }
+  return out;
+}
+function declaredFor(refDir: string) {
+  const byWidth = new Map<number, ReturnType<typeof declaredProps>>();
+  for (const f of fs.existsSync(refDir) ? fs.readdirSync(refDir).filter(f => /-\d{3,4}\.css$/.test(f)) : []) {
+    const w = Number(/-(\d{3,4})\.css$/.exec(f)![1]);
+    byWidth.set(w, [...(byWidth.get(w) ?? []), ...declaredProps(fs.readFileSync(path.join(refDir, f), 'utf8'))]);
+  }
+  // No .css at all (an older reference): every property counts.
+  return (cls: string, width: number): Set<Prop> => {
+    const rules = byWidth.get(width);
+    if (!rules) return new Set(PROPS);
+    const have = new Set(cls.split('.').filter(Boolean)), out = new Set<Prop>();
+    for (const r of rules) if (r.classes.every(c => have.has(c))) r.props.forEach(p => out.add(p));
+    return out;
+  };
+}
+
 export function styleCheck(root: string, refDir: string, appDir: string): StyleReport {
   const merged = mergedScreens(loadStates(path.join(refDir, 'states.json')));
   const names = fs.existsSync(refDir) ? fs.readdirSync(refDir).filter(f => /-\d{3,4}\.json$/.test(f)).map(f => f.replace(/\.json$/, ''))
-    .filter(n => !merged.has(n) && fs.existsSync(path.join(appDir, `${n}.json`))).sort() : [];
+    .filter(n => !n.includes('~') && !merged.has(n) && fs.existsSync(path.join(appDir, `${n}.json`))).sort() : [];   // screens: the check shoots no states
   const design = collect(refDir, names), app = collect(appDir, names);
-  const drifts: Drift[] = [], unused: Unused[] = [];
+  const drifts: Drift[] = [], unused: Unused[] = [], sets = declaredFor(refDir);
   for (const [key, d] of design) {
     const [cls, w] = key.split('@'), width = Number(w), a = app.get(key);
     if (!a) { unused.push({ cls, width, n: d.n, screens: [...d.screens].slice(0, 3) }); continue; }
+    const own = sets(cls, width);
     for (const p of PROPS) {
+      if (!own.has(p)) continue;
       const dv = mode(d.vals.get(p)!), av = mode(a.vals.get(p)!);
       if (dv && av && norm(dv) !== norm(av)) { drifts.push({ cls, width, prop: p, design: dv, app: av, n: a.n, screens: [...a.screens].slice(0, 3) }); continue; }
       // Right in most of the app: the pages where it is not (a page rule overriding the class).
       const want = (sc: string) => { const m = d.per.get(sc)?.get(p); return m?.size ? mode(m) : dv; };   // the design on that screen
-      const off = [...a.per].filter(([sc, v]) => norm(mode(v.get(p)!)) !== norm(want(sc)));
+      // A variant the design draws with a modifier the app does not use (.inp.ph, a placeholder) is the same look.
+      const variants = (sc: string) => [...design].filter(([k]) => k !== key && k.endsWith(`@${width}`) && cls.split('.').filter(Boolean).every(c => k.split('@')[0].split('.').includes(c)))
+        .map(([, u]) => u.per.get(sc)?.get(p)).filter((m): m is Map<string, number> => !!m?.size).flatMap(m => [...m.keys()].map(norm));
+      const off = [...a.per].filter(([sc, v]) => { const got = norm(mode(v.get(p)!)); return got !== norm(want(sc)) && !variants(sc).includes(got); });
       if (dv && off.length) drifts.push({ cls, width, prop: p, design: want(off[0][0]), app: mode(off[0][1].get(p)!), n: off.reduce((n, [, v]) => n + [...v.get(p)!.values()].reduce((a, b) => a + b, 0), 0), screens: off.map(([sc]) => sc), local: true });
     }
   }

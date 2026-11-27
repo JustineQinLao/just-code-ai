@@ -2091,3 +2091,9 @@ test('style check: classes and tokens compared by style, not position or data; a
   const text = fixTaskText(r, { report: 'style-check.md', css }, 'cli.js', root);
   assert.match(text, /style-check .* ONCE/); assert.match(text, /Do not take screenshots/); assert.match(text, /--bad: the app has red, the design has #B42318: fixed/);
 });
+
+import { declaredProps } from '../stylecheck';
+test('style check: only what the design\'s rule for a class sets is that class\'s look', () => {
+  const d = declaredProps('.muted { color: var(--ink2); }\n.m .who { font-size: 13.5px; }\n.btn:hover { color: red }\n.num, .tnum { font-variant-numeric: tabular-nums; }\n.inp.ph { color: grey }');
+  assert.deepEqual(d.map(x => [x.classes.join('.'), [...x.props].join(',')]), [['muted', 'color'], ['who', 'size'], ['inp.ph', 'color']], 'hover and a numeric font setting are not looks of the class');
+});
