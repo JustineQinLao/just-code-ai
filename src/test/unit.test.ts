@@ -1892,7 +1892,7 @@ test('design diff: near copy is one element, and screenshots get a pixel score w
   assert.equal(pixelScore(a, same), 0);
   assert.equal(pixelScore(a, half, path.join(root, 'diff.png')), 50);
   assert.ok(fs.existsSync(path.join(root, 'diff.png')));
-  assert.equal(pixelScore(a, longer), 50, 'rows only one side has count as different');
+  assert.equal(pixelScore(a, longer), 0, 'a longer page is the app shot whole against one design frame: only the rows both have count');
   assert.equal(pixelScore(a, png('e.png', 20, 10, 0)), 100, 'other widths are not comparable');
 });
 
@@ -2102,4 +2102,13 @@ test('gallery screens merge into a state only when they are that state: no menus
   ];
   const m = mergeTwins(['a-detail-view-390', 'a-detail-pause-390', 'c-root-guest-390'], states, n => pages[n] ?? '');
   assert.deepEqual(m.map(x => [x.name, x.to]), [['a-detail-pause-390', 'a-detail-view~pause-business-390']]);
+});
+
+import { diffItems, looksData } from '../designdiff';
+test('design diff: the app\'s own records (numbers, repeated rows) are data, listed apart and not counted', () => {
+  const it = (text: string) => ({ text, cls: 'muted', x: 0, w: 10, h: 10, font: 'F', size: 14, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
+  const d = diffItems({ items: [it('Title'), it('Export')] }, { items: [it('Title'), it('System · 19 Nov, 7:16 PM'), it('role: staff'), it('role: staff'), it('Search activity')] });
+  assert.deepEqual(d.filter(x => !x.data).map(x => x.line), ['missing in app: "Export"', 'extra in app: "Search activity"']);
+  assert.equal(d.filter(x => x.data).length, 3);
+  assert.ok(looksData('D-6 · 26 Nov') && !looksData('Log out'));
 });

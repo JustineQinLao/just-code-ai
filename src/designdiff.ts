@@ -10,7 +10,12 @@ export interface Measure { v?: number; width?: number; items: Item[]; css?: stri
 export const MEASURE_V = 2;
 // line: what to show; rule: the same difference without the text it was found on (with the element's classes), so the
 // one CSS rule behind it can be found across screens.
-export interface Diff { line: string; rule?: string; text?: string }
+export interface Diff { line: string; rule?: string; text?: string; data?: boolean }
+
+// Text the app's records make, not its design: anything with a number in it (dates, times, amounts, counts, ids), or a
+// text the app shows several times (rows of a list), or a record's field as "name: value". The app's data is not the design's sample, so such a text missing
+// or extra is no fix to make; it is listed apart and not counted.
+export const looksData = (text: string, times = 1) => /\d/.test(text) || /^[a-z_]+: /.test(text) || times > 1;   // "slug: malanday": a record's field
 
 // Accepts what browser_evaluate saved: the object, or the same as a JSON string.
 export function parseMeasure(text: string): Measure {
@@ -83,15 +88,15 @@ export function diffItems(design: Measure, app: Measure, sample: string[] = []):
     }
     if (best) {
       left.splice(left.indexOf(best), 1);
-      if (!isSample(x.text, sample) && !isSample(best.text, sample)) out.push({ line: `copy differs: design "${x.text}", app "${best.text}"`, rule: `copy "${x.text.slice(0, 40)}": app "${best.text.slice(0, 40)}"`, text: x.text });
+      if (!isSample(x.text, sample) && !isSample(best.text, sample)) out.push({ line: `copy differs: design "${x.text}", app "${best.text}"`, rule: `copy "${x.text.slice(0, 40)}": app "${best.text.slice(0, 40)}"`, text: x.text, data: looksData(x.text) || looksData(best.text) });
       compare(x, best);
       continue;
     }
     // Missing and extra texts carry a rule too: the same text missing on many screens is one shared piece (a header,
     // a nav item), fixed once, not per screen.
-    if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"`, rule: `missing in app: "${x.text.slice(0, 40)}"`, text: x.text });
+    if (!isSample(x.text, sample)) out.push({ line: `missing in app: "${x.text}"`, rule: `missing in app: "${x.text.slice(0, 40)}"`, text: x.text, data: looksData(x.text, design.items.filter(z => z.text === x.text).length) });
   }
-  for (const y of left) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"`, rule: `extra in app: "${y.text.slice(0, 40)}"`, text: y.text });
+  for (const y of left) if (!isSample(y.text, sample)) out.push({ line: `extra in app: "${y.text}"`, rule: `extra in app: "${y.text.slice(0, 40)}"`, text: y.text, data: looksData(y.text, app.items.filter(z => z.text === y.text).length) });
   return out;
 }
 

@@ -442,17 +442,18 @@ type PixelMatch = (a: Uint8Array, b: Uint8Array, out: Uint8Array | null, w: numb
 let pm: PixelMatch | undefined;
 const pixelmatch = (): PixelMatch => { if (!pm) { const m = require('pixelmatch'); pm = (m.default ?? m) as PixelMatch; } return pm; };
 
-// How different two screenshots are, in percent of the taller one's pixels: pixelmatch over the rows both have, plus
-// every row only one has (a page that is longer or shorter differs there). Writes a diff image (changed pixels red)
-// when out is given. Different widths: 100 (not comparable).
+// How different two screenshots are, in percent of the pixels both have: pixelmatch over the rows both have. A page that
+// is longer is not counted as different below the other's end: design screens are one device frame (844 or 900 high)
+// and the app is shot whole, and a longer list is the app's data, not its design (the text diff names what is missing).
+// Writes a diff image (changed pixels red) when out is given. Different widths: 100 (not comparable).
 export function pixelScore(design: string, app: string, out?: string): number {
   const A = PNG.sync.read(fs.readFileSync(design)), B = PNG.sync.read(fs.readFileSync(app));
   if (A.width !== B.width) return 100;
-  const w = A.width, h = Math.min(A.height, B.height), H = Math.max(A.height, B.height), bytes = w * h * 4;
+  const w = A.width, h = Math.min(A.height, B.height), bytes = w * h * 4;
   const diff = new PNG({ width: w, height: h });
   const n = pixelmatch()(A.data.subarray(0, bytes), B.data.subarray(0, bytes), diff.data, w, h, { threshold: 0.1 });
   if (out) fs.writeFileSync(out, PNG.sync.write(diff));
-  return Math.round(((n + (H - h) * w) / (w * H)) * 1000) / 10;
+  return Math.round((n / (w * h)) * 1000) / 10;
 }
 export interface Shared { rule: string; screens: string[]; examples: string[] }
 export function diffAll(designDir: string, appDir: string, outDir: string, sample: string[] = []) {
@@ -471,6 +472,8 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
     } catch (e: any) { d = [{ line: `could not compare: ${e.message}` }]; }
     const name = f.replace(/\.json$/, ''), screen = screenOf(name), width = /-(\d{3,4})$/.exec(name)?.[1];
     // A rule holds at one width: CSS differs per breakpoint (13px on desktop, 14px on mobile is not one difference).
+    const data = d.filter(x => x.data);
+    d = d.filter(x => !x.data);
     for (const x0 of d) if (x0.rule) {
       const x = { ...x0, rule: width ? `${x0.rule} @${width}` : x0.rule };
       if (!rules.has(x.rule)) { rules.set(x.rule, new Set()); texts.set(x.rule, new Set()); }
@@ -481,7 +484,8 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
     const dp = path.join(designDir, `${name}.png`), ap = path.join(appDir, `${name}.png`);
     let px: number | undefined;
     try { if (fs.existsSync(dp) && fs.existsSync(ap)) px = pixelScore(dp, ap, path.join(outDir, `${name}.diff.png`)); } catch { /* a broken image: no score */ }
-    fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (px !== undefined ? `Pixels differing: ${px}% (see ${name}.diff.png: red is different)\n` : '') + (d.length ? d.map(x => x.line).join('\n') : 'No differences.') + '\n');
+    fs.writeFileSync(path.join(outDir, `${name}.diff.txt`), (px !== undefined ? `Pixels differing: ${px}% (see ${name}.diff.png: red is different)\n` : '') + (d.length ? d.map(x => x.line).join('\n') : 'No differences.') + '\n' +
+      (data.length ? `\nData that differs (the app's records are not the design's sample: nothing to fix, not counted):\n${data.map(x => x.line).join('\n')}\n` : ''));
     rows.push({ name, n: d.length, px });
   }
   rows.sort((a, b) => b.n - a.n);
@@ -535,6 +539,7 @@ export function loadSample(file: string): string[] {
 // part: role or section), at most PER_TASK screens a task, and a screen with many states on its own. Controls the
 // app lacks and the design's other behaviours (menus, toasts, links to other screens, from states.json) are checks.
 export const PER_TASK = 5;
+export const ROUND_TASKS = 12;
 export interface Planned { title: string; goal: string; files: string[]; done: string[]; after?: string[]; rules?: string[] }
 export const SHARED_TITLE = 'Design fix: shared styles';
 export const baseOf = (name: string) => screenOf(name).split('~')[0];
@@ -554,7 +559,11 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
   }
   const after = out.length ? [SHARED_TITLE] : undefined;
   const missing = (file: string) => { try { return parseMeasure(fs.readFileSync(file, 'utf8')).missing; } catch { return undefined; } };
-  const left = [...new Set(rows.filter(r => r.n > 0).map(r => baseOf(r.name)))];
+  // The screens with the most differences first, and at most ROUND_TASKS tasks a round: the next round measures again
+  // and plans what is left, so a round is never a day of tasks.
+  const total = new Map<string, number>();
+  for (const r of rows) if (r.n > 0) total.set(baseOf(r.name), (total.get(baseOf(r.name)) ?? 0) + r.n);
+  const left = [...total].sort((a, b) => b[1] - a[1]).map(([id]) => id);
   const nStates = (id: string) => new Set(states.filter(st => shown(st) && baseOf(st.name) === id).map(st => screenOf(st.name))).size;
   const byArea = new Map<string, string[][]>();
   for (const id of left) {
@@ -577,7 +586,7 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
       }
       const named = rows.filter(r => baseOf(r.name) === id && r.n > 0);
       const px = named.filter(r => !r.name.includes('~') && r.px !== undefined).map(r => `${r.px}% at ${r.name.slice(id.length + 1)}`);
-      done.push(`every line in ${path.join(auditDir, `${id}[~state]-<width>.diff.txt`)} is fixed (${named.length} file${named.length === 1 ? '' : 's'}: the screen${named.some(r => r.name.includes('~')) ? ' and its states' : ''}), except sample data${px.length ? `; pixels differing go down from ${px.join(', ')}` : ''}`);
+      done.push(`every line in ${path.join(auditDir, `${id}[~state]-<width>.diff.txt`)} is fixed (${named.length} file${named.length === 1 ? '' : 's'}: the screen${named.some(r => r.name.includes('~')) ? ' and its states' : ''}); the "Data that differs" part of a file is the app's own records, not a fix${px.length ? `; pixels differing go down from ${px.join(', ')}` : ''}`);
       const acts = states.filter(x => baseOf(x.base) === id && x.base.endsWith('-390') && (x.kind === 'toast' || x.kind === 'go'));
       if (acts.length) done.push(`${id} behaves as in the design: ${acts.slice(0, 8).map(a => a.kind === 'go' ? `"${a.label}" goes to ${a.to || 'another screen'}` : `${(a.steps ?? [{ click: a.label }]).map(x => `"${x.click}"`).join(' › ')} shows the message ${(a.added ?? []).slice(0, 2).map(x => `"${x}"`).join(', ')}`).join('; ')}`);
     }
@@ -586,7 +595,9 @@ export function planRound(copy: string, auditDir: string, rows: DiffRow[], share
       files: part.flatMap(refs).filter(f => !f.endsWith('.json')),   // the html and css; the measures are in the diff files
       done: [...done, 'the design-diff of these screens and states shows only sample data', 'tests for the changed code pass'], after });
   }
-  return out;
+  const head = out[0]?.rules ? out.splice(0, 1) : [];
+  const weight = (x: Planned) => [...total].filter(([id]) => x.goal.split(/[\s,]+/).includes(id)).reduce((n, [, v]) => n + v, 0);
+  return [...head, ...out.sort((a, b) => weight(b) - weight(a)).slice(0, ROUND_TASKS)];
 }
 
 // Is the design measured by an older recipe (a measure without v >= MEASURE_V)? Checks one measure in screens/.
