@@ -494,15 +494,25 @@
       fixSection());
     function fixSection() {
       const designs = (JC.S.sources || []).filter(s => s.copy || s.kind === 'folder');
+      const ck = JC.S.designCheck, busy = JC.S.designStatus;
+      const picked = new Set();
+      const screens = JC.S.designScreens || [];
       return JC.h('div', {},
         JC.h('h4', {}, 'Fix to match a design'),
         JC.h('p', { class: 'muted' }, designs.length
-          ? 'Claude compares every screen of the design with the running app, writes .justcode/design/audit.md, then adds the fix tasks as a sprint and runs them.'
+          ? 'Compares the app\'s styles with the design (tokens and component classes), with no AI. Claude sets it up once (screens of the design and how to open them in the app); after that each check is free. Nothing is fixed until you add a task.'
           : 'Add the design under 📎 Sources and press Save copy, then fix the app to match it here.'),
-        designs.length ? JC.h('div', { class: 'acts row' }, designs.map(s => JC.btn(`Fix to match ${JC.srcLabel(s)}`, () => { d.close(); JC.post('fixDesign', { source: s.id }); }, 'ghost', s.ref)),
-          JC.S.designStatus ? JC.h('span', { class: 'muted' }, `📐 Measuring · ${JC.S.designStatus}`)
-            : JC.btn('Measure again', () => { d.close(); JC.post('designMeasure'); }, 'ghost', 'Measure every screen of the app again (no Claude) and plan fix tasks for what still differs'),
-          JC.S.designCompare && !JC.REMOTE ? JC.btn('Open comparison', () => JC.post('designCompare'), 'ghost', 'Every screen and state: design, app and differences side by side, in your browser') : '') : '');
+        designs.length ? JC.h('div', { class: 'acts row' }, designs.map(s => JC.btn(`${ck ? 'Check' : 'Fix to match'} ${JC.srcLabel(s)}`, () => { d.close(); JC.post('fixDesign', { source: s.id }); }, 'ghost', s.ref)),
+          busy ? JC.h('span', { class: 'muted' }, `📐 Checking · ${busy}`) : '') : '',
+        ck ? JC.h('div', { class: 'note' }, JC.h('b', {}, 'Last check: '), ck.n ? `${ck.n} style difference${ck.n === 1 ? '' : 's'} on ${ck.screens} screens` : `the styles match on ${ck.screens} screens`, ` · ${new Date(ck.at).toLocaleString()}`) : '',
+        ck ? JC.h('div', { class: 'acts row' },
+          JC.btn('Open report', () => JC.post('openJustcodeFile', { file: 'design/style-check.md' }), 'ghost', 'style-check.md: every token and class that differs'),
+          JC.S.designCompare && !JC.REMOTE ? JC.btn('Open comparison', () => JC.post('designCompare'), 'ghost', 'Every screen: design and app side by side, in your browser') : '',
+          ck.n ? JC.btn('Fix the styles', () => { d.close(); JC.post('designFixTask'); }, '', 'One quick task copies the design\'s tokens and class styles into the shared stylesheet (no AI review), then checks once') : '') : '',
+        ck && screens.length ? JC.h('details', {}, JC.h('summary', {}, 'Screens that still look different'),
+          JC.h('p', { class: 'muted' }, 'Look at them in the comparison, tick the ones to fix. One quick task per 5 screens; each looks once at the end.'),
+          JC.h('div', { class: 'designpick' }, screens.map(x => JC.h('label', {}, JC.h('input', { type: 'checkbox', onchange: e => e.target.checked ? picked.add(x.id) : picked.delete(x.id) }), ` ${x.title || x.id}`))),
+          JC.btn('Add tasks for ticked screens', () => { if (!picked.size) return; d.close(); JC.post('designScreenTasks', { ids: [...picked] }); }, 'ghost')) : '');
     }
   }
 

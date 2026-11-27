@@ -39,7 +39,7 @@ export interface Task {
   chatAt?: number;            // 💬 Chat: when it was last used (the history list's order)
   chat?: boolean;             // 💬 Chat: a conversation in the project folder; never on the board, no commit, checks, review or merge
   quick?: boolean;            // ⚡ Quick: runs at once in the workspace; no checks, no AI review (Finish or Discard after)
-  designFix?: number;   // a Fix to match task: the round it belongs to (its merge may start the next round's re-measure)
+  designFix?: number;   // a Fix to match task (from the style check or picked screens): reviewed lightly
   init?: boolean | 'design' | 'fixdesign';  // a JustCode setup run: true = describe the project, 'design' = DESIGN.md from the code, 'fixdesign' = compare the app with a design source and add the fix tasks
   allow?: string[];           // tools pre-approved for this task's session
   images?: string[];          // pasted screenshots, absolute paths under .justcode/attachments/<id>/

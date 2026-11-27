@@ -5,6 +5,8 @@ import { adb } from './claude';
 import { parseMeasure, diffMeasures } from './designdiff';
 import { capture, parseJobs, diffAll, loadSample } from './designcapture';
 import { execFileSync } from 'child_process';
+import { runStyleCheck, reportCount } from './stylecheck';
+import * as DF from './designfix';
 
 // JustCode CLI:
 //   node cli.js screenshot <out.png> [--serial id]   Android only: saves the Android device's screen (adb screencap) without a
@@ -12,6 +14,8 @@ import { execFileSync } from 'child_process';
 //   node cli.js design-diff <design.json> <app.json> [<out.txt>]   differences between two design measures (see designdiff.ts)
 //   node cli.js design-css <measure.json>   writes the measure's CSS rules to <measure>.css, beside it
 //   node cli.js design-capture <jobs.json>  every screenshot + measure (+ .css) of a design or app in one run (designcapture.ts)
+//   node cli.js style-check <project root> [--no-capture]   Fix to match's check (no AI): shoots the app's screens again
+//                                     and compares its styles with the design (.justcode/design/style-check.md)
 //   node cli.js design-diff --all <designDir> <appDir> <outDir> [--sample file]   every pair compared, a .diff.txt each,
 //                                     a summary and shared.txt (sample.json beside outDir is used by default)
 
@@ -68,6 +72,14 @@ function main(argv: string[]): number | undefined {
     capture(jobs).then(r => {
       console.log(`Done: ${r.done} captured, ${r.failed.length} failed.${r.failed.length ? '\n' + r.failed.join('\n') : ''}`);
       process.exitCode = r.failed.length ? 3 : 0;
+    }, e => { console.error(e.message); process.exitCode = 2; });
+    return undefined;
+  }
+  if (cmd === 'style-check') {
+    const root = path.resolve(rest.find(a => !a.startsWith('--')) ?? '.'), st = DF.load(root);
+    if (!st) { console.error('No .justcode/design/fix.json here: run 🎨 Design → Fix to match first.'); return 1; }
+    runStyleCheck(root, st.copy, { capture: !rest.includes('--no-capture'), progress: l => { if (!/^App: \d/.test(l)) console.log(l); } }).then(({ report }) => {
+      console.log(`${reportCount(report) ? `${reportCount(report)} style difference(s)` : 'The styles match the design'}: see ${path.join(root, '.justcode', 'design', 'style-check.md')}`);
     }, e => { console.error(e.message); process.exitCode = 2; });
     return undefined;
   }

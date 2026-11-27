@@ -564,7 +564,7 @@ export class Runner {
     const reply = turn.text.trim().slice(-4000) || undefined;
     if (t.appFix) void App.start(this.root, 'after Claude\'s fix').catch(() => undefined);   // ▶ App shows whether the fix worked
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
-    if (t.init === 'fixdesign') this.addDesignFixes(id, turn.text);   // the audit's fix tasks become a sprint and run
+    if (t.init === 'fixdesign') this.designSetupDone(id);   // the setup made the reference: the style check runs (no Claude)
     else this.store.updateTask(id, { status: t.status === 'done' ? 'done' : 'review', live: undefined, reply, costUsd: cost });
     if (!t.init && this.checkBudget(id)) return;
     this.emptyAt.delete(id);
@@ -670,10 +670,7 @@ export class Runner {
 
   defaultMode: Task['mode'] = 'auto';
   designStatus?: string;   // Fix to match measuring: what it is on now (shown on the board), undefined when idle
-  designLines?: number;    // Fix to match: the total of measured differences at the last plan
-  designPx?: number;       // Fix to match: average % of pixels differing at the last plan
-  designScreensPx?: Record<string, number>;
-  designStuck?: string[];  // Fix to match: screens the last round did not bring closer (not planned again)  // set by the extension from justCode.defaultMode
+  // set by the extension from justCode.defaultMode
 
 
   dispose() {

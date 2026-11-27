@@ -499,20 +499,21 @@ export function diffAll(designDir: string, appDir: string, outDir: string, sampl
 
 // compare.html in outDir: every screen and state side by side (design, app, differences in red) with its diff lines,
 // and what each screen's other controls do in the design. Opened from 🎨 Design → Open comparison.
-function writeCompare(designDir: string, appDir: string, outDir: string, rows: DiffRow[]) {
+// notes: a screen's lines (the style check's); by default its .diff.txt.
+export function writeCompare(designDir: string, appDir: string, outDir: string, rows: DiffRow[], notes?: (name: string) => string[]) {
   const esc = (x: string) => x.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as Record<string, string>)[c]);
   const img = (f: string) => fs.existsSync(f) ? `<img loading="lazy" src="${esc(`file://${f}`)}">` : '<div class="none">none</div>';
   const states = loadStates(path.join(designDir, 'states.json'));
   const byName = [...rows].sort((a, b) => a.name.localeCompare(b.name));
   const sections = byName.map(r => {
-    const lines = (() => { try { return fs.readFileSync(path.join(outDir, `${r.name}.diff.txt`), 'utf8').trim().split('\n').slice(0, 40); } catch { return []; } })();
+    const lines = notes ? notes(r.name) : (() => { try { return fs.readFileSync(path.join(outDir, `${r.name}.diff.txt`), 'utf8').trim().split('\n').slice(0, 40); } catch { return []; } })();
     const st = states.find(x => x.name === r.name);
     const acts = r.name.includes('~') ? [] : states.filter(x => x.base === r.name && (x.kind === 'toast' || x.kind === 'go'));
     return `<section id="${esc(r.name)}"><h2>${esc(r.name)} <small>${r.n} difference${r.n === 1 ? '' : 's'}${r.px !== undefined ? ` · ${r.px}% pixels` : ''}</small></h2>` +
       (st ? `<p class="how">Reached by ${(st.steps ?? [{ click: st.label }]).map(x => `${x.fill?.length ? `typing ${x.fill.map(f => `“${esc(f.value)}”`).join(', ')}, then ` : ''}clicking “${esc(x.click)}”`).join(' › ')}</p>` : '') +
-      `<div class="row"><figure><figcaption>Design</figcaption>${img(path.join(designDir, `${r.name}.png`))}</figure><figure><figcaption>App</figcaption>${img(path.join(appDir, `${r.name}.png`))}</figure><figure><figcaption>Different (red)</figcaption>${img(path.join(outDir, `${r.name}.diff.png`))}</figure></div>` +
+      `<div class="row"><figure><figcaption>Design</figcaption>${img(path.join(designDir, `${r.name}.png`))}</figure><figure><figcaption>App</figcaption>${img(path.join(appDir, `${r.name}.png`))}</figure>${fs.existsSync(path.join(outDir, `${r.name}.diff.png`)) && !notes ? `<figure><figcaption>Different (red)</figcaption>${img(path.join(outDir, `${r.name}.diff.png`))}</figure>` : ''}</div>` +
       (acts.length ? `<ul class="acts">${acts.map(a => `<li>“${esc(a.label)}” ${a.kind === 'go' ? `goes to ${esc(a.to || 'another screen')}` : `shows the message ${esc((a.added ?? []).slice(0, 4).join(' · '))}`}</li>`).join('')}</ul>` : '') +
-      `<pre>${esc(lines.join('\n'))}</pre></section>`;
+      (lines.length ? `<pre>${esc(lines.join('\n'))}</pre>` : '') + '</section>';
   }).join('\n');
   const nav = byName.map(r => `<a href="#${esc(r.name)}">${esc(r.name)} <b>${r.n}</b></a>`).join('');
   fs.writeFileSync(path.join(outDir, 'compare.html'), `<!doctype html><html><head><meta charset="utf-8"><title>Design vs app</title><style>
@@ -533,72 +534,7 @@ export function loadSample(file: string): string[] {
   try { const v = JSON.parse(fs.readFileSync(file, 'utf8')); return Array.isArray(v) ? usableSample(v.filter((x): x is string => typeof x === 'string')) : []; } catch { return []; }
 }
 
-// The next round of fix tasks, planned from the measures alone (no Claude): when a style rule differs on several
-// screens, one task for those rules (one CSS change each) that the screen tasks wait for; a rule a shared task already
-// tried (tried) is left to the screens. Then the screens that still differ, each with its states (modals, panels, picked options: "<id>~<label>"), grouped by area (the id's first
-// part: role or section), at most PER_TASK screens a task, and a screen with many states on its own. Controls the
-// app lacks and the design's other behaviours (menus, toasts, links to other screens, from states.json) are checks.
-export const PER_TASK = 5;
-export const ROUND_TASKS = 12;
-export interface Planned { title: string; goal: string; files: string[]; done: string[]; after?: string[]; rules?: string[] }
-export const SHARED_TITLE = 'Design fix: shared styles';
 export const baseOf = (name: string) => screenOf(name).split('~')[0];
-export function planRound(copy: string, auditDir: string, rows: DiffRow[], shared: Shared[], screens: { id: string; title?: string; url?: string }[] = [], tried: string[] = []): Planned[] {
-  const shotsDir = screensOf(copy);
-  const states = loadStates(path.join(shotsDir, 'states.json'));
-  const refs = (id: string) => fs.existsSync(shotsDir) ? fs.readdirSync(shotsDir).filter(f => /\.(css|html|json)$/.test(f) && f !== 'states.json' && f !== 'screens.json' && baseOf(f.replace(/\.(css|html|json)$/, '')) === id).sort().map(f => path.join(shotsDir, f)) : [];
-  const out: Planned[] = [];
-  const fresh = shared.filter(x => styleRule(x.rule) && !tried.includes(x.rule));
-  if (fresh.length) {
-    const top = fresh.slice(0, 15), examples = [...new Set(top.flatMap(x => x.screens))].slice(0, 3);
-    out.push({ title: SHARED_TITLE, rules: top.map(x => x.rule), goal: `Fix the ${top.length} style rule${top.length === 1 ? '' : 's'} that differ from the design on several screens at once, in the shared styles (one change each, not per page).`,
-      files: [...examples.flatMap(refs).filter(f => f.endsWith('.css')), path.join(auditDir, 'shared.txt')],
-      done: [...top.map(x => `${x.rule} is fixed (was on ${x.screens.length} screens, e.g. ${x.examples.join('; ')})`),
-        'each fix is made once in the shared styles or component, and no page or component file overrides those design classes locally any more (grep the class names)',
-        'the design-diff of the example screens shows none of these rules any more', 'tests for the changed code pass'] });
-  }
-  const after = out.length ? [SHARED_TITLE] : undefined;
-  const missing = (file: string) => { try { return parseMeasure(fs.readFileSync(file, 'utf8')).missing; } catch { return undefined; } };
-  // The screens with the most differences first, and at most ROUND_TASKS tasks a round: the next round measures again
-  // and plans what is left, so a round is never a day of tasks.
-  const total = new Map<string, number>();
-  for (const r of rows) if (r.n > 0) total.set(baseOf(r.name), (total.get(baseOf(r.name)) ?? 0) + r.n);
-  const left = [...total].sort((a, b) => b[1] - a[1]).map(([id]) => id);
-  const nStates = (id: string) => new Set(states.filter(st => shown(st) && baseOf(st.name) === id).map(st => screenOf(st.name))).size;
-  const byArea = new Map<string, string[][]>();
-  for (const id of left) {
-    const area = id.split('-')[0];
-    if (!byArea.has(area)) byArea.set(area, []);
-    const groups = byArea.get(area)!, last = groups[groups.length - 1];
-    if (nStates(id) > 3) groups.push([id]);   // many states: its own task
-    else if (last && last.length < PER_TASK && !(last.length === 1 && nStates(last[0]) > 3)) last.push(id);
-    else groups.push([id]);
-  }
-  const info = (id: string) => screens.find(s => s.id === id || id.startsWith(`${s.id}-`));
-  for (const part of [...byArea.values()].flat()) {
-    const names = part.map(id => info(id)?.title ?? id);
-    const extra = part.reduce((n, id) => n + nStates(id), 0);
-    const done: string[] = [];
-    for (const id of part) {
-      for (const st of states.filter(x => baseOf(x.name) === id && shown(x) && x.name.endsWith('-390'))) {
-        const m = missing(path.join(auditDir, `${st.name}.json`));
-        if (m) done.push(`${id}: add the control "${m}"${(st.steps?.length ?? 1) > 1 ? ` (reached by ${(st.steps ?? []).map(x => `"${x.click}"`).join(' › ')})` : ''}; in the design it opens ${path.join(shotsDir, `${st.name}.html`)}${st.added?.length ? ` (showing ${st.added.slice(0, 3).map(x => `"${x}"`).join(', ')})` : ''}`);
-      }
-      const named = rows.filter(r => baseOf(r.name) === id && r.n > 0);
-      const px = named.filter(r => !r.name.includes('~') && r.px !== undefined).map(r => `${r.px}% at ${r.name.slice(id.length + 1)}`);
-      done.push(`every line in ${path.join(auditDir, `${id}[~state]-<width>.diff.txt`)} is fixed (${named.length} file${named.length === 1 ? '' : 's'}: the screen${named.some(r => r.name.includes('~')) ? ' and its states' : ''}); the "Data that differs" part of a file is the app's own records, not a fix${px.length ? `; pixels differing go down from ${px.join(', ')}` : ''}`);
-      const acts = states.filter(x => baseOf(x.base) === id && x.base.endsWith('-390') && (x.kind === 'toast' || x.kind === 'go'));
-      if (acts.length) done.push(`${id} behaves as in the design: ${acts.slice(0, 8).map(a => a.kind === 'go' ? `"${a.label}" goes to ${a.to || 'another screen'}` : `${(a.steps ?? [{ click: a.label }]).map(x => `"${x.click}"`).join(' › ')} shows the message ${(a.added ?? []).slice(0, 2).map(x => `"${x}"`).join(', ')}`).join('; ')}`);
-    }
-    out.push({ title: `Design fix: ${names.join(', ')}${extra ? ` (+${extra} state${extra === 1 ? '' : 's'})` : ''}`.slice(0, 90),
-      goal: `Make ${part.map(id => `${id}${info(id)?.url ? ` (${info(id)!.url})` : ''}`).join(', ')} and ${extra ? 'every state of it (modals, panels, picked options)' : 'it'} match the design at every width.`,
-      files: part.flatMap(refs).filter(f => !f.endsWith('.json')),   // the html and css; the measures are in the diff files
-      done: [...done, 'the design-diff of these screens and states shows only sample data', 'tests for the changed code pass'], after });
-  }
-  const head = out[0]?.rules ? out.splice(0, 1) : [];
-  const weight = (x: Planned) => [...total].filter(([id]) => x.goal.split(/[\s,]+/).includes(id)).reduce((n, [, v]) => n + v, 0);
-  return [...head, ...out.sort((a, b) => weight(b) - weight(a)).slice(0, ROUND_TASKS)];
-}
 
 // Is the design measured by an older recipe (a measure without v >= MEASURE_V)? Checks one measure in screens/.
 export function designMeasureOld(copy: string) {

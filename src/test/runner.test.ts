@@ -113,69 +113,42 @@ test('runner with a fake SDK: a quick task runs in the checkout with no review, 
   r.dispose();
 });
 
-test('fix to match a design: the audit task gets the design copy, and its task list becomes a running sprint in order', async () => {
+
+test('fix to match: the setup task captures, adds no fix tasks, and the style check is ready; a fix task is one quick task', async () => {
   const { root } = repo();
   const { store, r } = runner(root, []);
   const copy = path.join(root, '.justcode', 'sources', 'd1');
   fs.mkdirSync(copy, { recursive: true }); fs.writeFileSync(path.join(copy, 'index.html'), '<html></html>');
   fs.writeFileSync(path.join(root, '.justcode', 'sources.json'), JSON.stringify([{ id: 'd1', kind: 'url', ref: 'https://claude.ai/artifact/Abc', note: 'Gallery' }]));
-  const audit = store.addTask({ title: 'Fix the UI to match the design: compare every screen', mode: 'auto', where: 'direct', init: 'fixdesign', sources: ['d1'] });
-  const first = r.fixDesignPrompt(audit);
-  assert.ok(first.includes(`file://${copy}/index.html`) && first.includes(`${path.join(root, '.justcode', 'design', 'ref', 'd1')}/screens.json`) && /never write into it/.test(first) && /States: never skip/.test(first), 'audit works from the saved copy; the reference (with states) goes beside it');
-  assert.match(first, /```tasks/);
+  const setup = store.addTask({ title: 'Set up Fix to match', mode: 'auto', where: 'direct', init: 'fixdesign', sources: ['d1'] });
+  const first = r.fixDesignPrompt(setup);
+  assert.ok(first.includes(`file://${copy}/index.html`) && /States: never skip/.test(first) && /app-jobs\.json/.test(first), 'the setup captures the design and writes the app jobs');
+  assert.doesNotMatch(first, /```tasks|design-diff --all|audit\.md/, 'it never compares or plans tasks');
   const refDir = path.join(root, '.justcode', 'design', 'ref', 'd1'), shot = path.join(refDir, 'c-login-390.png');
   const png = (w: number, h: number) => { const b = Buffer.alloc(24); b.write('\x89PNG\r\n\x1a\n', 0, 'latin1'); b.writeUInt32BE(13, 8); b.write('IHDR', 12); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
-  fs.mkdirSync(path.dirname(shot), { recursive: true });
+  fs.mkdirSync(refDir, { recursive: true });
   const screens = (w: number, h: number) => { fs.writeFileSync(shot, png(w, h)); fs.writeFileSync(path.join(refDir, 'screens.json'), JSON.stringify({ capture: 4, screens: [{ id: 'c-login', png: { 390: shot } }] })); };
-  const old = store.addTask({ title: 'Old fix from the last audit', description: `Files: ${shot}`, mode: 'auto' });
-  r.cancelQueue();
-  screens(500, 575);   // the gallery's scaled frame, cut at the fold
-  assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'bad design images add no tasks');
-  assert.equal(store.task(audit.id)!.status, 'review', 'an audit that stopped early is not done');
-  assert.match(store.task(audit.id)!.error ?? '', /stopped before finishing/);
-  assert.match(A.screenShotProblems(copy)[0], /500×575, expected 390 wide/);
+  screens(500, 575);
+  assert.equal(r.designSetupDone(setup.id), false);
+  assert.equal(store.task(setup.id)!.status, 'review'); assert.match(store.task(setup.id)!.error ?? '', /stopped before finishing/);
   screens(390, 1800);
-  assert.equal(r.addDesignFixes(audit.id, 'x\n```tasks\n[{"title":"A"}]\n```'), 0, 'an audit that compared no screen adds no tasks');
-  fs.mkdirSync(path.join(root, '.justcode', 'design', 'audit'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.justcode', 'design', 'audit', 'c-login-390.diff.txt'), 'No differences.\n');
-  const text = 'Audit done.\n```tasks\n' + JSON.stringify([
-    { title: 'Load the design fonts and shell', goal: 'Shared', files: ['frontend/src/styles.css'], done: ['fonts load'], sprint: 'Design fix: gallery' },
-    { title: 'Match the login screen', goal: 'Login', files: [shot, 'frontend/src/app/auth/login.ts'], done: ['shows the branch intro'], sprint: 'Design fix: gallery', after: ['Load the design fonts and shell'] },
-  ]) + '\n```';
+  assert.equal(r.designSetupDone(setup.id), false, 'no app jobs yet');
+  assert.ok(!r.designReady(copy));
+  fs.writeFileSync(path.join(root, '.justcode', 'design', 'app-jobs.json'), '{"groups":[]}');
+  assert.ok(r.designReady(copy), 'from now on Fix to match needs no Claude');
+  const before = store.data.tasks.length;
+  r.designSetupDone(setup.id);
+  assert.equal(store.data.tasks.length, before, 'no fix task is added by itself');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.justcode', 'design', 'fix.json'), 'utf8')).copy, copy);
+  await until('check ended', () => !r.designStatus);
+  fs.writeFileSync(path.join(root, '.justcode', 'design', 'style-check.json'), JSON.stringify({ at: 1, screens: 1, drifts: [{ cls: '.btn', width: 390, prop: 'bg', design: 'teal', app: 'white', n: 2, screens: ['c-login'] }], unused: [], tokens: [] }));
   r.cancelQueue();
-  assert.equal(r.addDesignFixes(audit.id, text), 2);
-  const [shared, login] = ['Load the design fonts and shell', 'Match the login screen'].map(x => store.data.tasks.find(t => t.title === x)!);
-  assert.ok(!shared.sprintId && shared.where === 'branch' && shared.designFix === 1 && login.designFix === 1, 'round 1 merges into the checked-out branch, so the running app shows it');
-  assert.equal(JSON.parse(fs.readFileSync(path.join(root, '.justcode', 'design', 'fix.json'), 'utf8')).round, 1);
-  assert.deepEqual(login.dependsOn, [shared.id]);
-  assert.ok(A.isUiTask(login), 'a task naming a design screen is a UI task');
-  await until('old fix removed', () => !store.task(old.id));
-  assert.ok(store.queue.includes(login.id) || store.task(login.id)!.status !== 'todo');
+  const id = r.designFixTask()!;
+  const t = store.task(id)!;
+  assert.ok(t.quick && t.where === 'direct' && t.title === 'Match the design\'s styles');
+  assert.match(t.description ?? '', /\.btn at 390: bg is white, the design has teal/);
+  const ids = r.designScreenTasks(['c-login']);
+  assert.equal(ids.length, 1); assert.match(store.task(ids[0])!.description ?? '', /ONE screenshot/);
   r.cancelQueue();
-  r.dispose();
-});
-
-test('fix to match: a later round is not started, and a screen the last round did not bring closer is left out', () => {
-  const { root } = repo();
-  const seen: string[] = [];
-  const { store, r } = runner(root, seen);
-  const copy = path.join(root, '.justcode', 'sources', 'd1'), refDir = path.join(root, '.justcode', 'design', 'ref', 'd1'), audit = path.join(root, '.justcode', 'design', 'audit');
-  fs.mkdirSync(copy, { recursive: true }); fs.mkdirSync(refDir, { recursive: true }); fs.mkdirSync(audit, { recursive: true });
-  const it = (text: string, size: number) => ({ text, cls: 'muted', x: 0, w: 10, h: 10, font: 'F', size, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
-  const png = (red: number) => { const p = new (require('pngjs').PNG)({ width: 10, height: 10 }); for (let i = 0; i < 400; i += 4) { const on = i / 4 < red; p.data[i] = on ? 255 : 0; p.data[i + 3] = 255; } return require('pngjs').PNG.sync.write(p); };
-  for (const id of ['c-a', 'c-b']) {
-    fs.writeFileSync(path.join(refDir, `${id}-390.json`), JSON.stringify({ items: [it(`t ${id}`, 14)] }));
-    fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it(`t ${id}`, 13)] }));
-    fs.writeFileSync(path.join(refDir, `${id}-390.png`), png(0));
-    fs.writeFileSync(path.join(audit, `${id}-390.png`), png(30));
-  }
-  // c-a was 30% before the last round and is still 30%; c-b was 60%.
-  const planned = r.designPlan(copy, true, { 'c-a-390': 30, 'c-b-390': 60 });
-  assert.deepEqual(r.designStuck, ['c-a']);
-  assert.deepEqual(planned.map(x => x.title), ['Design fix: c-b']);
-  r.addRound(planned.map(x => ({ title: x.title })), 2, undefined, false);
-  const t = store.data.tasks.find(x => x.title === 'Design fix: c-b')!;
-  assert.equal(t.status, 'todo'); assert.ok(!store.queue.includes(t.id), 'waits for Run all');
-  assert.match(seen.join('\n'), /have not started: press ▶ Run all/);
   r.dispose();
 });

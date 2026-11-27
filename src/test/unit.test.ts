@@ -1826,36 +1826,10 @@ test('design capture: one jobs file for every screen, run_code results read back
   assert.match(fs.readFileSync(path.join(a, 'x-390.diff.txt'), 'utf8'), /"Hi" size: design 16, app 15/);
 });
 
-import { planRound, screenOf } from '../designcapture';
-test('fix to match rounds: sample data is not a difference, a rule on many screens is one shared task, then screens in groups of 5', () => {
-  const root = tmp(), copy = path.join(root, 'copy'), shots = path.join(copy, 'screens'), audit = path.join(root, 'audit');
-  fs.mkdirSync(shots, { recursive: true }); fs.mkdirSync(audit);
-  const it = (text: string, size: number, cls = 'muted') => ({ text, cls, x: 0, w: 10, h: 10, font: 'F', size, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null });
-  const ids = ['c-a', 'c-b', 'c-c', 'c-d', 'c-e', 'c-f', 's-a'];
-  for (const id of ids) {
-    fs.writeFileSync(path.join(shots, `${id}-390.json`), JSON.stringify({ items: [it('Title', 14), it('Maria Santos', 14), it(`only ${id}`, 16, 'x')] }));
-    fs.writeFileSync(path.join(shots, `${id}-390.css`), '.muted{font-size:14px}');
-    fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it('Title', 13), it('Juan Cruz', 13), it(`only ${id}`, 15, 'x')] }));
-  }
-  const r1 = diffAll(shots, audit, audit, ['Maria Santos', 'Juan Cruz']);
-  assert.equal(r1.shared[0].rule, '.muted size: design 14, app 13 @390', 'a rule holds at one width');
-  assert.equal(r1.shared[0].screens.length, 7);
-  assert.doesNotMatch(fs.readFileSync(path.join(audit, 'c-a-390.diff.txt'), 'utf8'), /Maria|Juan/, 'sample data is not missing or extra');
-  const p1 = planRound(copy, audit, r1.rows, r1.shared);
-  assert.equal(p1[0].title, 'Design fix: shared styles', 'shared rules first, as one task');
-  assert.match(p1[0].done.join('\n'), /\.muted size: design 14, app 13 @390 is fixed \(was on 7 screens, e\.g\. "Title" on c-a/);
-  assert.ok(p1.length > 1 && p1.slice(1).every(x => x.after?.[0] === 'Design fix: shared styles'), 'the screens are planned too, after the shared task');
-  assert.deepEqual(planRound(copy, audit, r1.rows, r1.shared, [], p1[0].rules).map(x => x.title).filter(x => /shared/.test(x)), [], 'a rule a shared task already tried is left to the screens');
-  // After the shared fix merged and the app was measured again: only per-screen differences are left.
-  for (const id of ids) fs.writeFileSync(path.join(audit, `${id}-390.json`), JSON.stringify({ items: [it('Title', 14), it(`only ${id}`, id === 's-a' ? 16 : 15, 'x')] }));
-  const r2 = diffAll(shots, audit, audit, ['Maria Santos']);
-  const p2 = planRound(copy, audit, r2.rows, r2.shared.filter(x => !x.rule.startsWith('.x')), [{ id: 'c-a', title: 'Home', url: '/' }]);
-  assert.deepEqual(p2.map(x => x.title), ['Design fix: Home, c-b, c-c, c-d, c-e', 'Design fix: c-f'], 'c- screens in groups of 5; s-a matches');
-  assert.ok(p2[0].files.includes(path.join(shots, 'c-a-390.css')));
-  assert.match(p2[0].goal, /c-a \(\/\)/);
+import { screenOf } from '../designcapture';
+test('screen names', () => {
   assert.equal(screenOf('c-root-guest-1440'), 'c-root-guest');
 });
-
 test('fix to match: text the app lacks or adds is not a shared style, and states are not more screens', () => {
   const root = tmp(), shots = path.join(root, 'screens'), audit = path.join(root, 'audit');
   fs.mkdirSync(shots); fs.mkdirSync(audit);
@@ -2004,29 +1978,6 @@ test('design states: explore and replay code is valid JS, app shots click the sa
   assert.equal(screensOf('/designs/mine'), '/designs/mine/screens');
 });
 
-test('design fix tasks: a screen goes with its states; a control the app lacks and the design\'s behaviours are checks', () => {
-  const root = tmp(), copy = path.join(root, '.justcode', 'sources', 'd1'), ref = screensOf(copy), audit = path.join(root, '.justcode', 'design', 'audit');
-  fs.mkdirSync(ref, { recursive: true }); fs.mkdirSync(audit, { recursive: true });
-  for (const f of ['c-pay-390', 'c-pay~gcash-390', 'c-pay~place-order-390', 'c-home-390']) { fs.writeFileSync(path.join(ref, `${f}.html`), ''); fs.writeFileSync(path.join(ref, `${f}.css`), ''); }
-  fs.writeFileSync(path.join(ref, 'states.json'), JSON.stringify([
-    { name: 'c-pay~gcash-390', base: 'c-pay-390', label: 'GCash', kind: 'state', added: ['Upload your screenshot next'] },
-    { name: 'c-pay~place-order-390', base: 'c-pay-390', label: 'Place order', kind: 'state', added: ['Order placed'] },
-    { name: 'c-pay~copy-390', base: 'c-pay-390', label: 'Copy number', kind: 'toast', added: ['Number copied'] },
-    { name: 'c-home~order-390', base: 'c-home-390', label: 'Order water', kind: 'go', to: 'c-pay' },
-  ]));
-  fs.writeFileSync(path.join(audit, 'c-pay~gcash-390.json'), JSON.stringify({ v: 2, items: [], missing: 'GCash' }));
-  const rows = [{ name: 'c-pay-390', n: 3, px: 4 }, { name: 'c-pay~gcash-390', n: 1 }, { name: 'c-pay~place-order-390', n: 2, px: 5 }, { name: 'c-home-390', n: 1, px: 1 }];
-  const tasks = planRound(copy, audit, rows, []);
-  const pay = tasks.find(t => t.title.includes('c-pay'))!;
-  assert.match(pay.title, /\(\+2 states\)/);
-  assert.ok(pay.files.some(f => f.endsWith('c-pay~place-order-390.html')) && pay.files.every(f => !f.endsWith('.json')), pay.files.join('\n'));
-  assert.ok(pay.done.some(d => /add the control "GCash"; in the design it opens .*c-pay~gcash-390\.html \(showing "Upload your screenshot next"\)/.test(d)), pay.done.join('\n'));
-  assert.ok(pay.done.some(d => /"Copy number" shows the message "Number copied"/.test(d)));
-  assert.ok(tasks.some(t => t.done.some(d => /"Order water" goes to c-pay/.test(d))));
-  assert.ok(!tasks.some(t => /~/.test(t.title)), 'states never become their own screens');
-});
-
-
 import { framePage, sameText } from '../designcapture';
 import { newerInstalled } from '../version';
 test('design pages keep the device height; a gallery screen equal to a state is the same page; a newer install is found', () => {
@@ -2111,4 +2062,32 @@ test('design diff: the app\'s own records (numbers, repeated rows) are data, lis
   assert.deepEqual(d.filter(x => !x.data).map(x => x.line), ['missing in app: "Export"', 'extra in app: "Search activity"']);
   assert.equal(d.filter(x => x.data).length, 3);
   assert.ok(looksData('D-6 · 26 Nov') && !looksData('Log out'));
+});
+
+import { styleCheck, driftLine, fixTaskText, designStylesheets } from '../stylecheck';
+test('style check: classes and tokens compared by style, not position or data; a page overriding a class is named', () => {
+  const root = tmp(), ref = path.join(root, 'ref'), app = path.join(root, 'audit');
+  fs.mkdirSync(ref); fs.mkdirSync(app);
+  const it = (text: string, cls: string, o: Record<string, unknown> = {}) => ({ text, cls, x: 0, w: 10, h: 10, font: '"Fira Sans", sans-serif', size: 14, weight: '400', color: 'c', align: 'start', bg: 'b', radius: '0px', box: null, ...o });
+  const put = (dir: string, name: string, items: unknown[]) => fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify({ items }));
+  for (const id of ['c-a', 'c-b', 'c-c']) put(ref, `${id}-390`, [it('Save', 'btn p', { bg: 'teal' }), it('Hi', 'muted')]);
+  put(app, 'c-a-390', [it('Save', 'btn p', { bg: 'white', x: 99 }), it('Juan Cruz', 'muted'), it('Juan Cruz', 'muted')]);
+  put(app, 'c-b-390', [it('Save', 'btn p', { bg: 'white' }), it('Hi', 'muted')]);
+  put(app, 'c-c-390', [it('Save', 'btn p', { bg: 'white' }), it('Hi', 'muted', { size: 12 })]);
+  fs.writeFileSync(path.join(ref, 'screens.json'), JSON.stringify({ tokens: { '--primary': '#0A5C68', '--bad': '#B42318' } }));
+  fs.mkdirSync(path.join(root, 'src')); fs.writeFileSync(path.join(root, 'src', 'styles.css'), ':root{--primary: #0a5c68; --bad: red}');
+  fs.mkdirSync(path.join(root, 'node_modules')); fs.writeFileSync(path.join(root, 'node_modules', 'x.css'), ':root{--bad:#B42318}');
+  const r = styleCheck(root, ref, app);
+  assert.equal(r.screens, 3);
+  assert.deepEqual(r.tokens, [{ name: '--bad', design: '#B42318', app: 'red' }], 'case is not a difference; dependencies are not the app');
+  assert.deepEqual(r.drifts.map(driftLine), [
+    '.btn.p at 390: bg is white, the design has teal (3 places, e.g. c-a, c-b, c-c)',
+    '.muted at 390: size is 12 on c-c, the design has 14 (right elsewhere: a page rule overrides it)',
+  ], 'position and text (x, other records) are not compared');
+  fs.writeFileSync(path.join(ref, 'c-a-390.css'), '.btn.p{background:teal}\n.muted{font-size:14px}');
+  fs.writeFileSync(path.join(ref, 'c-b-390.css'), '.btn.p{background:teal}');
+  const css = designStylesheets(ref, root);
+  assert.equal(fs.readFileSync(css[0], 'utf8'), '.btn.p{background:teal}\n.muted{font-size:14px}\n', 'one stylesheet per width, rules once');
+  const text = fixTaskText(r, { report: 'style-check.md', css }, 'cli.js', root);
+  assert.match(text, /style-check .* ONCE/); assert.match(text, /Do not take screenshots/); assert.match(text, /--bad: the app has red, the design has #B42318: fixed/);
 });

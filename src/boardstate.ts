@@ -28,6 +28,9 @@ import { askingTerms, bypassAllOn, emit, limits, roots, runner, runnerSettings, 
 import { phoneDevices } from './phonehost';
 import { savedAt } from './artifact-terminal';
 import * as App from './app';
+import * as SC from './stylecheck';
+import * as DF from './designfix';
+import { screensOf } from './designcapture';
 
 // The state the board renders, and the open task's activity.
 
@@ -62,6 +65,8 @@ export function post() {
     planner: r.plannerLive(),
     designStatus: r.designStatus,   // Fix to match measuring: its live line, or undefined
     designCompare: fs.existsSync(path.join(r.root, '.justcode', 'design', 'audit', 'compare.html')),   // 🎨 Design → Open comparison
+    designCheck: (() => { const x = SC.loadReport(r.root); return x && { n: SC.reportCount(x), screens: x.screens, at: x.at }; })(),   // the last style check
+    designScreens: (() => { const f = DF.load(r.root); if (!f) return []; try { return (JSON.parse(fs.readFileSync(path.join(screensOf(f.copy), 'screens.json'), 'utf8')).screens ?? []).map((s: any) => ({ id: String(s.id), title: typeof s.title === 'string' ? s.title : undefined })); } catch { return []; } })(),
     plannerPhase: r.plannerPhase,
     guideSeen: st.ctx.globalState.get('guideSeen', false),
     all: [...runners.entries()].filter(([root]) => roots().includes(root)).map(([root, x]) => ({

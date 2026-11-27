@@ -14,6 +14,7 @@ import { transcript, agentLog, archivedLog, artifactUrlIn, claudeBin, claudeEnv,
 import { Limits } from './limits';
 import { checkHealth, checkSetup, installCommand, projectSetup, SetupState, pluginInstallCommands, playwrightCommand, SUPERPOWERS_FALLBACK } from './setup';
 import * as A from './artifacts';
+import * as DF from './designfix';
 import * as R from './registry';
 import * as Audit from './audit';
 import { writeSprintReport } from './report';
@@ -286,10 +287,10 @@ export async function handle(m: any, remote = false) {
         if (await confirm(`Discard "${t.title}"? These files are reverted (new ones deleted):\n${fl.join('\n') || '(none)'}`, 'Discard')) await r.discard(m.id, who);
         return;
       }
-      // A Fix to match task is planned from measures: discarded, it is archived (not sent back to To do), so the round
-      // can end and Measure again plans from what the app looks like now.
+      // A Fix to match task comes from a style check: discarded, it is archived (not sent back to To do); Check again
+      // shows what is still different.
       if (t?.designFix) {
-        if (await confirm(`Discard "${t.title}"? Its branch is deleted and the task is archived (Fix to match plans again from new measures).`, 'Discard')) {
+        if (await confirm(`Discard "${t.title}"? Its branch is deleted and the task is archived (Check again under 🎨 Design shows what still differs).`, 'Discard')) {
           await r.discard(m.id, who);
           s.setQueue(s.queue.filter(id => id !== m.id));
           s.updateTask(m.id, { archived: true });
@@ -349,10 +350,12 @@ export async function handle(m: any, remote = false) {
     case 'designFromProject': return designFromProject(r);
     case 'fixDesign': return fixDesign(r, m.source);
     case 'designMeasure': {
-      void vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Fix to match: measuring every screen (no Claude)' },
-        p => r.designRemeasure(true, line => p.report({ message: line })).catch((e: Error) => { vscode.window.showErrorMessage(`Fix to match: ${e.message}`); }));
+      void vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Fix to match: style check (no Claude)' },
+        p => r.designCheck(true, (line: string) => p.report({ message: line })));
       return;
     }
+    case 'designFixTask': { const id = r.designFixTask(); if (id) open(id); return; }
+    case 'designScreenTasks': { const ids = r.designScreenTasks((Array.isArray(m.ids) ? m.ids : []).filter((x: unknown): x is string => typeof x === 'string').slice(0, 40)); if (ids.length) say(`Added ${ids.length} screen task${ids.length === 1 ? '' : 's'}.`); return; }
     case 'openJustcodeFile': {
       const f = path.join(r.root, '.justcode', ...String(m.file).split('/').filter(x => x && x !== '..'));
       if (fs.existsSync(f)) void vscode.window.showTextDocument(vscode.Uri.file(f)); else say('Not written yet.');
@@ -683,8 +686,8 @@ export async function designFromProject(r: Runner) {
   open(task.id);
 }
 
-// 🎨 Design → Fix to match: one task compares every screen of a saved design with the running app, writes
-// .justcode/design/audit.md and ends with the fix tasks, which JustCode adds as a sprint and runs.
+// 🎨 Design → Fix to match: the first time, one Claude task captures the design and writes how to open each screen in
+// the app; after that (and at its end) the style check runs with no Claude. Fix tasks are added only from 🎨 Design.
 export async function fixDesign(r: Runner, sourceId?: string) {
   // Fix to match runs JustCode's own steps: an old copy still loaded would run the old ones without a word.
   const newer = newerInstalled(st.ctx.extensionPath, st.ctx.extension.packageJSON.version);
@@ -695,15 +698,19 @@ export async function fixDesign(r: Runner, sourceId?: string) {
   }
   const running = r.store.data.tasks.find(t => t.init === 'fixdesign' && !t.archived && t.status !== 'done');
   if (running) return open(running.id);
-  // The last audit's fixes still running: a new audit would add the same tasks again.
-  const open_ = r.store.data.tasks.filter(t => !t.archived && t.status !== 'done' && A.DESIGN_FILE.test(t.description ?? '')).length;
-  if (open_ && !await confirm(`${open_} fix task${open_ === 1 ? '' : 's'} from the last audit ${open_ === 1 ? 'is' : 'are'} not done yet. The design changes show once they merge. Run a new audit anyway (it adds new tasks)?`, 'Run a new audit')) return;
+  // Set up once (design reference and app jobs): from then on Fix to match is the style check, with no Claude.
+  const ready = A.loadSources(r.root).find(s => s.id === sourceId && A.hasCopy(r.root, s));
+  if (ready && r.designReady(A.sourceCopy(r.root, ready.id))) {
+    DF.save(r.root, { sourceId: ready.id, copy: A.sourceCopy(r.root, ready.id), round: 1 });
+    void vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Fix to match: style check (no Claude)' }, p => r.designCheck(true, (line: string) => p.report({ message: line })));
+    return;
+  }
   const designs = A.loadSources(r.root).filter(s => A.hasCopy(r.root, s) || s.kind === 'folder');
   const src = designs.find(s => s.id === sourceId) ?? (designs.length === 1 ? designs[0] : undefined);
   if (!src) { vscode.window.showWarningMessage(designs.length ? 'Pick the design under 🎨 Design → Fix to match.' : 'Add the design under 📎 Sources and press Save copy first.'); return; }
   // The audit measures the running app: make it the checked-out code first (a fix merged since it was built).
   if (App.detect(r.root) && !await App.current(r.root, 'Fix to match')) vscode.window.showWarningMessage('Fix to match: the app is not running. The audit will try to start it.');
-  const task = r.store.addTask({ title: 'Fix the UI to match the design: compare every screen', description: `Claude splits ${src.note || src.ref} into screen images, compares each screen with the running app, writes .justcode/design/audit.md, and ends with the fix tasks. JustCode adds them as a sprint and runs them.`,
+  const task = r.store.addTask({ title: 'Set up Fix to match: capture the design and the app', description: `Once: Claude splits ${src.note || src.ref} into screens and states and writes how to open each one in the app. Then JustCode compares the styles itself (no AI); you choose what to fix under 🎨 Design.`,
     mode: r.defaultMode, where: 'direct', init: 'fixdesign', sources: [src.id], allow: ['Write(.justcode/**)', 'Edit(.justcode/**)'] });
   await r.run(task.id);
   open(task.id);

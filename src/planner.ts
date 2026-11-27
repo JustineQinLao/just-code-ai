@@ -9,6 +9,7 @@ import * as g from './git';
 import { setupSkillBody, fixDesignSteps } from './skill';
 import * as DC from './designcapture';
 import * as DF from './designfix';
+import * as S from './stylecheck';
 import * as App from './app';
 import { Session, Answer, Ask, AgentNode, TurnEnd, RunState } from './session';
 import * as R from './registry';
@@ -222,128 +223,83 @@ export const plannerMethods = {
     return `# Fix the UI to match the design\n\n${fixDesignSteps(copy, src.ref, this.root, this.d.cli || undefined, DC.screensOf(copy))}`;
   },
 
-  // The audit's result becomes round 1 of the fix: the shared-style tasks it proposed (or, with none, the per-screen
-  // tasks JustCode plans from the measures itself). Fix tasks merge into the checked-out branch (no sprint branch), so
-  // the running app rebuilds after each merge and the next round re-measures what you actually run. Returns how many.
-  addDesignFixes(this: Runner, id: string, text: string) {
-    const p = parseProposals(text, new Set()) ?? [];
-    // Fixes planned from bad design images would chase the wrong target: check them first.
-    const audit = this.store.task(id), src = A.loadSources(this.root).find(s => audit?.sources?.includes(s.id));
+  // The setup task (Claude, once) made the design reference and app-jobs.json: check it is complete, then run the
+  // style check (no Claude). It adds no fix task by itself: you add the one fix task, or screen tasks, from 🎨 Design.
+  designSetupDone(this: Runner, id: string) {
+    const setup = this.store.task(id), src = A.loadSources(this.root).find(s => setup?.sources?.includes(s.id));
     const copy = src && (A.hasCopy(this.root, src) ? A.sourceCopy(this.root, src.id) : src.kind === 'folder' ? src.ref : undefined);
-    const bad = copy ? A.screenShotProblems(copy) : [];
-    // Stopped before it finished (a run cut off, a capture left in the background): not done, the card says so.
     const unfinished = (why: string) => {
-      this.store.updateTask(id, { status: 'review', error: `The audit stopped before finishing: ${why} No fix tasks were added. Press Follow-up task ("finish the audit: run design-capture again in the foreground, it resumes"), or run Fix to match again.` });
-      this.d.notify('error', `Fix to match stopped before finishing: ${why}`, id);
-      return 0;
+      this.store.updateTask(id, { status: 'review', error: `The setup stopped before finishing: ${why} Press Follow-up task ("finish the setup: run design-capture again in the foreground, it resumes"), or run Fix to match again.` });
+      this.d.notify('error', `Fix to match: the setup stopped before finishing: ${why}`, id);
+      return false;
     };
+    if (!copy || !src) { this.d.notify('info', 'Fix to match: the design source is gone. See the task card.', id); return false; }
+    const bad = A.screenShotProblems(copy);
     if (bad.length) return unfinished(`the design reference is not complete (${bad.length} problem${bad.length === 1 ? '' : 's'}: ${bad.slice(0, 3).join('; ')}).`);
-    // An audit that compared only a few screens would plan fixes for those alone: say so instead.
-    if (copy) {
-      const shots = A.screenShotCount(copy), diffs = A.auditDiffCount(this.root);
-      if (shots && diffs * 2 < shots) return unfinished(`it compared ${diffs} of ${shots} design screens with the app.`);
-    }
-    if (!copy || !src) { this.d.notify('info', 'Fix to match: the design source is gone. See the task card.', id); return 0; }
-    // A new audit replaces the last one's fixes that have not started yet.
-    for (const t of this.store.data.tasks.filter(t => t.status === 'todo' && !t.branch && !t.archived && (t.designFix || (A.DESIGN_FILE.test(t.description ?? '') && [copy, DC.screensOf(copy)].some(d => (t.description ?? '').includes(d))))))
-      void this.remove(t.id);
+    if (!fs.existsSync(path.join(this.root, '.justcode', 'design', 'app-jobs.json'))) return unfinished('there is no .justcode/design/app-jobs.json.');
     DF.save(this.root, { sourceId: src.id, copy, round: 1 });
-    const plan = p.length ? [] : this.designPlan(copy, false);
-    if (plan.some(x => x.rules)) DF.save(this.root, { sourceId: src.id, copy, round: 1, sharedTried: plan.flatMap(x => x.rules ?? []) });
-    const planned = p.length ? p.map(c => ({ title: c.title, description: c.description, after: c.after }))
-      : plan.map(x => ({ title: x.title, description: taskText(x), after: x.after }));
-    if (!planned.length) { DF.save(this.root, { sourceId: src.id, copy, round: 1, done: true }); this.d.notify('info', 'Fix to match: every screen matches the design.', id); return 0; }
-    return this.addRound(planned, 1, id);
+    void this.designCheck(false);
+    return true;
   },
 
-  // Adds one round of fix tasks (branch tasks on the checked-out branch, marked designFix) in order, and queues them when
-  // start (the first round, from the audit the user ran). A later round, planned by measuring again on its own, waits in
-  // To do for Run all: each round costs as much as the first, so the user decides whether the last one was worth it.
-  addRound(this: Runner, planned: { title: string; description?: string; after?: string[] }[], round: number, from?: string, start = true, note = '') {
-    const ids = new Map<string, string>();
-    for (const c of planned) {
-      const t = this.store.addTask({ title: c.title, description: c.description || undefined, mode: this.defaultMode, where: 'branch', designFix: round });
-      ids.set(c.title.trim().toLowerCase(), t.id);
-    }
-    for (const c of planned) {
-      const deps = (c.after ?? []).map(x => ids.get(x.trim().toLowerCase())).filter((d): d is string => !!d);
-      const me = ids.get(c.title.trim().toLowerCase());
-      if (me && deps.length) this.store.updateTask(me, { dependsOn: [...new Set(deps.filter(d => d !== me))] });
-    }
-    if (start) this.runAll([...ids.values()]);
-    this.d.notify('info', `Fix to match, round ${round}: added ${ids.size} fix task${ids.size === 1 ? '' : 's'} (in All tasks / Backlog: they merge into your current branch)${start ? ' and started them. When they merge, JustCode measures again and plans what is left.' : '. They have not started: press ▶ Run all to run this round, or archive them to stop here.'}${note}`, from);
-    return ids.size;
+  // Ready for the style check without Claude: a complete design reference and the app's jobs.
+  designReady(this: Runner, copy: string) {
+    return A.screenShotCount(copy) > 0 && !A.screenShotProblems(copy).length && fs.existsSync(path.join(this.root, '.justcode', 'design', 'app-jobs.json'));
   },
 
-  // Plans from the latest measures in .justcode/design/audit (recaptured first when asked): shared rules, else screens.
-  // prev: each screen's pixel score before the last round. A screen the last round did not bring 1 point closer at any
-  // width is not planned again (another task would cost as much and likely do as little); it is named in designStuck.
-  designPlan(this: Runner, copy: string, _fresh: boolean, prev: Record<string, number> = {}) {
-    const auditDir = path.join(this.root, '.justcode', 'design', 'audit');
-    const { rows, shared, avgPx } = DC.diffAll(DC.screensOf(copy), auditDir, auditDir, DC.loadSample(path.join(this.root, '.justcode', 'design', 'sample.json')));
-    this.designPx = avgPx;
-    this.designScreensPx = Object.fromEntries(rows.filter(r => r.px !== undefined).map(r => [r.name, r.px!]));
-    let screens: { id: string; title?: string; url?: string }[] = [];
-    try { screens = JSON.parse(fs.readFileSync(path.join(DC.screensOf(copy), 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
-    this.designLines = rows.reduce((n, r) => n + r.n, 0);   // the measured total, for "is the fix still making progress"
-    const byBase = new Map<string, { now: number; was?: number }[]>();
-    for (const r of rows) if (r.px !== undefined) { const b = DC.baseOf(r.name); if (!byBase.has(b)) byBase.set(b, []); byBase.get(b)!.push({ now: r.px, was: prev[r.name] }); }
-    this.designStuck = [...byBase].filter(([, v]) => v.every(x => x.was !== undefined && x.now > x.was - 1)).map(([b]) => b);
-    return DC.planRound(copy, auditDir, rows.filter(r => !this.designStuck!.includes(DC.baseOf(r.name))), shared, screens, DF.load(this.root)?.sharedTried ?? []);
-  },
-
-  // After the last fix task of a round merges: rebuild-aware wait for the app, measure every screen again with the
-  // audit's own jobs (no Claude), and add the next round, or say the app matches. Rounds go on while the differences fall.
-  // manual: from 🎨 Design → Measure again: the same round is planned again (no new round), and a finished run restarts.
-  // Wraps the measuring so the board shows it (designStatus, refreshed at most once a second) and clears it at the end.
-  async designRemeasure(this: Runner, manual = false, progress: (line: string) => void = () => undefined) {
-    if (this.designStatus) { if (manual) this.d.notify('info', 'Fix to match is already measuring.'); return; }
-    let last = 0;
-    const show = (line: string) => { progress(line); this.designStatus = line.replace(/^(Design|App): (\d+\/\d+).*/, '$1 $2'); if (Date.now() - last > 1000) { last = Date.now(); this.changed(); } };
-    this.designStatus = 'starting…'; this.changed();
-    try { await this.measureRound(manual, show); } finally { this.designStatus = undefined; this.changed(); }
-  },
-
-  async measureRound(this: Runner, manual: boolean, progress: (line: string) => void) {
+  // 🎨 Design → Check again (and after the setup): shoot the app's screens, compare styles, write the report and the
+  // comparison. No Claude, no tasks. The board shows its progress (designStatus).
+  async designCheck(this: Runner, manual: boolean, progress: (line: string) => void = () => undefined) {
+    if (this.designStatus) { if (manual) this.d.notify('info', 'Fix to match is already checking.'); return; }
     const st = DF.load(this.root);
-    if (!st || (st.done && !manual)) return;
-    const open = this.store.data.tasks.filter(t => t.designFix && !t.archived && t.status !== 'done');
-    if (open.length) { if (manual) this.d.notify('info', `Fix to match: ${open.length} fix task${open.length === 1 ? ' is' : 's are'} not done. Let ${open.length === 1 ? 'it' : 'them'} merge, or archive ${open.length === 1 ? 'it' : 'them'}, then Measure again.`); return; }   // the round is not over
-    const jobsFile = path.join(this.root, '.justcode', 'design', 'app-jobs.json');
-    if (!fs.existsSync(jobsFile)) { this.d.notify('warn', 'Fix to match: no .justcode/design/app-jobs.json to measure the app again. Run Fix to match again.'); return; }
-    if (!manual && st.round >= DF.MAX_ROUNDS) { DF.save(this.root, { ...st, done: true }); this.d.notify('warn', `Fix to match: stopped after ${DF.MAX_ROUNDS} rounds. What still differs is in .justcode/design/audit (*.diff.txt); Measure again to go on.`); return; }
-    this.d.notify('info', 'Fix to match: the round merged. Measuring every screen again (no Claude)…');
-    if (!await App.current(this.root, 'Fix to match: measure again')) { this.d.notify('error', 'Fix to match: the app is not running, so it could not be measured again. Start it with ▶ App, then run Fix to match.'); return; }
-    // A design measured by an older recipe (no element classes) is measured again too, from the audit's own design jobs.
-    const designJobs = path.join(this.root, '.justcode', 'design', 'jobs.json');
-    if (fs.existsSync(designJobs) && DC.designMeasureOld(st.copy)) await DC.capture(DC.parseJobs(fs.readFileSync(designJobs, 'utf8')), l => progress(`Design: ${l}`)).catch(() => undefined);
-    progress('App: starting the browser…');
-    const r = await DC.capture(DC.parseJobs(fs.readFileSync(jobsFile, 'utf8')), l => progress(`App: ${l}`)).catch((e: Error) => ({ done: 0, failed: [e.message] }));
-    if (!r.done) { this.d.notify('error', `Fix to match: could not measure the app again (${r.failed[0] ?? 'nothing captured'}). Is it running?`); return; }
-    const planned = this.designPlan(st.copy, true, st.screensPx ?? {});
-    const stuck = this.designStuck ?? [];
-    progress('Comparing…');
-    if (!planned.length) { DF.save(this.root, { ...st, done: true }); this.d.notify('info', stuck.length ? `Fix to match: stopped. The ${stuck.length} screen${stuck.length === 1 ? '' : 's'} still differing did not get closer in the last round (${stuck.slice(0, 8).join(', ')}${stuck.length > 8 ? ', …' : ''}); see .justcode/design/audit/compare.html.` : `Fix to match: every measured screen now matches the design (round ${st.round}).`); return; }
-    // Go on while the measured differences keep falling; stop after STALE_ROUNDS rounds without progress (fixes that do
-    // not land would otherwise repeat). Measure again always plans.
-    // Progress is the average pixel score (what you see) when there is one, else the count of measured differences.
-    const lines = this.designLines ?? 0, px = this.designPx, screensPx = this.designScreensPx ?? {};
-    const better = px !== undefined && st.px !== undefined ? px <= st.px - 0.5 : st.lines === undefined || lines < st.lines;
-    const stale = st.lines === undefined && st.px === undefined ? 0 : better ? 0 : (st.stale ?? 0) + 1;
-    // Screens a round made worse (2+ points more pixels differing): named, so a regression is seen, not averaged away.
-    const worse = Object.entries(screensPx).filter(([n, v]) => st.screensPx?.[n] !== undefined && v >= st.screensPx[n] + 2).map(([n, v]) => `${n} ${st.screensPx![n]}→${v}%`);
-    if (worse.length) this.d.notify('warn', `Fix to match: the last round made ${worse.length} screen${worse.length === 1 ? '' : 's'} look less like the design: ${worse.slice(0, 6).join(', ')}${worse.length > 6 ? ', …' : ''}. See .justcode/design/audit/<name>.diff.png.`);
-    const saved = { ...st, lines, px, screensPx, stale, sharedTried: [...new Set([...(st.sharedTried ?? []), ...planned.flatMap(x => x.rules ?? [])])] };
-    if (!manual && stale >= DF.STALE_ROUNDS) {
-      DF.save(this.root, { ...saved, done: true });
-      this.d.notify('warn', `Fix to match: ${DF.STALE_ROUNDS} rounds without getting closer to the design (${px !== undefined ? `${px}% pixels differ on average` : `${lines} differences left`}), so it stopped. See .justcode/design/audit; Measure again to go on.`);
-      return;
+    if (!st) { this.d.notify('warn', 'Fix to match: run it once from 🎨 Design first.'); return; }
+    let last = 0;
+    const show = (line: string) => { progress(line); this.designStatus = line.replace(/^App: (\d+\/\d+).*/, 'App $1'); if (Date.now() - last > 1000) { last = Date.now(); this.changed(); } };
+    this.designStatus = 'starting…'; this.changed();
+    try {
+      if (!await App.current(this.root, 'Fix to match: style check')) { this.d.notify('error', 'Fix to match: the app is not running. Start it with ▶ App, then press Check again.'); return; }
+      const { report } = await S.runStyleCheck(this.root, st.copy, { progress: show });
+      const n = S.reportCount(report);
+      this.d.notify('info', n ? `Style check: ${n} style difference${n === 1 ? '' : 's'} on ${report.screens} screens (no AI). 🎨 Design → Fix the styles adds one task for them; Open comparison shows every screen side by side.` : `Style check: the styles match the design on ${report.screens} screens. Open comparison under 🎨 Design to look at each screen.`);
+    } catch (e: any) { this.d.notify('error', `Fix to match: ${e.message}`); }
+    finally { this.designStatus = undefined; this.changed(); }
+  },
+
+  // 🎨 Design → Fix the styles: ONE quick task (in your workspace, no checks or AI review; Finish commits it) from the
+  // style check. Started at once: you pressed it.
+  designFixTask(this: Runner) {
+    const st = DF.load(this.root), report = S.loadReport(this.root);
+    if (!st || !report || !S.reportCount(report)) { this.d.notify('info', 'Fix to match: no style differences to fix. Press Check again first.'); return; }
+    const design = path.join(this.root, '.justcode', 'design');
+    const css = fs.readdirSync(design).filter(f => /^design-\d+\.css$/.test(f)).map(f => path.join(design, f));
+    const t = this.store.addTask({ title: 'Match the design\'s styles', description: S.fixTaskText(report, { report: S.reportFile(this.root, 'md'), css }, this.d.cli || '<JustCode cli.js>', this.root),
+      mode: this.defaultMode, where: 'direct', quick: true, designFix: 1 });
+    void this.run(t.id);
+    return t.id;
+  },
+
+  // 🎨 Design → screens you ticked: one quick task per up to 5 screens, each told to look once at the end.
+  designScreenTasks(this: Runner, ids: string[]) {
+    const st = DF.load(this.root);
+    if (!st || !ids.length) return [];
+    const ref = DC.screensOf(st.copy);
+    let info: { id: string; title?: string; url?: string }[] = [];
+    try { info = JSON.parse(fs.readFileSync(path.join(ref, 'screens.json'), 'utf8')).screens ?? []; } catch { /* titles are a nicety */ }
+    const out: string[] = [];
+    for (let i = 0; i < ids.length; i += 5) {
+      const part = ids.slice(i, i + 5), name = (id: string) => info.find(s => s.id === id)?.title ?? id;
+      const files = part.flatMap(id => fs.readdirSync(ref).filter(f => f.startsWith(`${id}-`) && /-\d{3,4}\.(html|png)$/.test(f) || f.startsWith(`${id}~`) && /\.html$/.test(f)).map(f => path.join(ref, f)));
+      const t = this.store.addTask({ title: `Match the design: ${part.map(name).join(', ')}`.slice(0, 90),
+        description: [`Goal: Make ${part.map(id => `${id}${info.find(s => s.id === id)?.url ? ` (${info.find(s => s.id === id)!.url})` : ''}`).join(', ')} look like the design: layout, order, spacing and the parts it shows. Use the app's shared classes; keep the app's own data and behaviour.`,
+          `Files: ${files.join(', ')}`,
+          'Steps:', '- Read the design .html of each screen (its structure and classes) and change the app\'s page to match it.',
+          '- At the end take ONE screenshot of each screen at 390 wide and compare it with the design .png by eye; fix what is clearly different, then stop. No other screenshots, no measuring tools.',
+          'Done when:', '- each screen shows the same parts in the same order as the design', '- the build passes'].join('\n'),
+        mode: this.defaultMode, where: 'direct', quick: true, designFix: 1 });
+      out.push(t.id);
     }
-    const round = manual ? st.round : st.round + 1;
-    DF.save(this.root, { ...saved, round, done: false });
-    if (px !== undefined) this.d.notify('info', `Fix to match: ${px}% of pixels differ from the design on average${st.px !== undefined ? ` (was ${st.px}%)` : ''}.`);
-    this.addRound(planned.map(x => ({ title: x.title, description: taskText(x), after: x.after })), round, undefined, false,
-      stuck.length ? ` Left out ${stuck.length} screen${stuck.length === 1 ? '' : 's'} the last round did not bring closer: ${stuck.slice(0, 8).join(', ')}${stuck.length > 8 ? ', …' : ''} (see .justcode/design/audit/compare.html).` : '');
+    this.runAll(out);
+    return out;
   },
 
   // "Sprint 2: Search" → the open sprint named "Sprint 2", created with goal "Search" when there is none.
