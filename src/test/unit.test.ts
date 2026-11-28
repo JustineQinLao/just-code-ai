@@ -755,10 +755,11 @@ test('applying a plan keeps the planner\'s build order, before other To do tasks
   r.plannerOthers = []; r.plannerTargets = [];
   const p = (title: string) => ({ title, kind: 'add', apply: true });
   r.applyProposals([p('Tokens'), p('Header'), p('Captures')], []);
-  assert.deepEqual(store.data.tasks.map(t => t.title), ['Tokens', 'Header', 'Captures']);
+  const I = 'Integrate and verify: the planned tasks together';
+  assert.deepEqual(store.data.tasks.map(t => t.title), ['Tokens', 'Header', 'Captures', I]);
   r.plannerTargets = []; // a new chat: the tasks above are other To do tasks
   r.applyProposals([p('A'), p('B')], []);
-  assert.deepEqual(store.data.tasks.map(t => t.title), ['A', 'B', 'Tokens', 'Header', 'Captures']);
+  assert.deepEqual(store.data.tasks.map(t => t.title), ['A', 'B', I, 'Tokens', 'Header', 'Captures', I], 'each plan its own');
   r.dispose();
 });
 
@@ -1889,6 +1890,31 @@ test('a plan applied to the current branch makes direct tasks with no sprint; pe
   r.applyProposals([p('D')], [], 'sprint');
   assert.equal(store.data.tasks.find(t => t.title === 'D')!.sprintId, old);
   r.dispose();
+});
+
+test('a plan of 2+ tasks always ends with one integration task that waits for all of them', () => {
+  const { root } = leaseRepo();
+  const store = new Store(root);
+  const r = leaseRunner(store);
+  r.plannerOthers = []; r.plannerTargets = [];
+  const p = (title: string, after?: string[]) => ({ title, kind: 'add', apply: true, ...(after ? { after } : {}) });
+  r.applyProposals([p('A'), p('B')], [], 'current');
+  const ids = () => store.data.tasks.filter(t => !t.archived).map(t => t.title);
+  const it = store.data.tasks.find(t => t.integration)!;
+  assert.ok(it && it.where === 'direct' && /Integrate and verify/.test(it.title), 'added by JustCode when the planner did not');
+  assert.deepEqual(it.dependsOn, store.data.tasks.filter(t => t.title === 'A' || t.title === 'B').map(t => t.id));
+  assert.equal(ids()[ids().length - 1], it.title, 'last');
+  // The planner's own one is kept (not doubled), and a later round extends it.
+  r.applyProposals([p('C')], [], 'current');
+  assert.equal(store.data.tasks.filter(t => t.integration).length, 1);
+  assert.equal(store.task(it.id)!.dependsOn!.length, 3, 'a later round of the same chat extends it');
+  assert.equal(ids()[ids().length - 1], it.title, 'still last');
+  const { root: root2 } = leaseRepo(), s2 = new Store(root2), r2 = leaseRunner(s2);
+  r2.plannerOthers = []; r2.plannerTargets = [];
+  r2.applyProposals([p('X'), p('Y'), p('Integrate and verify: X and Y', ['X', 'Y'])], [], 'current');
+  assert.equal(s2.data.tasks.length, 3); assert.ok(s2.data.tasks[2].integration);
+  r2.applyProposals([p('Only one')], [], 'current');
+  r.dispose(); r2.dispose();
 });
 
 test('the planner reads where from the request and is told the branch; the panel starts from it', () => {

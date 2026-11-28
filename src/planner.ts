@@ -201,6 +201,7 @@ export const plannerMethods = {
       const deps = c.after.map(byTitle).filter((d): d is string => !!d && d !== id);
       if (id && deps.length) this.store.updateTask(id, { dependsOn: [...new Set(deps)] });
     });
+    this.ensureIntegration(orderIds, changes.filter(c => c.apply).map(c => made.get(c) ?? c.ref).filter((x): x is string => !!x));
     const after = this.store.data.tasks.find(t => t.status === 'todo' && !orderIds.includes(t.id) && !this.plannerTargets.includes(t.id));
     // Each goes in front of the same task (or to the end), so in proposal order they keep the planner's build order.
     for (const id of orderIds) this.store.reorder(id, after?.id);
@@ -212,6 +213,30 @@ export const plannerMethods = {
     const parts = [added && `added ${added}`, edited && `updated ${edited}`, removed && `removed ${removed}`, reopened && `${reopened} done back to To do`, sent && `sent the change to ${sent} started`].filter(Boolean);
     this.plannerNote = parts.length ? `Applied: ${parts.join(', ')} task${n === 1 ? '' : 's'}. Keep chatting to add or change more.` : 'No tasks changed.';
     this.changed();
+  },
+
+  // Every plan of 2+ tasks ends with one integration task: it waits for all of them and verifies them together where
+  // they merged (the checked-out branch, or the sprint branch). The planner is told to write it (PLANNER_APPEND rule 7,
+  // with the project's real commands); when it did not, or a later round added tasks, JustCode adds or extends it.
+  ensureIntegration(this: Runner, orderIds: string[], applied: string[]) {
+    const isInt = (t?: Task) => !!t && (t.integration || /^integrate and verify\b/i.test(t.title));
+    // This plan's tasks: the ones just applied and, in a later round of the same chat, the ones it made before.
+    const plan = [...new Set([...this.plannerTargets, ...orderIds])];
+    const work = plan.filter(id => { const t = this.store.task(id); return t && !t.archived && !isInt(t) && t.status !== 'done'; });
+    if (work.length < 2 || !applied.length) return;
+    let it = plan.map(id => this.store.task(id)).find(t => isInt(t) && !t!.archived && t!.status === 'todo');
+    const titles = work.map(id => this.store.task(id)!.title);
+    if (!it) {
+      const sprint = this.store.task(work[0])?.sprintId;
+      it = this.store.addTask({ title: 'Integrate and verify: the planned tasks together', mode: this.defaultMode, ...(sprint ? { sprintId: sprint, where: 'branch' as const } : { where: 'direct' as const }),
+        description: ['Goal: Check that every task of this plan works together, where they all merged. No new features.',
+          'Done when:', ...titles.map(x => `- "${x}" is merged here and its "Done when" items hold in the running app`),
+          '- the app is rebuilt and restarted with the merged code', '- the full test suites and the build pass',
+          '- anything still failing is listed in the reply (with a ```fixes block), not fixed here'].join('\n') });
+      orderIds.push(it.id);
+    } else if (!orderIds.includes(it.id)) orderIds.push(it.id);
+    else { orderIds.splice(orderIds.indexOf(it.id), 1); orderIds.push(it.id); }   // always last
+    this.store.updateTask(it.id, { integration: true, dependsOn: [...new Set([...(it.dependsOn ?? []).filter(d => d !== it!.id), ...work])] });
   },
 
   // The 🎨 Fix to match task's first message: its design source (the task's one source) and the steps.
