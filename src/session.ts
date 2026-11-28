@@ -63,6 +63,7 @@ export interface SessionOptions {
   env: Record<string, string>;
   idleMs: number;
   personal?: boolean;         // also load the user's own Claude setup (plugins, skills, MCP, memory)
+  chrome?: boolean;           // Claude in Chrome (`claude --chrome`): the session can drive your Chrome through the extension
   plugins?: string[];         // plugin folders to load even in a lean session (e.g. frontend-design for artifact pages)
   label: string;              // name of the root node in the agent map
   guard?: (tool: string, input: Record<string, unknown>) => string | undefined;   // the project policy: a reason denies the call, in every mode
@@ -162,6 +163,8 @@ export class Session {
       // Lets the user switch a running task to Bypass permissions; it does not turn that mode on by itself.
       allowDangerouslySkipPermissions: true,
       settingSources: settingSources(!!o.personal),
+      // Without --chrome a session started by the SDK gets no Claude in Chrome tools, even with the extension connected.
+      ...(o.chrome ? { extraArgs: { chrome: null } } : {}),
       settings: sessionSettings(o.settingsFile) as Sdk.Options['settings'],
       ...(o.model ? { model: o.model } : {}),
       ...(o.effort ? { effort: o.effort as Sdk.Options['effort'] } : {}),

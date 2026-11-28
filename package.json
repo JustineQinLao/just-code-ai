@@ -359,6 +359,11 @@
           "default": 7979,
           "description": "Port for the mobile board server."
         },
+        "justCode.chrome": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tasks and chats can use Claude in Chrome (your Chrome, through the Claude extension) as `claude --chrome` does. Without it, a session JustCode starts gets no Chrome tools even when the extension is connected."
+        },
         "justCode.codeMap": {
           "type": "boolean",
           "default": true,

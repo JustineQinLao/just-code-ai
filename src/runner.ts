@@ -48,6 +48,7 @@ export interface RunnerSettings {
   superpowers: boolean;     // load the installed superpowers plugin into task, planner and review sessions
   codeMap?: boolean;
   terseReplies?: boolean;   // the caveman plugin's reply rules in tasks and chats, when it is installed        // tasks and chats get the project's code map (Graphify), when it is installed
+  chrome?: boolean;         // tasks and chats get Claude in Chrome (the extension's tools)
   personalSetup: boolean;   // load the user's own Claude setup (plugins, skills, MCP, memory) in tasks: ~7k more tokens per request
   taskEffort: string; plannerModel: string; plannerEffort: string; subagents: boolean;
   freshAfterTokens: number;
@@ -404,7 +405,7 @@ export class Runner {
       // The reply style with every message Claude gets, since system-prompt rules fade over a long task.
       ...(terse ? { remind: Terse.REMIND } : {}),
       bin, cwd, sessionId, resume, mode: this.modeFor(task), model: set.taskModel || undefined, effort: set.taskEffort || undefined, subagents: set.subagents, agent: task.agent,
-      agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup,
+      agents: carry.agents, settingsFile: carry.settingsFile, personal: set.personalSetup, chrome: set.chrome,
       plugins: this.plugins(task.output === 'artifact' && !set.personalSetup ? [installedPlugin('frontend-design', undefined, 'skills')] : []),
       // The task's artifacts folder (brief, handoff), its screenshots and any sources outside the project.
       addDirs: [...new Set([...carry.addDirs, A.taskDir(this.root, id), ...(task.images?.length ? [path.dirname(task.images[0])] : []), ...A.outsideDirs(this.root, sources)])],
