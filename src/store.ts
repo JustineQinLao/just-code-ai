@@ -56,6 +56,7 @@ export interface Task {
   noWait?: boolean;           // Run all goes on without it (it waits for you to merge or fix it); cleared when it runs again
   costSeen?: Record<string, number>; // the last running total seen per Claude session id (see spent())
   costUsd?: number;           // estimated cost of the task's sessions and reviews so far (API pricing; plans are not billed per task)
+  found?: { title: string; description: string }[];   // problems a test or audit task found (its ```fixes block): offered as fix tasks
   output?: 'artifact';        // the result is a page published as a claude.ai artifact (not a code change)
   artifactUrl?: string;       // its link, once published
   publishing?: boolean;       // JustCode is publishing the page now (interactive claude in a terminal)

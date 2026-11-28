@@ -150,7 +150,10 @@ A UI task that must screenshot its built screen (a design to match, or a screens
 A step only the user can do (sudo, a password, trusting a certificate): ask with AskUserQuestion and put the exact command alone in backticks, e.g. \`scripts/hosts.sh add agos\`. The board shows it with Copy and Run in terminal. Never ask for a password in chat; verify the result yourself after they answer.
 If the task has a "Done when" list, meet every item: the reviewer checks each one.
 When a turn ends, update the handoff file named in your brief with what changed and how you verified it (each "Done when" item, if any).
-If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.`;
+If the superpowers plugin is loaded, follow its test-driven-development and verification-before-completion skills.
+When the task only tests, checks, audits or reviews (it may not change the app's code) and you found problems, do not fix them: end your reply
+with ONE block \`\`\`fixes [{"title": "short imperative", "goal": "one sentence", "files": ["likely files"], "done": ["exact check"]}] \`\`\`,
+one entry per problem or small group of related ones (a fail, or a note that is clearly a bug), most serious first. JustCode asks the user whether to fix them.`;
 
 // 💬 Chat: Claude Code as in a terminal, in the project folder. No brief, handoff, checks, review or merge.
 export const CHAT_APPEND = `You are chatting with the user through JustCode, in their project folder, the way Claude Code works in a terminal.
@@ -589,6 +592,19 @@ export function taskText(t: { goal?: string; files?: string[]; done?: string[]; 
 }
 
 const strs = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && !!x.trim()).map(x => x.trim()) : [];
+
+// A test or audit task's ```fixes block: the problems it found, as fix tasks the user may add (see TASK_APPEND).
+export function parseFound(text: string): { title: string; description: string }[] | undefined {
+  const block = [...text.matchAll(/```fixes\s*([\s\S]*?)```/g)].pop()?.[1];
+  if (!block) return;
+  try {
+    const arr = JSON.parse(block);
+    if (!Array.isArray(arr)) return;
+    const out = arr.filter((t: any) => t && typeof t.title === 'string' && t.title.trim()).slice(0, 30).map((t: any) => ({ title: t.title.trim().slice(0, 120),
+      description: taskText({ goal: typeof t.goal === 'string' ? t.goal : undefined, files: strs(t.files), done: strs(t.done), description: typeof t.description === 'string' ? t.description : undefined }) ?? '' }));
+    return out.length ? out : undefined;
+  } catch { return; }
+}
 
 export function parseProposals(text: string, taskIds: Set<string>): RefineResult[] | undefined {
   const block = [...text.matchAll(/```tasks\s*([\s\S]*?)```/g)].pop()?.[1] ?? [...text.matchAll(/```json\s*(\[[\s\S]*?\])\s*```/g)].pop()?.[1] ?? /\[\s*\{[\s\S]*"title"[\s\S]*\}\s*\]/.exec(text)?.[0];

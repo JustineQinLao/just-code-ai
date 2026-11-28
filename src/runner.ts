@@ -17,7 +17,7 @@ import { SecretsFound, describeSecrets } from './secrets';
 import { loadPolicy, violations, toolArg } from './policy';
 import { trackIssues, openIssues, acceptedIssues, roundLimit } from './issues';
 import { transcript, CHAT_APPEND, TASK_APPEND } from './claude';
-import { designCommands } from './claude';
+import { designCommands, parseFound } from './claude';
 import { carryOver, discoverAgents, reviewPrompt, runReview, sessionExists, sessionSize, taskPrompt, adb, userAllowRules, addUsage, Usage, PLANNER_APPEND, plannerFirst, parseProposals, RefineResult, artifactBrief, installedPlugin, webOptions } from './claude';
 import * as A from './artifacts';
 import { ensurePlugin, pluginDir } from './plugin';
@@ -563,6 +563,9 @@ export class Runner {
       if (outside.length || t.outside?.length) this.store.updateTask(id, { outside: outside.length ? outside : undefined });
     }
     const reply = turn.text.trim().slice(-4000) || undefined;
+    // A test or audit task that found problems: the card asks whether to add fix tasks for them.
+    const found = !t.chat && !t.init ? parseFound(turn.text) : undefined;
+    if (found) this.store.updateTask(id, { found });
     if (t.appFix) void App.start(this.root, 'after Claude\'s fix').catch(() => undefined);   // ▶ App shows whether the fix worked
     if (t.init) this.store.updateTask(id, { status: 'done', live: undefined, reply, costUsd: cost });
     if (t.init === 'fixdesign') this.designSetupDone(id);   // the setup made the reference: the style check runs (no Claude)

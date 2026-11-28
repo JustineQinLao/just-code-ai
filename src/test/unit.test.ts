@@ -2097,3 +2097,20 @@ test('style check: only what the design\'s rule for a class sets is that class\'
   const d = declaredProps('.muted { color: var(--ink2); }\n.m .who { font-size: 13.5px; }\n.btn:hover { color: red }\n.num, .tnum { font-variant-numeric: tabular-nums; }\n.inp.ph { color: grey }');
   assert.deepEqual(d.map(x => [x.classes.join('.'), [...x.props].join(',')]), [['muted', 'color'], ['who', 'size'], ['inp.ph', 'color']], 'hover and a numeric font setting are not looks of the class');
 });
+
+import { parseFound, TASK_APPEND as TA } from '../claude';
+test('a test task\'s problems come back as fix tasks the card offers', () => {
+  assert.match(TA, /```fixes/);
+  const f = parseFound('Report written.\n```fixes\n[{"title":"Reject duplicate email","goal":"Register refuses an email in use","files":["backend/accounts/serializers.py"],"done":["second register with maria@example.com gives 400"]},{"nope":1}]\n```')!;
+  assert.equal(f.length, 1); assert.equal(f[0].title, 'Reject duplicate email');
+  assert.match(f[0].description, /Files: backend\/accounts\/serializers\.py/);
+  assert.equal(parseFound('no block'), undefined);
+  const S = require('../../media/status.js');
+  const t = { id: 'x', status: 'done', where: 'direct', found: f };
+  assert.equal(S.lane(t, { review: { maxAttempts: 3 } }), 'needs');
+  const posts: string[] = [];
+  const step = S.nextStep(t, { settings: { review: { maxAttempts: 3 } }, queue: { queued: [] }, tasks: [], post: (m: string) => posts.push(m), open: () => undefined, lastTool: () => '' });
+  assert.match(step.text, /Found 1 problem: Reject duplicate email\. Fix it\?/);
+  step.actions[0][1](); step.actions[1][1]();
+  assert.deepEqual(posts, ['addFound', 'dismissFound']);
+});

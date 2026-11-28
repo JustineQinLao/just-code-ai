@@ -16,6 +16,7 @@
 
   // Which column a card sits in.
   function lane(t, settings) {
+    if (t.found?.length && !busy(t)) return 'needs';   // a test or audit found problems: fix them?
     if (t.status === 'done') return 'done';
     if (t.status === 'todo' && !t.run) return 'todo';
     if (t.asks?.length || t.error || t.conflicts?.length) return 'needs';
@@ -39,6 +40,11 @@
     const discard = ['Discard', () => post('discard', { id }), 'danger'];
     const resume = ['↻ Resume', () => post('say', { id, text: 'Continue the task.' })];
     const acc = accepted(r).length;
+    if (t.found?.length && !busy(t)) {
+      const n = t.found.length;
+      return { text: `Found ${n} problem${n === 1 ? '' : 's'}: ${t.found.slice(0, 3).map(f => f.title).join('; ')}${n > 3 ? '; …' : ''}. Fix ${n === 1 ? 'it' : 'them'}?`, tone: 'warn',
+        actions: [[`Add ${n} fix task${n === 1 ? '' : 's'}`, () => post('addFound', { id })], ['Not now', () => post('dismissFound', { id }), 'ghost']] };
+    }
     if (t.status === 'done') return r?.unreviewed ? { text: 'Merged without a finished review (the reviewer could not run)', tone: 'warn', actions: [] }
       : acc ? { text: `${t.where === 'direct' ? 'Finished' : 'Merged'} with ${acc} accepted review issue(s)`, tone: 'warn', actions: [] }
       : { text: t.where === 'direct' ? 'Finished' : 'Merged', tone: 'ok', actions: [] };

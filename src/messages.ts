@@ -354,6 +354,16 @@ export async function handle(m: any, remote = false) {
         p => r.designCheck(true, (line: string) => p.report({ message: line })));
       return;
     }
+    // A test or audit task found problems (its ```fixes block): add them as fix tasks and run them, or not now.
+    case 'addFound': {
+      if (!t?.found?.length) return;
+      const ids = t.found.map(f => s.addTask({ title: f.title, description: f.description, mode: setting('defaultMode', 'auto'), where: resolveWhere({ setting: setting<string>('defaultWhere', 'auto') }) }).id);
+      s.updateTask(t.id, { found: undefined });
+      r.runAll(ids);
+      say(`Added ${ids.length} fix task${ids.length === 1 ? '' : 's'} and queued ${ids.length === 1 ? 'it' : 'them'}.`);
+      return;
+    }
+    case 'dismissFound': if (t) s.updateTask(t.id, { found: undefined }); return;
     case 'designFixTask': { const id = r.designFixTask(); if (id) open(id); return; }
     case 'designScreenTasks': { const ids = r.designScreenTasks((Array.isArray(m.ids) ? m.ids : []).filter((x: unknown): x is string => typeof x === 'string').slice(0, 40)); if (ids.length) say(`Added ${ids.length} screen task${ids.length === 1 ? '' : 's'}.`); return; }
     case 'openJustcodeFile': {
